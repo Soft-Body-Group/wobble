@@ -16,5 +16,6 @@ mod record;
 mod shot;
 mod slice;
 mod subwob;
+mod tab;
 mod viewlock;
 mod zones;
