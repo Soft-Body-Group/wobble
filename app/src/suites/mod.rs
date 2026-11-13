@@ -31,6 +31,7 @@ mod layer;
 mod magnet;
 mod mblur;
 mod nodepack;
+mod nodeux;
 mod noise;
 mod paint;
 mod panelw;
