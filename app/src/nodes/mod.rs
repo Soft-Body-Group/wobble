@@ -100,6 +100,7 @@ pub mod timerange;
 pub mod transform;
 pub mod cornerpin;
 pub mod blend;
+pub mod defocus;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
