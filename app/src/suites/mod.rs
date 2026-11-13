@@ -17,3 +17,4 @@ mod shot;
 mod slice;
 mod subwob;
 mod viewlock;
+mod zones;
