@@ -33,6 +33,7 @@ mod proxy;
 mod range;
 mod record;
 mod region;
+mod rgb;
 mod scrub;
 mod scrubfid;
 mod scrubperf;
