@@ -9,6 +9,7 @@ mod curves;
 mod dual;
 mod eyedrop;
 mod frames;
+mod gizmokey;
 mod inout;
 mod layer;
 mod paint;
