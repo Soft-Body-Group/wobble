@@ -10,6 +10,7 @@ mod cachemeter;
 mod channels;
 mod colourkey;
 mod compose;
+mod cornerpin;
 mod cost;
 mod cpick;
 mod crypto;
