@@ -5,6 +5,7 @@ mod bake;
 mod bin;
 mod blender;
 mod r#box;
+mod cachemeter;
 mod compose;
 mod cost;
 mod curveedit;
