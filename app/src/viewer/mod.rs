@@ -18,3 +18,4 @@ mod geogradient;
 mod geoxform;
 mod paintcursor;
 mod spline;
+mod cornerpin;
