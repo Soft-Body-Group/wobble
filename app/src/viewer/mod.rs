@@ -20,3 +20,4 @@ mod paintcursor;
 mod spline;
 mod cornerpin;
 mod pathedit;
+mod transform;
