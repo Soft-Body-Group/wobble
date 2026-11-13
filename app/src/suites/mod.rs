@@ -54,6 +54,7 @@ mod still;
 mod subwob;
 mod tab;
 mod thumbs;
+mod track;
 mod viewlock;
 mod viewpie;
 mod viewswitch;
