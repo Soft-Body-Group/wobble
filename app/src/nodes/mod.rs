@@ -76,6 +76,7 @@ pub mod loopout;
 pub mod custom;
 pub mod breakout;
 pub mod recombine;
+pub mod channelselect;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
