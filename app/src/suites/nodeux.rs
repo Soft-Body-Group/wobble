@@ -323,22 +323,22 @@ impl Gfx {
             // --- Z tap pins the selection's panels; shift+Z replaces ---
             15 => {
                 self.selected = vec![tf, gr];
-                self.prop_order.clear();
+                self.prop.order.clear();
                 self.gizmo_pinned.clear();
                 key(raw, egui::Key::Z, Default::default());
                 next = 16;
             }
             16 => {
-                if !(self.prop_order.contains(&tf) && self.prop_order.contains(&gr)) {
-                    fail(format!("Z tap pinned {:?}, wanted tf+gr", self.prop_order));
+                if !(self.prop.order.contains(&tf) && self.prop.order.contains(&gr)) {
+                    fail(format!("Z tap pinned {:?}, wanted tf+gr", self.prop.order));
                 }
                 self.selected = vec![mg];
                 key(raw, egui::Key::Z, egui::Modifiers::SHIFT);
                 next = 17;
             }
             17 => {
-                if self.prop_order != vec![mg] {
-                    fail(format!("shift+Z tap left {:?}, wanted [blend]", self.prop_order));
+                if self.prop.order != vec![mg] {
+                    fail(format!("shift+Z tap left {:?}, wanted [blend]", self.prop.order));
                 }
                 self.selected = vec![tf, gr];
                 key(raw, egui::Key::X, Default::default());
@@ -928,7 +928,7 @@ impl Gfx {
                 // be else-if, and the hand had to do Z then X). Something is
                 // pinned in both lists first, so "solo" has something to
                 // clear. The node is whichever the graph has on screen.
-                self.prop_order = vec![mg];
+                self.prop.order = vec![mg];
                 self.gizmo_pinned = vec![gr];
                 let Some((id, r)) = self
                     .node_rects
@@ -975,10 +975,10 @@ impl Gfx {
                 next = 902;
             }
             902 => {
-                if self.prop_order != vec![aux] || self.gizmo_pinned != vec![aux] {
+                if self.prop.order != vec![aux] || self.gizmo_pinned != vec![aux] {
                     fail(format!(
                         "shift+Z+X-click on {aux} left panels {:?} and manipulators {:?}, wanted [{aux}] in both",
-                        self.prop_order, self.gizmo_pinned
+                        self.prop.order, self.gizmo_pinned
                     ));
                 }
                 next = 950;

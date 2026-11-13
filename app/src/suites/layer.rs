@@ -48,7 +48,7 @@ impl Gfx {
                 self.egraph.connect(id, 1, reads[1]);
                 self.egraph.view = Some(id);
                 self.selected = vec![id];
-                self.prop_order = vec![id];
+                self.prop.order = vec![id];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.test.layer = Some((1, 0, id));

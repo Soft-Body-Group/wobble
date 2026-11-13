@@ -22,7 +22,7 @@ impl Gfx {
         };
         match stage {
             0 if self.playback.is_some() && self.displayed_total >= 3 => {
-                self.prop_order = self.egraph.nodes.keys().copied().collect();
+                self.prop.order = self.egraph.nodes.keys().copied().collect();
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.set_prop_zoom(1.0);
@@ -38,8 +38,8 @@ impl Gfx {
                 self.set_prop_zoom(2.0);
                 // Anchor well inside the strip: keeping that point still
                 // demands a real scroll shift, unlike anchoring the edge.
-                self.prop_zoom_anchor = Some(egui::pos2(
-                    self.prop_origin.x + 300.0,
+                self.prop.zoom_anchor = Some(egui::pos2(
+                    self.prop.origin.x + 300.0,
                     self.last_panel_rect_y,
                 ));
                 self.test.zoom = Some((2, frames, w));

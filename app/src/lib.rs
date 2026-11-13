@@ -5908,12 +5908,7 @@ struct Gfx {
     theme_ui: theme::ThemeUi,
     /// What the bottom bar shows. One or the other — never both stacked.
     bottom: BottomTab,
-    /// Named property-panel arrangements (which nodes are pinned, in what
-    /// order). Saved with the setup, so a comp can carry "grade pass",
-    /// "roto pass" and so on.
-    prop_layouts: Vec<PropLayout>,
-    /// Name field for saving the current arrangement.
-    prop_layout_name: String,
+    prop: state::PropState,
     /// Name field for saving the window layout (the layouts menu).
     dock_layout_name: String,
     /// Why the menubar's "scrub" button could not start it.
@@ -5946,30 +5941,6 @@ struct Gfx {
     /// Everything else the patch canvas remembers between frames —
     /// selection, slicer trail, marquee, search palette. See `patchbay`.
     patch_ui: patchbay::PatchUi,
-    /// Properties zoom: scales the tile and the controls whose precision
-    /// depends on size. Text and knobs stay put.
-    prop_zoom: f32,
-    /// Per-axis stretch of the TILE BOX, on top of `prop_zoom`: widgets keep
-    /// their scale, so x widens slider tracks and y shows rows a tile was
-    /// cutting off. The tiles stop being square; nothing inside cares.
-    prop_stretch: egui::Vec2,
-    /// The grid's scroll offset as of last frame, an override to apply on
-    /// the next frame, the zoom the grid was last laid out at, and the
-    /// screen point zoom should keep still (None = centre of the view).
-    prop_scroll: egui::Vec2,
-    prop_scroll_set: Option<egui::Vec2>,
-    prop_zoom_laid: f32,
-    prop_stretch_laid: egui::Vec2,
-    /// The docked strip is STACKED: its pane is taller than it is wide (the
-    /// dock put it down a side), so panels run top to bottom and the strip
-    /// scrolls vertically. Decided per frame from the pane's shape, with a
-    /// little hysteresis so a near-square pane does not flip back and forth.
-    prop_vertical: bool,
-    /// A ctrl+MMB / ctrl+alt+LMB stretch drag over the strip: its press point.
-    prop_stretch_anchor: Option<egui::Pos2>,
-    prop_zoom_anchor: Option<egui::Pos2>,
-    /// The zoom changed but has not been written to prefs yet.
-    prop_zoom_dirty: bool,
     /// The patch canvas's own view, exactly like `NodeEditor`'s: a free 2D
     /// pan in screen points with NO bounds, so you can push the arrangement
     /// off into empty space the way you can in the graph. (The docked
@@ -5999,9 +5970,6 @@ struct Gfx {
     load_saved_inout: Option<Option<(u64, u64)>>,
     disk_probe_rx: std::sync::mpsc::Receiver<(u64, ProbeKey, Vec<bool>, Vec<bool>)>,
     disk_probe_tx: std::sync::mpsc::Sender<(u64, ProbeKey, Vec<bool>, Vec<bool>)>,
-    /// Screen position of the grid's content origin last frame — the scroll
-    /// area insets it from the panel rect, so anchoring measures from here.
-    prop_origin: egui::Pos2,
     /// The dockable panels (`dockui`): the main window and the windows
     /// tabs were detached into. Taken out while a frame draws into it.
     docks: Option<dockui::WobbleDocks>,
@@ -6069,17 +6037,6 @@ struct Gfx {
     /// takes focus), and the UI pass runs even when the OS stops handing out
     /// surface frames for the backgrounded window.
     testing: bool,
-    /// Left-to-right arrangement of the properties panels (drag headers to
-    /// reorder; panels snap to the tile grid).
-    prop_order: Vec<u64>,
-    prop_drag: Option<u64>,
-    /// The panel whose title was clicked: the toolbar's `w` sizes it alone.
-    prop_selected: Option<u64>,
-    /// Per-panel tile width stretch, replacing `prop_stretch.x` for that
-    /// panel in the docked strip. Session state, keyed by node.
-    prop_width: std::collections::HashMap<u64, f32>,
-    /// A panel's right edge being dragged: (node, press x, width at press).
-    prop_edge_drag: Option<(u64, f32, f32)>,
     /// Nodes whose viewer manipulators are pinned (alt-click in the graph).
     gizmo_pinned: Vec<u64>,
     /// Which layer of each Layer stack is selected: the one the viewer gives
@@ -6184,8 +6141,6 @@ struct Gfx {
     curve_before: Vec<[f32; 2]>,
     /// Where the driver grabbed a point, so the move and release match it.
     curve_grab: egui::Pos2,
-    /// The docked strip's panel rects as of last frame (suites aim at them).
-    prop_panel_rects: Vec<(u64, egui::Rect)>,
     edit_browse_dir: Option<std::path::PathBuf>,
     /// How many times the playback rig has been (re)built — a diagnostic the
     /// harp suite gates on: a rig rebuilt during steady playback throws the
@@ -8110,8 +8065,27 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         keys_ui: keymap::KeysUi::default(),
         theme_ui: theme::ThemeUi::default(),
         bottom: BottomTab::Properties,
-        prop_layouts: Vec::new(),
-        prop_layout_name: String::new(),
+        prop: state::PropState {
+            layouts: Vec::new(),
+            layout_name: String::new(),
+            zoom: prop_zoom,
+            stretch: prop_stretch,
+            scroll: egui::Vec2::ZERO,
+            scroll_set: None,
+            zoom_laid: prop_zoom,
+            stretch_laid: prop_stretch,
+            vertical: false,
+            stretch_anchor: None,
+            zoom_anchor: None,
+            zoom_dirty: false,
+            origin: egui::Pos2::ZERO,
+            order: Vec::new(),
+            drag: None,
+            selected: None,
+            width: Default::default(),
+            edge_drag: None,
+            panel_rects: Vec::new(),
+        },
         dock_layout_name: String::new(),
         scrub_error: None,
         edit_history_rects: Vec::new(),
@@ -8122,20 +8096,9 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         patch_span: Default::default(),
         patch_drag: None,
         patch_link_mode: false,
-        prop_zoom,
-        prop_stretch,
-        prop_scroll: egui::Vec2::ZERO,
-        prop_scroll_set: None,
-        prop_zoom_laid: prop_zoom,
-        prop_stretch_laid: prop_stretch,
-        prop_vertical: false,
-        prop_stretch_anchor: None,
-        prop_zoom_anchor: None,
-        prop_zoom_dirty: false,
         patch_pan: egui::Vec2::ZERO,
         patch_zoom_anchor: None,
         patch_panning: false,
-        prop_origin: egui::Pos2::ZERO,
         disk_probe: Default::default(),
         reads_uncached: Default::default(),
         reads_cached: Default::default(),
@@ -8179,11 +8142,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         autokey: false,
         last_viewer_center: None,
         testing: opts.headless(),
-        prop_order: Vec::new(),
-        prop_drag: None,
-        prop_selected: None,
-        prop_width: Default::default(),
-        prop_edge_drag: None,
         gizmo_pinned: Vec::new(),
         layer_sel: Default::default(),
         huds: Vec::new(),
@@ -8226,7 +8184,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         curve_screen: Vec::new(),
         curve_before: Vec::new(),
         curve_grab: egui::Pos2::ZERO,
-        prop_panel_rects: Vec::new(),
         edit_browse_dir: opts.edit_browse.clone(),
         rig_builds: 0,
         want_windows: HashMap::new(),
@@ -10212,9 +10169,9 @@ impl Gfx {
             loop_span: self.loop_span,
             panel: Some(self.panel_tiles),
             huds: &self.huds,
-            activated: &self.prop_order,
+            activated: &self.prop.order,
             pinned_gizmos: &self.gizmo_pinned,
-            prop_layouts: &self.prop_layouts,
+            prop_layouts: &self.prop.layouts,
             patch_tiles: self
                 .patch_cell
                 .iter()
@@ -10280,9 +10237,9 @@ impl Gfx {
         self.view_range = None;
         self.loop_span = LoopSpan::InOut;
         self.huds = s.huds;
-        self.prop_order = s.activated;
+        self.prop.order = s.activated;
         self.gizmo_pinned = s.pinned_gizmos;
-        self.prop_layouts = s.prop_layouts;
+        self.prop.layouts = s.prop_layouts;
         self.patch_cell =
             s.patch_tiles.iter().map(|(n, c, sp)| (*n, self.migrate_cell(*n, *c, *sp))).collect();
         self.selected.clear();
@@ -16017,7 +15974,7 @@ impl Gfx {
                         ui,
                         &mut self.egraph,
                         &mut self.selected,
-                        &mut self.prop_order,
+                        &mut self.prop.order,
                         &mut self.gizmo_pinned,
                         &mut self.next_read_slot,
                         &mut self.node_rects,
@@ -17192,10 +17149,10 @@ impl Gfx {
         }
         if r.props {
             if r.add {
-                self.prop_order.retain(|n| *n != id);
-                self.prop_order.insert(0, id);
+                self.prop.order.retain(|n| *n != id);
+                self.prop.order.insert(0, id);
             } else {
-                self.prop_order = vec![id];
+                self.prop.order = vec![id];
             }
             self.props_visible = true;
             self.bottom = BottomTab::Properties;
@@ -20176,7 +20133,7 @@ impl Gfx {
                     ui,
                     &mut self.egraph,
                     &mut self.selected,
-                    &mut self.prop_order,
+                    &mut self.prop.order,
                     &mut self.gizmo_pinned,
                     &mut self.next_read_slot,
                     &mut self.node_rects,
@@ -20586,7 +20543,7 @@ impl Gfx {
             &mut self.egraph,
             &mut self.wire_drag,
             origin,
-            self.prop_zoom,
+            self.prop.zoom,
             sockets,
         );
     }
@@ -20611,7 +20568,7 @@ impl Gfx {
             vals,
             settled,
             origin,
-            self.prop_zoom,
+            self.prop.zoom,
         );
     }
 
@@ -21661,8 +21618,8 @@ impl Gfx {
             s
         };
         self.geo_select(node);
-        self.prop_order.retain(|n| *n != node);
-        self.prop_order.insert(0, node);
+        self.prop.order.retain(|n| *n != node);
+        self.prop.order.insert(0, node);
         self.props_visible = true;
         self.bottom = BottomTab::Properties;
         self.playback_dirty = true;
@@ -22711,7 +22668,7 @@ impl Gfx {
             Ok(inst) => {
                 self.sync_subwobs();
                 self.selected = vec![inst];
-                self.prop_order.retain(|id| self.egraph.nodes.contains_key(id));
+                self.prop.order.retain(|id| self.egraph.nodes.contains_key(id));
                 self.gizmo_pinned.retain(|id| self.egraph.nodes.contains_key(id));
                 self.tool_error = None;
                 self.playback_dirty = true;
@@ -23040,14 +22997,14 @@ impl Gfx {
     /// Set the properties zoom (clamped) and remember it.
     fn set_prop_zoom(&mut self, z: f32) {
         let z = z.clamp(widgets::ZOOM_MIN, widgets::ZOOM_MAX);
-        if (z - self.prop_zoom).abs() < 1e-4 {
+        if (z - self.prop.zoom).abs() < 1e-4 {
             return;
         }
-        self.prop_zoom = z;
-        self.prop_zoom_anchor = None;
+        self.prop.zoom = z;
+        self.prop.zoom_anchor = None;
         self.prefs.prop_zoom = Some(z);
         // Written out once the gesture settles, not once per wheel tick.
-        self.prop_zoom_dirty = true;
+        self.prop.zoom_dirty = true;
     }
 
     /// The properties pane's height on load: exactly a Grade panel at
@@ -23057,7 +23014,7 @@ impl Gfx {
     /// Grade's header row 26, then the wheel column, the one part that
     /// scales with the zoom. Re-measure if any of those rows change.
     fn strip_default_h(&self) -> f32 {
-        94.0 + wheels::COL_H * self.prop_zoom
+        94.0 + wheels::COL_H * self.prop.zoom
     }
 
     /// The properties pie: `props.pie` held over the rack opens it on the row
@@ -23289,12 +23246,12 @@ impl Gfx {
             egui::Vec2::splat(widgets::STRETCH_MIN),
             egui::Vec2::splat(widgets::STRETCH_MAX),
         );
-        if (v - self.prop_stretch).length() < 1e-4 {
+        if (v - self.prop.stretch).length() < 1e-4 {
             return;
         }
-        self.prop_stretch = v;
+        self.prop.stretch = v;
         self.prefs.prop_stretch = Some([v.x, v.y]);
-        self.prop_zoom_dirty = true;
+        self.prop.zoom_dirty = true;
     }
 
     /// Keep the canvas point under `at` fixed across a zoom change, by
@@ -23302,7 +23259,7 @@ impl Gfx {
     /// Same arithmetic as the node graph's zoom-about-cursor.
     fn patch_zoom_about(&mut self, at: egui::Pos2, view: egui::Rect, before: f32) {
         self.patch_pan =
-            patchbay::zoom_about(self.patch_pan, view.min, at, before, self.prop_zoom);
+            patchbay::zoom_about(self.patch_pan, view.min, at, before, self.prop.zoom);
     }
 
     /// A panel's footprint in grid CELLS (`widgets::CELLS_PER_TILE` per
@@ -23346,8 +23303,8 @@ impl Gfx {
     fn prop_layout_bar(&mut self, ui: &mut egui::Ui) {
         let mut recall: Option<PropLayout> = None;
         let mut delete: Option<usize> = None;
-        for (i, l) in self.prop_layouts.iter().enumerate() {
-            let live = l.nodes == self.prop_order;
+        for (i, l) in self.prop.layouts.iter().enumerate() {
+            let live = l.nodes == self.prop.order;
             let r = ui
                 .selectable_label(live, &l.name)
                 .on_hover_text("click to recall · right-click to delete");
@@ -23360,7 +23317,7 @@ impl Gfx {
         }
         if let Some(l) = recall {
             // Only nodes that still exist; order preserved.
-            self.prop_order =
+            self.prop.order =
                 l.nodes.into_iter().filter(|n| self.egraph.node(*n).is_some()).collect();
             for (n, c, sp) in l.patch {
                 let c = self.migrate_cell(n, c, sp);
@@ -23368,48 +23325,48 @@ impl Gfx {
             }
         }
         if let Some(i) = delete {
-            self.prop_layouts.remove(i);
+            self.prop.layouts.remove(i);
         }
         ui.add(
-            egui::TextEdit::singleline(&mut self.prop_layout_name)
+            egui::TextEdit::singleline(&mut self.prop.layout_name)
                 .hint_text("layout name")
                 .desired_width(110.0),
         );
-        let named = !self.prop_layout_name.trim().is_empty();
+        let named = !self.prop.layout_name.trim().is_empty();
         if ui
-            .add_enabled(named && !self.prop_order.is_empty(), egui::Button::new("save"))
+            .add_enabled(named && !self.prop.order.is_empty(), egui::Button::new("save"))
             .on_hover_text("store this arrangement with the setup")
             .clicked()
         {
-            let name = self.prop_layout_name.trim().to_string();
+            let name = self.prop.layout_name.trim().to_string();
             let entry = PropLayout {
                 name: name.clone(),
-                nodes: self.prop_order.clone(),
+                nodes: self.prop.order.clone(),
                 patch: self
-                    .prop_order
+                    .prop.order
                     .iter()
                     .filter_map(|n| {
                         Some((*n, *self.patch_cell.get(n)?, self.patch_span_of(*n)))
                     })
                     .collect(),
             };
-            match self.prop_layouts.iter_mut().find(|l| l.name == name) {
+            match self.prop.layouts.iter_mut().find(|l| l.name == name) {
                 Some(l) => *l = entry,
-                None => self.prop_layouts.push(entry),
+                None => self.prop.layouts.push(entry),
             }
-            self.prop_layout_name.clear();
+            self.prop.layout_name.clear();
         }
-        if !self.prop_order.is_empty() && ui.button("clear").on_hover_text("unpin all panels").clicked() {
-            self.prop_order.clear();
+        if !self.prop.order.is_empty() && ui.button("clear").on_hover_text("unpin all panels").clicked() {
+            self.prop.order.clear();
         }
-        ui.weak(format!("{} pinned", self.prop_order.len()));
+        ui.weak(format!("{} pinned", self.prop.order.len()));
         ui.separator();
         // Zoom: bigger tiles mean longer slider tracks and bigger wheels —
         // finer control — with type and knobs unchanged.
         if ui.small_button("−").on_hover_text("zoom out").clicked() {
-            self.set_prop_zoom(self.prop_zoom / 1.15);
+            self.set_prop_zoom(self.prop.zoom / 1.15);
         }
-        let mut pct = self.prop_zoom * 100.0;
+        let mut pct = self.prop.zoom * 100.0;
         let r = ui
             .add(
                 egui::DragValue::new(&mut pct).update_while_editing(false)
@@ -23426,14 +23383,14 @@ impl Gfx {
             self.set_prop_zoom(1.0);
         }
         if ui.small_button("+").on_hover_text("zoom in").clicked() {
-            self.set_prop_zoom(self.prop_zoom * 1.15);
+            self.set_prop_zoom(self.prop.zoom * 1.15);
         }
         // Stretch: the tile box per axis, widgets unscaled — wider slider
         // tracks, or taller tiles to show rows that were cut off.
         // A selected panel (title clicked) takes the width for itself.
-        let sel = self.prop_selected.filter(|n| self.prop_order.contains(n));
+        let sel = self.prop.selected.filter(|n| self.prop.order.contains(n));
         if let Some(n) = sel {
-            let mut pct = self.prop_width.get(&n).copied().unwrap_or(self.prop_stretch.x) * 100.0;
+            let mut pct = self.prop.width.get(&n).copied().unwrap_or(self.prop.stretch.x) * 100.0;
             let r = ui
                 .add(
                     egui::DragValue::new(&mut pct)
@@ -23449,10 +23406,10 @@ impl Gfx {
                 );
             if r.changed() {
                 let v = (pct / 100.0).clamp(widgets::STRETCH_MIN, widgets::STRETCH_MAX);
-                self.prop_width.insert(n, v);
+                self.prop.width.insert(n, v);
             }
             if r.double_clicked() {
-                self.prop_width.remove(&n);
+                self.prop.width.remove(&n);
             }
         }
         for (axis, label, tip) in [
@@ -23462,7 +23419,7 @@ impl Gfx {
             if axis == 0 && sel.is_some() {
                 continue;
             }
-            let mut pct = self.prop_stretch[axis] * 100.0;
+            let mut pct = self.prop.stretch[axis] * 100.0;
             let r = ui
                 .add(
                     egui::DragValue::new(&mut pct).update_while_editing(false)
@@ -23473,7 +23430,7 @@ impl Gfx {
                         .fixed_decimals(0),
                 )
                 .on_hover_text(tip);
-            let mut v = self.prop_stretch;
+            let mut v = self.prop.stretch;
             if r.changed() {
                 v[axis] = pct / 100.0;
             }
@@ -23494,7 +23451,7 @@ impl Gfx {
         {
             widgets::set_decimals(dp);
             self.prefs.decimals = Some(dp);
-            self.prop_zoom_dirty = true;
+            self.prop.zoom_dirty = true;
         }
     }
 
@@ -23505,7 +23462,7 @@ impl Gfx {
     /// The input of the layer each Layer panel has selected — every stack
     /// in the properties rack or popped out — for the graph to light.
     fn lit_layer_inputs(&self) -> Vec<(u64, usize)> {
-        self.prop_order
+        self.prop.order
             .iter()
             .copied()
             .chain(self.layer_popout)
@@ -23524,14 +23481,14 @@ impl Gfx {
         widgets::clear_rows(ui.ctx());
         let eval_t = self.eval_tick();
         let autokey = self.autokey;
-        self.prop_order.retain(|id| self.egraph.node(*id).is_some());
+        self.prop.order.retain(|id| self.egraph.node(*id).is_some());
         // A selected backdrop has a panel of its own, so the rack is not
         // empty just because no NODE is pinned.
         let group_panel = !patch && !self.node_editor.sel_groups.is_empty();
         if !patch {
             self.group_panel_shown = false;
         }
-        if self.prop_order.is_empty() && !group_panel {
+        if self.prop.order.is_empty() && !group_panel {
             ui.weak("Z-click a node in the graph to pin its properties here");
             ui.allocate_space(ui.available_size());
             return;
@@ -23564,8 +23521,8 @@ impl Gfx {
         // wheel/pinch; zooming the grid too would do both at once.
         let factor = if curveui::owns_pointer(ui.ctx()) { 1.0 } else { factor };
         if (factor - 1.0).abs() > 1e-4 && ui.ui_contains_pointer() {
-            let before = self.prop_zoom;
-            self.set_prop_zoom(self.prop_zoom * factor);
+            let before = self.prop.zoom;
+            self.set_prop_zoom(self.prop.zoom * factor);
             if patch {
                 // Zoom about the cursor by moving the pan, the way the graph
                 // does — not by nudging a scroll offset, which lags a frame
@@ -23576,13 +23533,13 @@ impl Gfx {
                     before,
                 );
             } else {
-                self.prop_zoom_anchor = ui.ctx().pointer_latest_pos();
+                self.prop.zoom_anchor = ui.ctx().pointer_latest_pos();
             }
         }
         // Persisting the zoom is a disk write; a wheel gesture is sixty of
         // them a second. Hold it until the gesture settles.
-        if self.prop_zoom_dirty && (factor - 1.0).abs() <= 1e-4 {
-            self.prop_zoom_dirty = false;
+        if self.prop.zoom_dirty && (factor - 1.0).abs() <= 1e-4 {
+            self.prop.zoom_dirty = false;
             save_prefs(&self.prefs);
         }
         // Canvas navigation runs HERE, before the tile pitch is measured and
@@ -23621,7 +23578,7 @@ impl Gfx {
                 self.patch_zoom_anchor = None;
             }
             if let Some(a) = self.patch_zoom_anchor {
-                let before = self.prop_zoom;
+                let before = self.prop.zoom;
                 self.set_prop_zoom(before * ((delta.x - delta.y) * 0.005).exp());
                 self.patch_zoom_about(a, view_rect, before);
             }
@@ -23659,26 +23616,26 @@ impl Gfx {
             });
             let ctrlish = m.ctrl || m.command;
             let chord = (mid && ctrlish) || (prim && m.alt && ctrlish);
-            if self.prop_stretch_anchor.is_none() && chord && ui.ui_contains_pointer() {
-                self.prop_stretch_anchor = press;
+            if self.prop.stretch_anchor.is_none() && chord && ui.ui_contains_pointer() {
+                self.prop.stretch_anchor = press;
             }
             if !(prim || mid) {
-                self.prop_stretch_anchor = None;
+                self.prop.stretch_anchor = None;
             }
-            if let Some(a) = self.prop_stretch_anchor {
+            if let Some(a) = self.prop.stretch_anchor {
                 // The widget under the press must not ALSO take the drag
                 // (egui's DragValue follows any button). Runs before the
                 // panels lay out, so they never see it as dragged.
                 ui.ctx().stop_dragging();
                 let (fx, fy) = nav::drag_zoom_xy(delta);
                 if (fx - 1.0).abs() > 1e-5 || (fy - 1.0).abs() > 1e-5 {
-                    self.set_prop_stretch(self.prop_stretch * egui::vec2(fx, fy));
-                    self.prop_zoom_anchor = Some(a);
+                    self.set_prop_stretch(self.prop.stretch * egui::vec2(fx, fy));
+                    self.prop.zoom_anchor = Some(a);
                 }
             }
         }
-        let zoom = self.prop_zoom;
-        let order = self.prop_order.clone();
+        let zoom = self.prop.zoom;
+        let order = self.prop.order.clone();
         let hud_live = self.hud_drag.is_some();
         let mut hud_drag_out: Option<widgets::HudSlider> = None;
         // The properties panel holds a mutable borrow of the node it is
@@ -23712,7 +23669,7 @@ impl Gfx {
         // Which Transforms in the rack have a SoftCrop upstream (the node
         // borrow below cannot ask).
         let cropped: std::collections::HashSet<u64> = self
-            .prop_order
+            .prop.order
             .iter()
             .copied()
             .filter(|id| {
@@ -23726,7 +23683,7 @@ impl Gfx {
         // Same deferral as the bakes: segmenting needs `&mut self` and the
         // panel is holding the node.
         let mut panel_rects: Vec<(u64, egui::Rect)> = Vec::new();
-        let stretch = self.prop_stretch;
+        let stretch = self.prop.stretch;
         // The grid runs on CELLS (half a tile); a panel's span is in cells.
         let (cell_w, cell_h) =
             (widgets::CELL * zoom * stretch.x, widgets::CELL * zoom * stretch.y);
@@ -23746,13 +23703,13 @@ impl Gfx {
         // places panels itself and has no direction.
         let vertical = !patch && {
             let (w, h) = (view_rect.width(), view_rect.height());
-            let was = self.prop_vertical;
+            let was = self.prop.vertical;
             let now = if was { h > w * 0.95 } else { h > w * 1.05 };
             if now != was {
                 // The other axis's offset means nothing in the new layout.
-                self.prop_scroll_set = Some(egui::Vec2::ZERO);
+                self.prop.scroll_set = Some(egui::Vec2::ZERO);
             }
-            self.prop_vertical = now;
+            self.prop.vertical = now;
             now
         };
         // The GAP scales too — it is empty grid, not type — which keeps the
@@ -23768,8 +23725,8 @@ impl Gfx {
         // scroll offset by the difference and the point stays under the
         // cursor (or the view centre, for the header buttons).
         if !patch
-            && ((zoom - self.prop_zoom_laid).abs() > 1e-6
-                || (stretch - self.prop_stretch_laid).length() > 1e-6)
+            && ((zoom - self.prop.zoom_laid).abs() > 1e-6
+                || (stretch - self.prop.stretch_laid).length() > 1e-6)
         {
             // Per axis: a stretch moves one pitch and not the other.
             let pitch_at = |z: f32, st: egui::Vec2| {
@@ -23778,18 +23735,18 @@ impl Gfx {
                     (widgets::CELL * st.y + widgets::TILE_GAP) * z,
                 )
             };
-            let r = pitch_at(zoom, stretch) / pitch_at(self.prop_zoom_laid, self.prop_stretch_laid);
+            let r = pitch_at(zoom, stretch) / pitch_at(self.prop.zoom_laid, self.prop.stretch_laid);
             let view = ui.available_rect_before_wrap();
-            let anchor = self.prop_zoom_anchor.unwrap_or_else(|| view.center());
+            let anchor = self.prop.zoom_anchor.unwrap_or_else(|| view.center());
             // Content-space position of the anchor, measured from where the
             // content actually starts (last frame's origin already has the
             // scroll offset folded in).
-            let c = anchor - self.prop_origin;
-            self.prop_scroll_set = Some(
-                (self.prop_scroll + c * (r - egui::Vec2::splat(1.0))).max(egui::Vec2::ZERO),
+            let c = anchor - self.prop.origin;
+            self.prop.scroll_set = Some(
+                (self.prop.scroll + c * (r - egui::Vec2::splat(1.0))).max(egui::Vec2::ZERO),
             );
-            self.prop_zoom_laid = zoom;
-            self.prop_stretch_laid = stretch;
+            self.prop.zoom_laid = zoom;
+            self.prop.stretch_laid = stretch;
         }
         // Patch mode: a panel that has never been placed takes the first
         // free spot (row-major, sized to the window).
@@ -23885,7 +23842,7 @@ impl Gfx {
         } else {
             egui::ScrollArea::horizontal()
         };
-        if let Some(off) = self.prop_scroll_set.take() {
+        if let Some(off) = self.prop.scroll_set.take() {
             sa = sa.scroll_offset(off);
         }
         let sa_out = sa.show(ui, |ui| {
@@ -23899,7 +23856,7 @@ impl Gfx {
             // Only the strip records its origin: the canvas navigates by
             // `patch_pan`, and both share this field.
             if !patch {
-                self.prop_origin = origin;
+                self.prop.origin = origin;
             }
             if patch {
                 // The canvas IS the viewport — it does not stop at the edge
@@ -24070,7 +24027,7 @@ impl Gfx {
                 // The docked strip honours a panel's own width; the patch bay
                 // is a grid of whole cells and keeps the shared one.
                 let sx = if patch { stretch.x } else {
-                    self.prop_width.get(&node).copied().unwrap_or(stretch.x)
+                    self.prop.width.get(&node).copied().unwrap_or(stretch.x)
                 };
                 let cell_w = widgets::CELL * zoom * sx;
                 let pw = span[0] as f32 * cell_w + (span[0] as f32 - 1.0) * gap;
@@ -24441,10 +24398,10 @@ impl Gfx {
                         }
                     }
                 } else if hdrag.dragged() {
-                    self.prop_drag = Some(node);
+                    self.prop.drag = Some(node);
                 } else if hdrag.clicked() {
-                    self.prop_selected =
-                        if self.prop_selected == Some(node) { None } else { Some(node) };
+                    self.prop.selected =
+                        if self.prop.selected == Some(node) { None } else { Some(node) };
                 }
                 if patch && self.patch_link_mode {
                     self.link_panel_ui(ui, node, cur_t, &driven_vals, &mut sockets);
@@ -24505,7 +24462,7 @@ impl Gfx {
                             .unwrap_or_default(),
                         _ => Vec::new(),
                     };
-                let prop_zoom = self.prop_zoom;
+                let prop_zoom = self.prop.zoom;
                 // Same reason as `wired`: the timeline needs the comp's
                 // length and each layer's source length, and every one of
                 // those is a &self method — read them before the node is
@@ -26231,7 +26188,7 @@ impl Gfx {
                 }
                 let pr = outer.response.rect;
                 if !patch {
-                    if self.prop_selected == Some(node) {
+                    if self.prop.selected == Some(node) {
                         ui.painter().rect_stroke(
                             pr,
                             4.0,
@@ -26258,14 +26215,14 @@ impl Gfx {
                         // The PRESS point, not where the drag threshold
                         // tripped, or the edge trails the hand by it.
                         if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
-                            self.prop_edge_drag = Some((node, p.x, pr.width()));
-                            self.prop_selected = Some(node);
+                            self.prop.edge_drag = Some((node, p.x, pr.width()));
+                            self.prop.selected = Some(node);
                         }
                     }
                     if er.double_clicked() {
-                        self.prop_width.remove(&node);
+                        self.prop.width.remove(&node);
                     }
-                    if let Some((n, x0, w0)) = self.prop_edge_drag {
+                    if let Some((n, x0, w0)) = self.prop.edge_drag {
                         if n == node {
                             if let Some(p) = ui.ctx().pointer_latest_pos() {
                                 // Anchored at the press: the edge stays under
@@ -26274,7 +26231,7 @@ impl Gfx {
                                 let want = w0 + (p.x - x0) - (s0 - 1.0) * gap;
                                 let v = (want / (s0 * widgets::CELL * zoom))
                                     .clamp(widgets::STRETCH_MIN, widgets::STRETCH_MAX);
-                                self.prop_width.insert(node, v);
+                                self.prop.width.insert(node, v);
                             }
                         }
                     }
@@ -26282,7 +26239,7 @@ impl Gfx {
                 panel_rects.push((node, pr));
             }
             if !patch {
-                self.prop_panel_rects = panel_rects.clone();
+                self.prop.panel_rects = panel_rects.clone();
             }
             if patch && self.patch_link_mode {
                 // Resting cables paint into this slot: OVER the panels they
@@ -26297,8 +26254,8 @@ impl Gfx {
                 // at. The canvas can see that a jack is missing but not who
                 // is pinned, so the app does the pinning.
                 for n in self.patch_ui.take_summons() {
-                    if self.egraph.node(n).is_some() && !self.prop_order.contains(&n) {
-                        self.prop_order.push(n);
+                    if self.egraph.node(n).is_some() && !self.prop.order.contains(&n) {
+                        self.prop.order.push(n);
                     }
                 }
                 patchbay::search_ui(
@@ -26314,7 +26271,7 @@ impl Gfx {
                     self.patch_drag = None;
                 }
                 let placed: Vec<(u64, [i32; 2], [u8; 2])> = self
-                    .prop_order
+                    .prop.order
                     .iter()
                     .filter_map(|n| {
                         Some((*n, *self.patch_cell.get(n)?, self.patch_span_of(*n)))
@@ -26350,7 +26307,7 @@ impl Gfx {
         // recording its (always zero) offset would clobber the strip's,
         // since the two share this field.
         if !patch {
-            self.prop_scroll = sa_out.state.offset;
+            self.prop.scroll = sa_out.state.offset;
         }
         self.props_pie_ui(ui, &panel_rects);
         // Header-drag reorder: swap with a neighbor once the pointer crosses
@@ -26358,33 +26315,33 @@ impl Gfx {
         // whichever axis the strip runs.
         let along = |p: egui::Pos2| if vertical { p.y } else { p.x };
         if !ui.input(|i| i.pointer.any_down()) {
-            self.prop_drag = None;
-            self.prop_edge_drag = None;
+            self.prop.drag = None;
+            self.prop.edge_drag = None;
         }
-        if self.prop_selected.is_some_and(|n| !self.prop_order.contains(&n)) {
-            self.prop_selected = None;
+        if self.prop.selected.is_some_and(|n| !self.prop.order.contains(&n)) {
+            self.prop.selected = None;
         }
-        if let Some(did) = self.prop_drag {
+        if let Some(did) = self.prop.drag {
             if let (Some(p), Some(i)) = (
                 ui.ctx().pointer_latest_pos(),
-                self.prop_order.iter().position(|x| *x == did),
+                self.prop.order.iter().position(|x| *x == did),
             ) {
                 if i > 0 {
                     if let Some((_, r)) =
-                        panel_rects.iter().find(|(n, _)| *n == self.prop_order[i - 1])
+                        panel_rects.iter().find(|(n, _)| *n == self.prop.order[i - 1])
                     {
                         if along(p) < along(r.center()) {
-                            self.prop_order.swap(i, i - 1);
+                            self.prop.order.swap(i, i - 1);
                         }
                     }
                 }
-                let i = self.prop_order.iter().position(|x| *x == did).unwrap();
-                if i + 1 < self.prop_order.len() {
+                let i = self.prop.order.iter().position(|x| *x == did).unwrap();
+                if i + 1 < self.prop.order.len() {
                     if let Some((_, r)) =
-                        panel_rects.iter().find(|(n, _)| *n == self.prop_order[i + 1])
+                        panel_rects.iter().find(|(n, _)| *n == self.prop.order[i + 1])
                     {
                         if along(p) > along(r.center()) {
-                            self.prop_order.swap(i, i + 1);
+                            self.prop.order.swap(i, i + 1);
                         }
                     }
                 }
@@ -26450,7 +26407,7 @@ impl Gfx {
             self.extract_to_layers(id);
         }
         if let Some(id) = closed_panel {
-            self.prop_order.retain(|x| *x != id);
+            self.prop.order.retain(|x| *x != id);
             // A ranges preview is explained by the page it is set on, and
             // that page has just gone: put the picture back rather than
             // leave a matte on screen with nothing to say why.

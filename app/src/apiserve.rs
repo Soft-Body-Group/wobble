@@ -1221,8 +1221,8 @@ impl Gfx {
                 // As the summary says: their panels open (pinned in the
                 // rack, the way a Z-click pins them).
                 for id in &ids {
-                    if !self.prop_order.contains(id) {
-                        self.prop_order.push(*id);
+                    if !self.prop.order.contains(id) {
+                        self.prop.order.push(*id);
                     }
                 }
                 self.selected = ids;

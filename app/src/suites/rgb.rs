@@ -86,7 +86,7 @@ impl Gfx {
                 self.egraph.connect(nid, 0, 0); // Mult <- Read A
                 self.egraph.view = Some(nid);
                 self.egraph.view_active_b = false;
-                self.prop_order = vec![nid];
+                self.prop.order = vec![nid];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.playing = false;
@@ -245,7 +245,7 @@ impl Gfx {
                 if let Some(n) = self.egraph.node_mut(gid) {
                     n.grade_sliders = true;
                 }
-                self.prop_order = vec![gid];
+                self.prop.order = vec![gid];
                 self.test.rgb = Some((20, 0, gid));
                 return;
             }
@@ -323,7 +323,7 @@ impl Gfx {
                 let Some(first) = find_kind(self, "Glow") else {
                     fail("Glow node vanished".into())
                 };
-                self.prop_order = vec![first];
+                self.prop.order = vec![first];
                 next = 26;
             }
             26 if frames > 20 => {

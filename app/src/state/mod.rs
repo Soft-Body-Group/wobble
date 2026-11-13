@@ -10,3 +10,5 @@ mod spline;
 pub(crate) use spline::SplineUiState;
 mod pin;
 pub(crate) use pin::PinState;
+mod prop;
+pub(crate) use prop::PropState;

@@ -80,7 +80,7 @@ impl Gfx {
                 self.playing = false;
                 self.seek_to(5);
                 self.selected = vec![b];
-                self.prop_order = vec![b];
+                self.prop.order = vec![b];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.test.eyedrop = Some((1, 0, b));

@@ -228,7 +228,7 @@ impl Gfx {
                     .map(|(id, _)| *id)
                     .unwrap_or_else(|| fail("simple_grade has no Grade inside".into()));
                 self.selected = vec![grade];
-                self.prop_order = vec![grade];
+                self.prop.order = vec![grade];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 next = 8;

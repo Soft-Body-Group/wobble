@@ -25,15 +25,15 @@ impl Gfx {
                 modifiers: Default::default(),
             });
         };
-        let rect = |s: &Self, n: u64| s.prop_panel_rects.iter().find(|(i, _)| *i == n).map(|(_, r)| *r);
+        let rect = |s: &Self, n: u64| s.prop.panel_rects.iter().find(|(i, _)| *i == n).map(|(_, r)| *r);
         let next = |t: &mut PanelWTest| {
             t.stage += 1;
             t.frames = 0;
         };
         match t.stage {
-            0 if t.frames > 12 && self.prop_panel_rects.len() >= 2 => {
-                let (a, ra) = self.prop_panel_rects[0];
-                let (b, rb) = self.prop_panel_rects[1];
+            0 if t.frames > 12 && self.prop.panel_rects.len() >= 2 => {
+                let (a, ra) = self.prop.panel_rects[0];
+                let (b, rb) = self.prop.panel_rects[1];
                 (t.a, t.b, t.w_a, t.w_b, t.ra) = (a, b, ra.width(), rb.width(), Some(ra));
                 btn(raw, ra.min + egui::vec2(32.0, 15.0), true);
                 next(&mut t);
@@ -43,8 +43,8 @@ impl Gfx {
                 next(&mut t);
             }
             2 if t.frames > 3 => {
-                if self.prop_selected != Some(t.a) {
-                    fail(format!("a click on the name selected {:?}, want {}", self.prop_selected, t.a));
+                if self.prop.selected != Some(t.a) {
+                    fail(format!("a click on the name selected {:?}, want {}", self.prop.selected, t.a));
                 }
                 let ra = t.ra.unwrap();
                 t.edge = egui::pos2(ra.max.x - 1.0, ra.center().y);

@@ -100,7 +100,7 @@ impl Gfx {
                 );
                 self.egraph.connect(g, 0, 0);
                 self.egraph.view = Some(g);
-                self.prop_order = vec![g];
+                self.prop.order = vec![g];
                 self.test.zones = Some((1, 0, g));
                 return;
             }

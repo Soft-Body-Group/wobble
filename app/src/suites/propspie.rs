@@ -29,7 +29,7 @@ impl Gfx {
                     NodeKind::Grid(engine::graph::GridParams::default()),
                     egui::Pos2::new(300.0, 0.0),
                 );
-                self.prop_order = vec![nid];
+                self.prop.order = vec![nid];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.playing = false;

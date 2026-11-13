@@ -33,7 +33,7 @@ impl Gfx {
                 // Pin its properties: the panel's plots build meshes from
                 // the live params every frame, and an unopened panel would
                 // leave all of that untested.
-                self.prop_order = vec![id];
+                self.prop.order = vec![id];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 // PIN THE PLATE. Later stages compare two probes of the same

@@ -350,7 +350,7 @@ impl crate::Gfx {
         // What the last pick left: (selected, properties raised for it).
         let state = |s: &Self| {
             let sel = s.selected.first().copied();
-            (sel, sel.is_some() && s.props_visible && s.prop_order.first() == sel.as_ref())
+            (sel, sel.is_some() && s.props_visible && s.prop.order.first() == sel.as_ref())
         };
         let check = |s: &Self, what: &str, want: u64, props: bool| {
             let (sel, raised) = state(s);
@@ -395,7 +395,7 @@ impl crate::Gfx {
                 self.egraph.connect(top, 1, xf_bg);
                 self.egraph.view = Some(top);
                 self.selected = Vec::new();
-                self.prop_order.clear();
+                self.prop.order.clear();
                 self.props_visible = false;
                 self.test.layerpick = Some((1, 0, [xf_fg, xf_bg]));
                 return;
@@ -413,11 +413,11 @@ impl crate::Gfx {
                         ][k - 1];
                         check(self, what, want, props);
                         // Solo: the rack holds the clicked node alone.
-                        if props && self.prop_order != vec![want] {
+                        if props && self.prop.order != vec![want] {
                             println!(
                                 "LAYERPICK TEST FAIL: {what} did not solo the properties \
                                  (rack {:?})",
-                                self.prop_order
+                                self.prop.order
                             );
                             std::process::exit(1);
                         }
@@ -425,11 +425,11 @@ impl crate::Gfx {
                         // shift+cmd ADDS: both selected, both panels up,
                         // the new one in front.
                         let both_sel = self.selected.contains(&xf_fg) && self.selected.contains(&xf_bg);
-                        if !both_sel || self.prop_order != vec![xf_bg, xf_fg] {
+                        if !both_sel || self.prop.order != vec![xf_bg, xf_fg] {
                             println!(
                                 "LAYERPICK TEST FAIL: shift+cmd-click did not add \
                                  (selected {:?}, rack {:?})",
-                                self.selected, self.prop_order
+                                self.selected, self.prop.order
                             );
                             std::process::exit(1);
                         }

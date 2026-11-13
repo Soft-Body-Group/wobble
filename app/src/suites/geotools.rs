@@ -575,7 +575,7 @@ impl Gfx {
                 if self.egraph.input_of(st, 0) != Some(rc) || self.selected != [st] {
                     fail("the Style is not after the rectangle, selected".into());
                 }
-                if !(self.props_visible && self.bottom == BottomTab::Properties && self.prop_order.first() == Some(&st)) {
+                if !(self.props_visible && self.bottom == BottomTab::Properties && self.prop.order.first() == Some(&st)) {
                     fail("the Style's properties did not open".into());
                 }
                 let Some(G::Style { style }) = kind(self, st) else { unreachable!() };

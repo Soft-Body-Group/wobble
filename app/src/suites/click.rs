@@ -268,7 +268,7 @@ impl Gfx {
                 self.prefs.hud_hide = Some(false);
                 self.gizmo_pinned = vec![tid];
                 self.selected.clear();
-                self.prop_order.clear();
+                self.prop.order.clear();
                 self.props_visible = false;
                 self.test.pos = None;
                 self.test.click = Some(4010);
@@ -618,10 +618,10 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                if self.prop_order.first() != Some(&tid) || !self.props_visible {
+                if self.prop.order.first() != Some(&tid) || !self.props_visible {
                     println!(
                         "GIZMO FOCUS TEST FAIL: properties are {:?} (visible {}), wanted {tid} in front",
-                        self.prop_order, self.props_visible
+                        self.prop.order, self.props_visible
                     );
                     std::process::exit(1);
                 }

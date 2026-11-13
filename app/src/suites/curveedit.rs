@@ -51,7 +51,7 @@ impl Gfx {
                     egui::Pos2::new(360.0, 120.0),
                 );
                 self.selected = vec![id];
-                self.prop_order = vec![id];
+                self.prop.order = vec![id];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.test.curveedit = Some((1, 0, id));

@@ -89,7 +89,7 @@ impl Gfx {
                 );
                 self.egraph.view = Some(nid);
                 self.egraph.view_active_b = false;
-                self.prop_order = vec![nid];
+                self.prop.order = vec![nid];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.playing = false;
