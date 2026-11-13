@@ -30446,37 +30446,17 @@ impl Gfx {
                         }
                     }
                     NodeKind::Cryptomatte(cp) => {
-                        let matte_before = cp.matte_layer();
-                        let out = cryptoui::crypto_ui(
-                            ui,
-                            cp,
-                            viewing,
-                            &crypto_defs,
-                            crypto_read.is_some(),
-                            &mut self.crypto.name_entry,
-                            crypto_bake.as_ref(),
-                        );
-                        if out.want_view {
-                            self.crypto.want_view = Some(node);
-                        }
-                        if out.bake_all {
-                            self.crypto.want_bake = Some(node);
-                        }
-                        if out.bake_cancel {
-                            self.crypto.cancel_bake();
-                        }
-                        // A different selection is a different matte behind
-                        // the same reader slot. Viewed, that reader is not
-                        // in the rig (the live ids are) and the view hop
-                        // away rebuilds it anyway — no hitch per click.
-                        if !viewing && cp.matte_layer() != matte_before {
-                            self.playback_dirty = true;
-                        }
-                        if out.layer_changed {
-                            // A different layer is different pixels behind
-                            // the same slots: rebuild the rig.
-                            self.playback_dirty = true;
-                        }
+                        nodes::cryptomatte::panel(
+                                ui,
+                                cp,
+                                node,
+                                viewing,
+                                &crypto_bake,
+                                &crypto_defs,
+                                crypto_read,
+                                &mut self.crypto,
+                                &mut self.playback_dirty,
+                            );
                     }
                     NodeKind::Write(wp) => {
                         // Rendering is a BUTTON. Nothing here writes to disk
