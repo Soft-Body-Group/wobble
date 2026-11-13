@@ -351,7 +351,13 @@ sub-graph: shapes as distances, ops, effects, compiled into the fused pass).
 
 `app/`: `lib.rs` (shell, viewer, properties — large, and known debt: see
 CONTRIBUTING.md; `main.rs` is only `app::run()`), `suites/` (one file per
-`--test-*` driver), `editor.rs`
+`--test-*` driver), `viewer/` (one file per viewer gizmo pass, each an
+`impl Gfx` block `viewer_ui` calls in order), `nodes/` (a node's panel,
+channels and glyph; a panel that borrows a lot from the properties pass
+takes it as its `Cx` struct), `state/` (`Gfx`'s fields grouped by
+subsystem: `self.test`, `self.brush`, `self.geo`, `self.prop`, …),
+`doc/` (the document model: `ENode`, the patch bay, `EditorGraph`;
+re-exported from `editor`), `editor.rs`
 (node graph, patch model), `widgets.rs` (tile/row widgets), `curves.rs`
 (curve editor), `wheels.rs` (grade wheels), `browser.rs` (sequence browser),
 `anim.rs` (channels, curves), `exprs.rs` (patch expression language),

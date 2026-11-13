@@ -32,13 +32,17 @@ recipe, step by step, is in
 
 ## Known debt: `app/src/lib.rs`
 
-`app/src/lib.rs` is tens of thousands of lines: the window shell, the
-viewer, the properties pane and one very large `Gfx` struct. It is known
-debt and it is being split up (suites are out already; the viewer and
-properties arms, the document model and `Gfx`'s fields are next). You do
-not need to understand it to add a node or a plugin, and a change that
-adds to it will be asked to live in its own file instead. If your change
-needs to touch it, keep the footprint to a `mod` line and a call.
+`app/src/lib.rs` is still tens of thousands of lines: the window shell,
+the frame loop, what is left of the viewer and properties passes, and one
+very large `Gfx` struct. It is known debt and it is being split up. Out
+already: the suites (`app/src/suites`), the node panels (`app/src/nodes`),
+the viewer's gizmo passes (`app/src/viewer`), the document model
+(`app/src/doc`) and about half of `Gfx`'s fields (`app/src/state`). Still
+to come: the document model as its own egui-free crate, and the rest of
+`Gfx`. You do not need to understand `lib.rs` to add a node or a plugin,
+and a change that adds to it will be asked to live in its own file
+instead. If your change needs to touch it, keep the footprint to a `mod`
+line and a call.
 
 ## Before you send a change
 
