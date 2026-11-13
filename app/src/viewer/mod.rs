@@ -4,3 +4,4 @@ mod huds;
 mod keyerhud;
 mod sammie;
 mod textpath;
+mod camtrack;

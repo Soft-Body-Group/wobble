@@ -22631,26 +22631,18 @@ impl Gfx {
             }
             ink.set_tint(None);
 
-            // CameraTrack: the solved points through the solved camera at
-            // this frame — one mesh, however many — and S-click picks.
-            for node in selected.iter().copied() {
-                if !matches!(self.egraph.node(node).map(|n| &n.kind), Some(NodeKind::CamTrack(p)) if p.solved() && p.show) {
-                    continue;
-                }
-                let (nw, nh) = self.node_res_f32(node).unwrap_or((owf, ohf));
-                let hd = downstream_proj(
-                    &self.egraph,
-                    node,
-                    &|id| self.node_res_f32(id).unwrap_or((owf, ohf)),
-                    cur_t,
-                );
-                let to_scr = |q: [f32; 2]| out_to_pts(apply_h(&hd, egui::vec2(q[0] * nw, q[1] * nh)));
-                if hud_key_list.is_empty() {
-                    hud_key_list.push(hudkeys::key("S", "click point: pick", egui::Key::S));
-                }
-                ink.set_tint(self.hud_ink(node));
-                self.camtrack_gizmo(ui, &mut ink, node, cur_t as i64, &nav, &to_scr, pointer_pos);
-            }
+            self.gizmo_camtrack(
+                ui,
+                cur_t,
+                owf,
+                ohf,
+                pointer_pos,
+                &out_to_pts,
+                &selected,
+                &nav,
+                &mut ink,
+                &mut hud_key_list,
+            );
             ink.set_tint(None);
 
             self.gizmo_text_path(
