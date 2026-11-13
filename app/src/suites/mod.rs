@@ -10,6 +10,7 @@ mod colourkey;
 mod compose;
 mod cost;
 mod cpick;
+mod crypto;
 mod curveedit;
 mod curves;
 mod dpx;
