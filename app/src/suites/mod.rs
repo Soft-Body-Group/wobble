@@ -27,6 +27,7 @@ mod proxy;
 mod range;
 mod record;
 mod region;
+mod scrub;
 mod scrubfid;
 mod scrubperf;
 mod shader;
