@@ -24,6 +24,7 @@ mod plugin;
 mod range;
 mod record;
 mod region;
+mod shader;
 mod shot;
 mod slice;
 mod subwob;
