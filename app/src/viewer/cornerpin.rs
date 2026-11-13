@@ -1,10 +1,10 @@
-//! CornerPin, GridWarp and Warp: the pins and their grab gestures.
+//! CornerPin: the four pins and their grab gestures.
 //! Moved out of `viewer_ui` (lib.rs) unchanged.
 
 use crate::*;
 
 impl Gfx {
-    /// CornerPin, GridWarp and Warp: the pins and their grab gestures.
+    /// CornerPin: the four pins and their grab gestures.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn gizmo_corner_pin(
         &mut self,

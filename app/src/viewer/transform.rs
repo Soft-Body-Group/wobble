@@ -1,10 +1,10 @@
-//! The affine gizmos: Transform's manipulator and every node drawn like one, with motion paths.
+//! The per-node gizmo pass: Transform's manipulator, Gradient, Warp, GridWarp, SoftCrop, Mirror, the lens nodes and Godrays, with motion paths.
 //! Moved out of `viewer_ui` (lib.rs) unchanged.
 
 use crate::*;
 
 impl Gfx {
-    /// The affine gizmos: Transform's manipulator and every node drawn like one, with motion paths.
+    /// The per-node gizmo pass: Transform's manipulator, Gradient, Warp, GridWarp, SoftCrop, Mirror, the lens nodes and Godrays, with motion paths.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn gizmo_transform(
         &mut self,
