@@ -32829,27 +32829,7 @@ impl Gfx {
                         ui.weak("multiplies the image (input 1) by the mask (input 2)");
                     }
                     NodeKind::Extract(x) => {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{} outputs", x.pairs()));
-                            if ui.small_button("−").on_hover_text("drop the last pair").clicked() {
-                                x.n = (x.pairs() as u32).saturating_sub(1).max(1);
-                            }
-                            if ui.small_button("+").on_hover_text("one more matte + output").clicked() {
-                                x.n = (x.pairs() as u32 + 1).min(engine::graph::EXTRACT_MAX);
-                            }
-                        });
-                        if ui
-                            .button("layers")
-                            .on_hover_text(
-                                "a Layer stack below with a Transform on every output, \
-                                 each conformed to its matte's soft crop",
-                            )
-                            .clicked()
-                        {
-                            extract_layers_req = Some(node);
-                        }
-                        ui.weak("image on the left, a matte on each top input;");
-                        ui.weak("each output is the image isolated by the matte above it");
+                        nodes::extract::panel(ui, x, node, &mut extract_layers_req);
                     }
                     NodeKind::Noise(n) => {
                         widgets::gen_format_row(ui, ("noise-format", node), &mut n.size, &mut n.inherit);
