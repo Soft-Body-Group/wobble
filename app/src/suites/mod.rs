@@ -25,4 +25,5 @@ mod slice;
 mod subwob;
 mod tab;
 mod viewlock;
+mod viewswitch;
 mod zones;
