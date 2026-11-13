@@ -29,7 +29,7 @@ impl Gfx {
             let started = nav.drag_started_by(egui::PointerButton::Primary);
             let dragging = nav.dragged_by(egui::PointerButton::Primary);
             let mods = ui.input(|i| i.modifiers);
-            let clone_mode = self.brush_mode == BrushMode::Clone;
+            let clone_mode = self.brush.mode == BrushMode::Clone;
             // The brush chain, shared by the gesture and the cursor ring:
             // screen point -> the node's own normalized space, inverted
             // through everything downstream of it.
@@ -60,16 +60,16 @@ impl Gfx {
             if adjusting {
                 let d = ui.input(|i| i.pointer.delta());
                 if mods.ctrl {
-                    self.brush_aspect = (self.brush_aspect + d.x * 0.005).clamp(0.05, 1.0);
+                    self.brush.aspect = (self.brush.aspect + d.x * 0.005).clamp(0.05, 1.0);
                 } else if mods.shift {
-                    self.brush_color[3] = (self.brush_color[3] + d.x * 0.005).clamp(0.0, 1.0);
+                    self.brush.color[3] = (self.brush.color[3] + d.x * 0.005).clamp(0.0, 1.0);
                     // Kept in (-180, 180] so the panel's field reads the
                     // same number the gesture made.
-                    self.brush_angle = (self.brush_angle - d.y * 0.5 + 180.0).rem_euclid(360.0) - 180.0;
+                    self.brush.angle = (self.brush.angle - d.y * 0.5 + 180.0).rem_euclid(360.0) - 180.0;
                 } else {
-                    self.brush_radius =
-                        (self.brush_radius * (1.0 + d.x * 0.01)).clamp(1.0, 500.0);
-                    self.brush_soft = (self.brush_soft - d.y * 0.005).clamp(0.0, 1.0);
+                    self.brush.radius =
+                        (self.brush.radius * (1.0 + d.x * 0.01)).clamp(1.0, 500.0);
+                    self.brush.soft = (self.brush.soft - d.y * 0.005).clamp(0.0, 1.0);
                 }
             } else if clone_mode && mods.alt {
                 // ALT + clone = picking the source, not painting. It holds
@@ -80,10 +80,10 @@ impl Gfx {
                     if let Some(p) =
                         ui.ctx().pointer_latest_pos().filter(|p| rect.contains(*p))
                     {
-                        self.brush_clone_src = Some(to_norm(p));
+                        self.brush.clone_src = Some(to_norm(p));
                         // A fresh anchor re-derives the offset on the next
                         // stroke; until then there is nothing to paint with.
-                        self.brush_clone_off = None;
+                        self.brush.clone_off = None;
                     }
                 }
             } else if !scrubbing && !cmd && (started || dragging) {
@@ -114,13 +114,13 @@ impl Gfx {
                     // stroke after an alt-click starts, and every later
                     // stroke reuses it, so a patch stays registered with its
                     // source instead of jumping per stroke.
-                    if started && clone_mode && self.brush_clone_off.is_none() {
-                        if let Some(src) = self.brush_clone_src {
-                            self.brush_clone_off =
+                    if started && clone_mode && self.brush.clone_off.is_none() {
+                        if let Some(src) = self.brush.clone_src {
+                            self.brush.clone_off =
                                 Some([src[0] - norm[0], src[1] - norm[1]]);
                         }
                     }
-                    let clone_off = if clone_mode { self.brush_clone_off } else { None };
+                    let clone_off = if clone_mode { self.brush.clone_off } else { None };
                     // Cloning with no source set would lay down a
                     // zero-offset stroke, i.e. an invisible no-op.
                     let armed = !clone_mode || clone_off.is_some();
@@ -135,7 +135,7 @@ impl Gfx {
                         .at(cur_t);
                     // Read before the node borrow below: these are methods.
                     let strength = self.brush_strength();
-                    let mode = self.brush_mode;
+                    let mode = self.brush.mode;
                     if let (true, Some(editor::ENode { kind: NodeKind::Paint(pp), .. })) =
                         (armed, self.egraph.node_mut(pid))
                     {
@@ -144,18 +144,18 @@ impl Gfx {
                             // stroke none (full pressure, as ever).
                             pp.strokes.push(engine::graph::PaintStroke {
                                 points: vec![norm],
-                                radius: self.brush_radius,
-                                softness: self.brush_soft,
-                                color: self.brush_color,
+                                radius: self.brush.radius,
+                                softness: self.brush.soft,
+                                color: self.brush.color,
                                 life,
                                 clone_off,
                                 mode,
-                                aspect: self.brush_aspect,
-                                angle: self.brush_angle,
+                                aspect: self.brush.aspect,
+                                angle: self.brush.angle,
                                 strength,
-                                blend: self.brush_blend,
+                                blend: self.brush.blend,
                                 pressure: press0.into_iter().collect(),
-                                press: self.brush_press,
+                                press: self.brush.press,
                             });
                         }
                         if let Some(stroke) = pp.strokes.last_mut() {

@@ -100,9 +100,9 @@ impl Gfx {
                 // The brush keys: [ shrinks, ] grows, shift softens, alt
                 // fades. All four off ONE key pair, and only while a Paint
                 // node is selected.
-                self.brush_radius = 40.0;
-                self.brush_soft = 0.5;
-                self.brush_color[3] = 1.0;
+                self.brush.radius = 40.0;
+                self.brush.soft = 0.5;
+                self.brush.color[3] = 1.0;
                 brush_key(raw, egui::Key::OpenBracket, egui::Modifiers::NONE);
                 next = 9;
             }
@@ -116,7 +116,7 @@ impl Gfx {
                 next = 11;
             }
             11 => {
-                let (r, sf, op) = (self.brush_radius, self.brush_soft, self.brush_color[3]);
+                let (r, sf, op) = (self.brush.radius, self.brush.soft, self.brush.color[3]);
                 if (r - 32.0).abs() > 0.01 || (sf - 0.6).abs() > 0.01 || (op - 0.9).abs() > 0.01
                 {
                     println!(
@@ -179,9 +179,9 @@ impl Gfx {
                 }
                 // Clone: alt-click sets the source, the next stroke fixes
                 // the offset against its own first point.
-                self.brush_mode = engine::graph::BrushMode::Clone;
-                self.brush_clone_src = None;
-                self.brush_clone_off = None;
+                self.brush.mode = engine::graph::BrushMode::Clone;
+                self.brush.clone_src = None;
+                self.brush.clone_off = None;
                 press_mod(raw, c + egui::vec2(150.0, -60.0), true, egui::Modifiers::ALT);
                 next = 17;
             }
@@ -190,7 +190,7 @@ impl Gfx {
                 next = 18;
             }
             18 => {
-                if self.brush_clone_src.is_none() {
+                if self.brush.clone_src.is_none() {
                     println!("PAINT TEST FAIL: alt-click did not set the clone source");
                     std::process::exit(1);
                 }
@@ -218,7 +218,7 @@ impl Gfx {
                 // node's own normalized space. (It used to be judged against
                 // `300 / image_rect.width()`, which is not the node's format
                 // width on screen, and failed at 0.8 of it.)
-                let want = match (self.brush_clone_src, ss.last().and_then(|s| s.points.first())) {
+                let want = match (self.brush.clone_src, ss.last().and_then(|s| s.points.first())) {
                     (Some(src), Some(p0)) => src[0] - p0[0],
                     _ => f32::NAN,
                 };
@@ -258,9 +258,9 @@ impl Gfx {
                 // HELD F + motion: Blender's brush gesture. Hold the key,
                 // move right 40px, let go: the radius grew and nothing was
                 // painted. Ctrl held with it moves the aspect instead.
-                self.brush_mode = engine::graph::BrushMode::Color;
-                self.brush_radius = 40.0;
-                self.brush_aspect = 1.0;
+                self.brush.mode = engine::graph::BrushMode::Color;
+                self.brush.radius = 40.0;
+                self.brush.aspect = 1.0;
                 raw.events.push(egui::Event::PointerMoved(c));
                 raw.events.push(egui::Event::Key {
                     key: egui::Key::F,
@@ -287,10 +287,10 @@ impl Gfx {
             }
             25 => {
                 let n_before = strokes(self).len();
-                if self.brush_radius <= 40.0 * 1.2 {
+                if self.brush.radius <= 40.0 * 1.2 {
                     println!(
                         "PAINT TEST FAIL: held F + 40px right left the radius at {:.1}",
-                        self.brush_radius
+                        self.brush.radius
                     );
                     std::process::exit(1);
                 }
@@ -300,10 +300,10 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 // A DODGE stroke carries its mode, its stops and its shape.
-                self.brush_mode = engine::graph::BrushMode::Dodge;
-                self.brush_stops = 0.75;
-                self.brush_aspect = 0.5;
-                self.brush_angle = 30.0;
+                self.brush.mode = engine::graph::BrushMode::Dodge;
+                self.brush.stops = 0.75;
+                self.brush.aspect = 0.5;
+                self.brush.angle = 30.0;
                 press(raw, c + egui::vec2(-60.0, 40.0), true);
                 next = 26;
             }
@@ -377,10 +377,10 @@ impl Gfx {
                 {
                     pp.output = engine::graph::PaintOutput::Rgb;
                 }
-                self.brush_mode = engine::graph::BrushMode::Color;
-                self.brush_blend = engine::graph::PaintBlend::Multiply;
-                self.brush_press = engine::graph::PressureMap { size: 1.0, opacity: 0.0, gamma: 1.0 };
-                self.brush_radius = 20.0;
+                self.brush.mode = engine::graph::BrushMode::Color;
+                self.brush.blend = engine::graph::PaintBlend::Multiply;
+                self.brush.press = engine::graph::PressureMap { size: 1.0, opacity: 0.0, gamma: 1.0 };
+                self.brush.radius = 20.0;
                 pen::drain();
                 pen::set_pressure(Some(0.3));
                 press(raw, c + egui::vec2(-120.0, 120.0), true);
@@ -434,7 +434,7 @@ impl Gfx {
                     println!("PAINT TEST FAIL: a multiply stroke never reached the shader");
                     std::process::exit(1);
                 }
-                self.brush_blend = engine::graph::PaintBlend::Normal;
+                self.brush.blend = engine::graph::PaintBlend::Normal;
                 if let Some(editor::ENode { kind: NodeKind::Paint(pp), .. }) =
                     self.egraph.node_mut(pid)
                 {

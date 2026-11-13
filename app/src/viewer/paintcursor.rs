@@ -44,19 +44,19 @@ impl Gfx {
             };
             if let Some(p) = pointer_pos.filter(|p| rect.contains(*p)) {
                 use engine::graph::BrushMode;
-                let r = (self.brush_radius * rect.width() / owf).max(1.5);
-                let clone_mode = self.brush_mode == BrushMode::Clone;
+                let r = (self.brush.radius * rect.width() / owf).max(1.5);
+                let clone_mode = self.brush.mode == BrushMode::Clone;
                 // Clone armed with nowhere to clone FROM paints nothing.
                 // The ring goes faint rather than letting the brush look
                 // ready and then quietly do nothing.
                 let inert = clone_mode
-                    && self.brush_clone_off.is_none()
-                    && self.brush_clone_src.is_none();
+                    && self.brush.clone_off.is_none()
+                    && self.brush.clone_src.is_none();
                 // The outline is the brush's unit disc through the same
                 // squash-and-turn the stamp shader applies, so what is
                 // drawn is exactly the stamp about to land.
-                let (sn, cs) = self.brush_angle.to_radians().sin_cos();
-                let asp = self.brush_aspect.clamp(0.02, 1.0);
+                let (sn, cs) = self.brush.angle.to_radians().sin_cos();
+                let asp = self.brush.aspect.clamp(0.02, 1.0);
                 let ellipse = |ink: &mut ink::InkShapes,
                                c: egui::Pos2,
                                r: f32,
@@ -75,8 +75,8 @@ impl Gfx {
                 ellipse(ink, p, r, 1.2, if inert { 0.3 } else { 0.85 });
                 // Inner ring = where the falloff starts. The two meet
                 // when the brush is hard, so a hard brush reads as one.
-                let inner = r * (1.0 - self.brush_soft).clamp(0.0, 1.0);
-                if inner > 2.0 && self.brush_soft > 0.02 {
+                let inner = r * (1.0 - self.brush.soft).clamp(0.0, 1.0);
+                if inner > 2.0 && self.brush.soft > 0.02 {
                     ellipse(ink, p, inner, 0.8, 0.4);
                 }
                 // A turned ellipse shows its major axis, or a thin brush
@@ -90,7 +90,7 @@ impl Gfx {
                     // Where the pixels come FROM: the anchor until the
                     // offset is fixed, then the live source under the
                     // brush.
-                    let src = match (self.brush_clone_off, self.brush_clone_src) {
+                    let src = match (self.brush.clone_off, self.brush.clone_src) {
                         (Some(o), _) => {
                             let n = to_norm(p);
                             Some(to_scr([n[0] + o[0], n[1] + o[1]]))
@@ -136,7 +136,7 @@ impl Gfx {
                     ("shift + F        x: opacity    y: angle", held && m.shift),
                     ("ctrl + F         x: aspect", held && m.ctrl),
                 ];
-                if self.brush_mode == engine::graph::BrushMode::Clone {
+                if self.brush.mode == engine::graph::BrushMode::Clone {
                     lines.push(("alt-click        set the clone source", m.alt));
                 }
                 let (lh, pad, w) = (14.0, 8.0, 296.0);

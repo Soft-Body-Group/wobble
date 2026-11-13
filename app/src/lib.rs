@@ -5936,27 +5936,7 @@ struct Gfx {
     spline_sel_shape: usize,
     /// The live band while a background drag is marquee-selecting points.
     spline_marquee: Option<egui::Rect>,
-    /// Brush settings for the Paint node (global, not per-node).
-    brush_radius: f32,
-    brush_soft: f32,
-    brush_color: [f32; 4],
-    /// What a stroke does — see `BrushMode`. Clone keeps its anchor below.
-    brush_mode: engine::graph::BrushMode,
-    /// Ellipse: minor/major ratio (1 = round) and rotation in degrees.
-    brush_aspect: f32,
-    brush_angle: f32,
-    /// Each mode's second knob, kept PER MODE so switching brushes never
-    /// hands a dodge the blur's radius: blur px, smear drag px, dodge/burn
-    /// stops.
-    brush_blur_px: f32,
-    brush_smear_px: f32,
-    brush_stops: f32,
-    /// How a colour stroke lands (`PaintBlend`) and what the pen's pressure
-    /// does to it. Both are copied onto each stroke as it starts.
-    brush_blend: engine::graph::PaintBlend,
-    brush_press: engine::graph::PressureMap,
-    /// The preset row (`brushes.rs`), mirrored into prefs on change.
-    brush_presets: Vec<brushes::BrushPreset>,
+    brush: state::BrushState,
     /// A GraphBake the Paint panel just inserted, and how many redraws to
     /// wait before starting it — the rig has to rebuild around the new
     /// reader first, or the bake reports "upstream not renderable yet".
@@ -5964,12 +5944,6 @@ struct Gfx {
     /// Bakes waiting their turn (`bake_selected`): one bake runs at a
     /// time, the next starts once the slot is free.
     bake_queue: std::collections::VecDeque<u64>,
-    /// The alt-clicked SOURCE anchor, normalized. Setting it re-derives the
-    /// offset on the next stroke; after that the offset is aligned (it
-    /// stays put stroke to stroke, Photoshop-style) until the next alt-click.
-    brush_clone_src: Option<[f32; 2]>,
-    /// The live offset, normalized — what actually goes on a stroke.
-    brush_clone_off: Option<[f32; 2]>,
     /// A space-held scrub happened; the release then doesn't toggle play.
     /// Fractional ticks banked by the space-scrub drag.
     scrub_frac: f32,
@@ -8187,22 +8161,24 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         spline_sel_n: 0,
         spline_sel_shape: 0,
         spline_marquee: None,
-        brush_radius: 40.0,
-        brush_soft: 0.6,
-        brush_color: [1.0, 0.25, 0.2, 1.0],
-        brush_mode: engine::graph::BrushMode::Color,
-        brush_aspect: 1.0,
-        brush_angle: 0.0,
-        brush_blur_px: 12.0,
-        brush_smear_px: 20.0,
-        brush_stops: 0.5,
-        brush_blend: engine::graph::PaintBlend::Normal,
-        brush_press: engine::graph::PressureMap::default(),
-        brush_presets,
+        brush: state::BrushState {
+            radius: 40.0,
+            soft: 0.6,
+            color: [1.0, 0.25, 0.2, 1.0],
+            mode: engine::graph::BrushMode::Color,
+            aspect: 1.0,
+            angle: 0.0,
+            blur_px: 12.0,
+            smear_px: 20.0,
+            stops: 0.5,
+            blend: engine::graph::PaintBlend::Normal,
+            press: engine::graph::PressureMap::default(),
+            presets: brush_presets,
+            clone_src: None,
+            clone_off: None,
+        },
         auto_bake: None,
         bake_queue: Default::default(),
-        brush_clone_src: None,
-        brush_clone_off: None,
         scrub_frac: 0.0,
         view_zoom: 1.0,
         view_pan: egui::Vec2::ZERO,
@@ -14632,10 +14608,10 @@ impl Gfx {
     /// will be. See `BrushMode::strength_label` for what each means.
     fn brush_strength(&self) -> f32 {
         use engine::graph::BrushMode;
-        match self.brush_mode {
-            BrushMode::Blur => self.brush_blur_px,
-            BrushMode::Smear => self.brush_smear_px,
-            BrushMode::Dodge | BrushMode::Burn => self.brush_stops,
+        match self.brush.mode {
+            BrushMode::Blur => self.brush.blur_px,
+            BrushMode::Smear => self.brush.smear_px,
+            BrushMode::Dodge | BrushMode::Burn => self.brush.stops,
             BrushMode::Color | BrushMode::Clone => 0.0,
         }
     }
@@ -15813,12 +15789,12 @@ impl Gfx {
                 let mut step = |down: bool, m: &egui::Modifiers| {
                     let d = if down { -1.0f32 } else { 1.0 };
                     if m.alt {
-                        self.brush_color[3] =
-                            (self.brush_color[3] + d * 0.1).clamp(0.0, 1.0);
+                        self.brush.color[3] =
+                            (self.brush.color[3] + d * 0.1).clamp(0.0, 1.0);
                     } else if m.shift {
-                        self.brush_soft = (self.brush_soft + d * 0.1).clamp(0.0, 1.0);
+                        self.brush.soft = (self.brush.soft + d * 0.1).clamp(0.0, 1.0);
                     } else {
-                        self.brush_radius = (self.brush_radius
+                        self.brush.radius = (self.brush.radius
                             * if down { 0.8 } else { 1.25 })
                         .clamp(1.0, 500.0);
                     }
@@ -25540,7 +25516,7 @@ impl Gfx {
                         let live = pen::pressure();
                         brushes::curve_plot(
                             ui,
-                            &self.brush_press,
+                            &self.brush.press,
                             live,
                             egui::vec2(ui.available_width().min(220.0), 90.0),
                         );
@@ -25661,16 +25637,16 @@ impl Gfx {
                         ui.horizontal_wrapped(|ui| {
                             for m in BrushMode::ALL {
                                 if ui
-                                    .selectable_label(self.brush_mode == m, m.name())
+                                    .selectable_label(self.brush.mode == m, m.name())
                                     .clicked()
                                 {
-                                    self.brush_mode = m;
+                                    self.brush.mode = m;
                                 }
                             }
                         });
                         ui.horizontal(|ui| {
                             ui.label("brush");
-                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush_radius).update_while_editing(false)
+                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush.radius).update_while_editing(false)
                                     .speed(widgets::rated(ui, 0.5))
                                     .range(1.0..=500.0)
                                     .max_decimals(1)
@@ -25678,15 +25654,15 @@ impl Gfx {
                             )
                             .on_hover_text("[ and ] resize · hold F and move");
                             ui.add(
-                                egui::Slider::new(&mut self.brush_soft, 0.0..=1.0)
+                                egui::Slider::new(&mut self.brush.soft, 0.0..=1.0)
                                     .text("soft"),
                             )
                             .on_hover_text("shift-[ / shift-] · hold F and move up/down");
-                            if self.brush_mode == BrushMode::Color {
+                            if self.brush.mode == BrushMode::Color {
                                 colorpicker::button(
                                     ui,
                                     "paint-brush",
-                                    &mut self.brush_color,
+                                    &mut self.brush.color,
                                     pick_spec(working, true),
                                 );
                             }
@@ -25701,17 +25677,17 @@ impl Gfx {
                             ui.spacing_mut().slider_width =
                                 (ui.available_width() - 66.0).max(40.0);
                             ui.add(egui::Slider::new(
-                                &mut self.brush_color[3],
+                                &mut self.brush.color[3],
                                 0.0..=1.0,
                             ))
                             .on_hover_text("alt-[ / alt-] · hold shift+F and move");
                         });
                         // The mode's second knob, labelled with what it is.
-                        if let Some(label) = self.brush_mode.strength_label() {
-                            let (v, range, speed): (&mut f32, _, f32) = match self.brush_mode {
-                                BrushMode::Blur => (&mut self.brush_blur_px, 0.5..=200.0, 0.25),
-                                BrushMode::Smear => (&mut self.brush_smear_px, 0.0..=400.0, 0.5),
-                                _ => (&mut self.brush_stops, 0.0..=4.0, 0.01),
+                        if let Some(label) = self.brush.mode.strength_label() {
+                            let (v, range, speed): (&mut f32, _, f32) = match self.brush.mode {
+                                BrushMode::Blur => (&mut self.brush.blur_px, 0.5..=200.0, 0.25),
+                                BrushMode::Smear => (&mut self.brush.smear_px, 0.0..=400.0, 0.5),
+                                _ => (&mut self.brush.stops, 0.0..=4.0, 0.01),
                             };
                             ui.horizontal(|ui| {
                                 ui.add_sized(
@@ -25731,14 +25707,14 @@ impl Gfx {
                                 [50.0, 16.0],
                                 egui::Label::new(egui::RichText::new("shape").small()),
                             );
-                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush_aspect).update_while_editing(false)
+                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush.aspect).update_while_editing(false)
                                     .speed(widgets::rated(ui, 0.005))
                                     .range(0.05..=1.0)
                                     .max_decimals(2)
                                     .prefix("aspect "),
                             )
                             .on_hover_text("minor / major axis · hold ctrl+F and move");
-                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush_angle).update_while_editing(false)
+                            crate::widgets::num_field_w(ui, widgets::NUM_W + 10.0, egui::DragValue::new(&mut self.brush.angle).update_while_editing(false)
                                     .speed(widgets::rated(ui, 0.5))
                                     .range(-180.0..=180.0)
                                     .max_decimals(1)
@@ -25746,20 +25722,20 @@ impl Gfx {
                             )
                             .on_hover_text("hold shift+F and move up/down");
                         });
-                        if self.brush_mode == BrushMode::Clone {
+                        if self.brush.mode == BrushMode::Clone {
                             ui.horizontal(|ui| {
-                                match self.brush_clone_off {
+                                match self.brush.clone_off {
                                     Some(o) => {
                                         ui.monospace(format!(
                                             "offset {:+.3}, {:+.3}",
                                             o[0], o[1]
                                         ));
                                         if ui.button("re-anchor").clicked() {
-                                            self.brush_clone_src = None;
-                                            self.brush_clone_off = None;
+                                            self.brush.clone_src = None;
+                                            self.brush.clone_off = None;
                                         }
                                     }
-                                    None if self.brush_clone_src.is_some() => {
+                                    None if self.brush.clone_src.is_some() => {
                                         ui.weak("source set — paint to fix the offset");
                                     }
                                     None => {
@@ -25829,8 +25805,8 @@ impl Gfx {
                         ui.vertical(|ui| {
                         if tab == "pen" {
                         for (label, v, tip) in [
-                            ("size", &mut self.brush_press.size, "how far a light touch thins the brush"),
-                            ("opacity", &mut self.brush_press.opacity, "how far a light touch fades it (flow)"),
+                            ("size", &mut self.brush.press.size, "how far a light touch thins the brush"),
+                            ("opacity", &mut self.brush.press.opacity, "how far a light touch fades it (flow)"),
                         ] {
                             ui.horizontal(|ui| {
                                 ui.add_sized([50.0, 16.0], egui::Label::new(egui::RichText::new(label).small()));
@@ -25843,7 +25819,7 @@ impl Gfx {
                             crate::widgets::num_field_w(
                                 ui,
                                 widgets::NUM_W + 10.0,
-                                egui::DragValue::new(&mut self.brush_press.gamma).update_while_editing(false)
+                                egui::DragValue::new(&mut self.brush.press.gamma).update_while_editing(false)
                                     .speed(widgets::rated(ui, 0.01))
                                     .range(0.2..=5.0)
                                     .max_decimals(2),
@@ -25851,7 +25827,7 @@ impl Gfx {
                             .on_hover_text("above 1 the light end is gentler; below 1 a light touch lands hard");
                         });
                         if ui.small_button("off").on_hover_text("pressure does nothing").clicked() {
-                            self.brush_press = engine::graph::PressureMap::OFF;
+                            self.brush.press = engine::graph::PressureMap::OFF;
                         }
                         } else if tab != "strokes" {
                         // BLEND: how a colour stroke lands. Ordered with the
@@ -25859,11 +25835,11 @@ impl Gfx {
                         // one memoized layer; anything but normal and erase
                         // adds one texture read.
                         ui.label(egui::RichText::new("blend").small());
-                        ui.add_enabled_ui(self.brush_mode == BrushMode::Color, |ui| {
+                        ui.add_enabled_ui(self.brush.mode == BrushMode::Color, |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 for b in PaintBlend::ALL {
-                                    if ui.selectable_label(self.brush_blend == b, b.name()).clicked() {
-                                        self.brush_blend = b;
+                                    if ui.selectable_label(self.brush.blend == b, b.name()).clicked() {
+                                        self.brush.blend = b;
                                     }
                                 }
                             });
@@ -25875,41 +25851,41 @@ impl Gfx {
                         ui.label(egui::RichText::new("brushes").small());
                         let now = brushes::BrushPreset {
                             name: String::new(),
-                            mode: self.brush_mode,
-                            radius: self.brush_radius,
-                            soft: self.brush_soft,
-                            opacity: self.brush_color[3],
-                            aspect: self.brush_aspect,
-                            angle: self.brush_angle,
-                            strength: self.brush_mode.strength_label().map(|_| match self.brush_mode {
-                                BrushMode::Blur => self.brush_blur_px,
-                                BrushMode::Smear => self.brush_smear_px,
-                                _ => self.brush_stops,
+                            mode: self.brush.mode,
+                            radius: self.brush.radius,
+                            soft: self.brush.soft,
+                            opacity: self.brush.color[3],
+                            aspect: self.brush.aspect,
+                            angle: self.brush.angle,
+                            strength: self.brush.mode.strength_label().map(|_| match self.brush.mode {
+                                BrushMode::Blur => self.brush.blur_px,
+                                BrushMode::Smear => self.brush.smear_px,
+                                _ => self.brush.stops,
                             }),
-                            blend: self.brush_blend,
-                            press: self.brush_press,
+                            blend: self.brush.blend,
+                            press: self.brush.press,
                         };
                         let current = self
-                            .brush_presets
+                            .brush.presets
                             .iter()
                             .position(|b| brushes::BrushPreset { name: String::new(), ..b.clone() } == now);
-                        if let Some(act) = brushes::row(ui, &self.brush_presets, current) {
+                        if let Some(act) = brushes::row(ui, &self.brush.presets, current) {
                             match act {
                                 brushes::RowAct::Use(i) => {
-                                    let b = self.brush_presets[i].clone();
-                                    self.brush_mode = b.mode;
-                                    self.brush_radius = b.radius;
-                                    self.brush_soft = b.soft;
-                                    self.brush_color[3] = b.opacity;
-                                    self.brush_aspect = b.aspect;
-                                    self.brush_angle = b.angle;
-                                    self.brush_blend = b.blend;
-                                    self.brush_press = b.press;
+                                    let b = self.brush.presets[i].clone();
+                                    self.brush.mode = b.mode;
+                                    self.brush.radius = b.radius;
+                                    self.brush.soft = b.soft;
+                                    self.brush.color[3] = b.opacity;
+                                    self.brush.aspect = b.aspect;
+                                    self.brush.angle = b.angle;
+                                    self.brush.blend = b.blend;
+                                    self.brush.press = b.press;
                                     if let Some(v) = b.strength {
                                         match b.mode {
-                                            BrushMode::Blur => self.brush_blur_px = v,
-                                            BrushMode::Smear => self.brush_smear_px = v,
-                                            BrushMode::Dodge | BrushMode::Burn => self.brush_stops = v,
+                                            BrushMode::Blur => self.brush.blur_px = v,
+                                            BrushMode::Smear => self.brush.smear_px = v,
+                                            BrushMode::Dodge | BrushMode::Burn => self.brush.stops = v,
                                             _ => {}
                                         }
                                     }
@@ -25917,18 +25893,18 @@ impl Gfx {
                                 act => {
                                     match act {
                                         brushes::RowAct::Replace(i) => {
-                                            let name = self.brush_presets[i].name.clone();
-                                            self.brush_presets[i] = brushes::BrushPreset { name, ..now };
+                                            let name = self.brush.presets[i].name.clone();
+                                            self.brush.presets[i] = brushes::BrushPreset { name, ..now };
                                         }
                                         brushes::RowAct::Remove(i) => {
-                                            self.brush_presets.remove(i);
+                                            self.brush.presets.remove(i);
                                         }
                                         _ => {
-                                            let name = brushes::fresh_name(&self.brush_presets, now.mode);
-                                            self.brush_presets.push(brushes::BrushPreset { name, ..now });
+                                            let name = brushes::fresh_name(&self.brush.presets, now.mode);
+                                            self.brush.presets.push(brushes::BrushPreset { name, ..now });
                                         }
                                     }
-                                    self.prefs.brush_presets = Some(self.brush_presets.clone());
+                                    self.prefs.brush_presets = Some(self.brush.presets.clone());
                                     save_prefs(&self.prefs);
                                 }
                             }
