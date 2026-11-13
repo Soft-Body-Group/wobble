@@ -96,6 +96,7 @@ pub mod tracker;
 pub mod keyer;
 pub mod sdfnode;
 pub mod rangeremap;
+pub mod timerange;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
