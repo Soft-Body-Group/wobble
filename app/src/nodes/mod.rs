@@ -111,6 +111,7 @@ pub mod grade;
 pub mod spline;
 pub mod write;
 pub mod geonode;
+pub mod paint;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
