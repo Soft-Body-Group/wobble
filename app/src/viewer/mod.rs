@@ -5,3 +5,4 @@ mod keyerhud;
 mod sammie;
 mod textpath;
 mod camtrack;
+mod planar;
