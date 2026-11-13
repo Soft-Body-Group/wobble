@@ -25,6 +25,7 @@ mod paint;
 mod patchlive;
 mod picker;
 mod plugin;
+mod precache;
 mod proxy;
 mod range;
 mod record;
