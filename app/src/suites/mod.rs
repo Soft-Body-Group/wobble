@@ -57,6 +57,7 @@ mod scrubperf;
 mod shader;
 mod shot;
 mod slice;
+mod spline;
 mod still;
 mod subwob;
 mod tab;
