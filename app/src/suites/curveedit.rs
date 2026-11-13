@@ -58,14 +58,14 @@ impl Gfx {
                 return;
             }
             // Shift-click in an empty part of the canvas: a third point.
-            1 if frames > 8 && self.curve_rect.is_some() => {
-                let r = self.curve_rect.unwrap();
+            1 if frames > 8 && self.curve.rect.is_some() => {
+                let r = self.curve.rect.unwrap();
                 let p = egui::pos2(r.center().x, r.min.y + r.height() * 0.25);
                 press(raw, p, true, shift);
                 next = 2;
             }
             2 if frames > 2 => {
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 let p = egui::pos2(r.center().x, r.min.y + r.height() * 0.25);
                 press(raw, p, false, shift);
                 next = 3;
@@ -77,55 +77,55 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 // Marquee the whole canvas: every point selected.
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 press(raw, r.min + egui::vec2(2.0, 2.0), true, Default::default());
                 next = 4;
             }
             4 if frames > 2 => {
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 mv(raw, r.center());
                 next = 41;
             }
             41 if frames > 2 => {
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 mv(raw, r.max - egui::vec2(2.0, 2.0));
                 next = 5;
             }
             5 if frames > 2 => {
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 press(raw, r.max - egui::vec2(2.0, 2.0), false, Default::default());
                 self.test.curveedit = Some((6, 0, cid));
                 // Remember the shape before the group drag.
-                self.curve_before = points(self);
+                self.curve.before = points(self);
                 return;
             }
             // Grab the middle point and pull UP: all three must ride along,
             // by the same amount.
             6 if frames > 2 => {
-                let before = self.curve_before.clone();
+                let before = self.curve.before.clone();
                 let _ = &before;
-                let p = self.curve_screen[1];
-                self.curve_grab = p;
+                let p = self.curve.screen[1];
+                self.curve.grab = p;
                 press(raw, p, true, Default::default());
                 next = 7;
             }
             7 if frames > 2 => {
                 // Two moves: egui needs one to call it a drag at all, and
                 // the second is the move the widget acts on.
-                mv(raw, self.curve_grab - egui::vec2(0.0, 8.0));
+                mv(raw, self.curve.grab - egui::vec2(0.0, 8.0));
                 next = 71;
             }
             71 if frames > 2 => {
-                mv(raw, self.curve_grab - egui::vec2(0.0, 24.0));
+                mv(raw, self.curve.grab - egui::vec2(0.0, 24.0));
                 next = 8;
             }
             8 if frames > 2 => {
-                let p = self.curve_grab - egui::vec2(0.0, 24.0);
+                let p = self.curve.grab - egui::vec2(0.0, 24.0);
                 press(raw, p, false, Default::default());
                 next = 9;
             }
             9 if frames > 4 => {
-                let before = self.curve_before.clone();
+                let before = self.curve.before.clone();
                 let after = points(self);
                 let lifts: Vec<f32> = before
                     .iter()
@@ -152,24 +152,24 @@ impl Gfx {
                 println!("CURVEEDIT TEST: 3 points selected and lifted together (+{:.3})", lifts[1]);
                 // Clear the selection so the alt-click below takes one point,
                 // not the set.
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 press(raw, egui::pos2(r.min.x + 3.0, r.max.y - 3.0), true, Default::default());
                 next = 10;
             }
             10 if frames > 2 => {
-                let r = self.curve_rect.unwrap();
+                let r = self.curve.rect.unwrap();
                 press(raw, egui::pos2(r.min.x + 3.0, r.max.y - 3.0), false, Default::default());
                 next = 11;
             }
             // Alt-click the middle point away.
             11 if frames > 2 => {
-                let p = self.curve_screen[1];
-                self.curve_grab = p;
+                let p = self.curve.screen[1];
+                self.curve.grab = p;
                 press(raw, p, true, alt);
                 next = 12;
             }
             12 if frames > 2 => {
-                press(raw, self.curve_grab, false, alt);
+                press(raw, self.curve.grab, false, alt);
                 next = 13;
             }
             13 if frames > 4 => {

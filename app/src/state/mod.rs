@@ -20,3 +20,5 @@ mod hud;
 pub(crate) use hud::HudState;
 mod cache;
 pub(crate) use cache::CacheUiState;
+mod curve;
+pub(crate) use curve::CurveEditState;

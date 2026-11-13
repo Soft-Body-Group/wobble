@@ -6073,13 +6073,7 @@ struct Gfx {
     group_panel_shown: bool,
     /// --test-mblur: the tick the gain triangle peaks on.
     mblur_peak: u64,
-    /// --test-curveedit: the curve canvas rect, and the shape before a drag.
-    curve_rect: Option<egui::Rect>,
-    /// Screen position of each curve point, as the widget drew them.
-    curve_screen: Vec<egui::Pos2>,
-    curve_before: Vec<[f32; 2]>,
-    /// Where the driver grabbed a point, so the move and release match it.
-    curve_grab: egui::Pos2,
+    curve: state::CurveEditState,
     edit_browse_dir: Option<std::path::PathBuf>,
     /// How many times the playback rig has been (re)built — a diagnostic the
     /// harp suite gates on: a rig rebuilt during steady playback throws the
@@ -8118,10 +8112,12 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         path_drag: None,
         group_panel_shown: false,
         mblur_peak: 0,
-        curve_rect: None,
-        curve_screen: Vec::new(),
-        curve_before: Vec::new(),
-        curve_grab: egui::Pos2::ZERO,
+        curve: state::CurveEditState {
+            rect: None,
+            screen: Vec::new(),
+            before: Vec::new(),
+            grab: egui::Pos2::ZERO,
+        },
         edit_browse_dir: opts.edit_browse.clone(),
         rig_builds: 0,
         want_windows: HashMap::new(),
@@ -26278,10 +26274,10 @@ impl Gfx {
             }
         }
         if let Some((r, screen)) = curve_rect_out {
-            self.curve_rect = Some(r);
-            self.curve_screen = screen;
+            self.curve.rect = Some(r);
+            self.curve.screen = screen;
         } else {
-            self.curve_rect = None;
+            self.curve.rect = None;
         }
         if hud_drag_out.is_some() {
             self.hud.drag = hud_drag_out;
