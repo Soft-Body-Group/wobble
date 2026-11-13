@@ -27,3 +27,4 @@ mod cryptopick;
 mod eyedroppick;
 mod focuspick;
 mod keyersample;
+mod paintcapture;
