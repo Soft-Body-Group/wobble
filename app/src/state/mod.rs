@@ -14,3 +14,5 @@ mod prop;
 pub(crate) use prop::PropState;
 mod patch;
 pub(crate) use patch::PatchState;
+mod layer;
+pub(crate) use layer::LayerUiState;

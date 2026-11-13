@@ -5590,8 +5590,7 @@ struct Gfx {
     geo: state::GeoUiState,
     /// A Physics bake in flight.
     physics_job: Option<PhysicsJob>,
-    /// Each Layer node's wired inputs last frame, for closing up gaps.
-    layer_wired_prev: std::collections::HashMap<u64, Vec<bool>>,
+    layer: state::LayerUiState,
     /// Sequence-aware browser (one at a time, targeting one Read node).
     browser: Option<browser::SeqBrowser>,
     pinned_dirs: Vec<std::path::PathBuf>,
@@ -6013,11 +6012,6 @@ struct Gfx {
     testing: bool,
     /// Nodes whose viewer manipulators are pinned (alt-click in the graph).
     gizmo_pinned: Vec<u64>,
-    /// Which layer of each Layer stack is selected: the one the viewer gives
-    /// a manipulator and the one the panel's controls edit. Per node, so
-    /// moving between two stacks doesn't lose your place. UI state, like
-    /// `prop_order` — it is not authored data and never reaches a setup.
-    layer_sel: layerui::LayerSel,
     /// Floating on-viewer sliders (ctrl-drag a row out of the panel).
     huds: Vec<widgets::HudSlider>,
     /// A HUD spawn in flight (following the cursor until release).
@@ -6141,21 +6135,6 @@ struct Gfx {
     /// stable across rebuilds) so its first pump does not decode the whole
     /// graph; a slot this has never seen starts active, never starved.
     inactive_slots: std::collections::HashSet<usize>,
-    /// --test-layer: a screen point captured on the frame the gesture that
-    /// uses it was planned, so a settling panel cannot move it mid-drag.
-    layer_grab: egui::Pos2,
-    /// The layer stack popped out into its own resizable window, if any.
-    /// UI state like `prop_order` — never authored, never saved.
-    layer_popout: Option<u64>,
-    /// Where the layer timeline's bars landed last frame, one per layer.
-    layer_bars: Vec<egui::Rect>,
-    /// --test-layer: the start the slid layer reached, and the wire it
-    /// arrived on — both checked again after the restack.
-    layer_slid: i64,
-    layer_wire1: u64,
-    layer_speed: f32,
-    /// `--test-layer`: reader slots one plate on two layers landed on.
-    layer_slots: usize,
     /// Where the popped-out layer window laid out last frame (--test-layer).
     last_layer_window: Option<egui::Rect>,
     /// --test-click hud-off phase: translate.x before the inert drag.
@@ -7657,7 +7636,17 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             click_tries: 0,
         },
         physics_job: None,
-        layer_wired_prev: Default::default(),
+        layer: state::LayerUiState {
+            wired_prev: Default::default(),
+            sel: Default::default(),
+            grab: egui::Pos2::ZERO,
+            popout: None,
+            bars: Vec::new(),
+            slid: 0,
+            wire1: 0,
+            speed: 1.0,
+            slots: 0,
+        },
         browser: None,
         current_setup: None,
         setup_error: None,
@@ -8119,7 +8108,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         last_viewer_center: None,
         testing: opts.headless(),
         gizmo_pinned: Vec::new(),
-        layer_sel: Default::default(),
         huds: Vec::new(),
         hud_drag: None,
         shader_editors: Default::default(),
@@ -8171,13 +8159,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         bake_mask: Vec::new(),
         precache: None,
         inactive_slots: Default::default(),
-        layer_grab: egui::Pos2::ZERO,
-        layer_popout: None,
-        layer_bars: Vec::new(),
-        layer_slid: 0,
-        layer_wire1: 0,
-        layer_speed: 1.0,
-        layer_slots: 0,
         last_layer_window: None,
         hud_off_tx0: 0.0,
         last_panel_w: 0.0,
@@ -16044,7 +16025,7 @@ impl Gfx {
         // window you can size. Everything it asks for is applied right here
         // — it is outside the properties strip, so it has no deferred pass
         // to ride along with.
-        if let Some(id) = self.layer_popout {
+        if let Some(id) = self.layer.popout {
             let meta = match self.egraph.nodes.get(&id).map(|n| &n.kind) {
                 Some(NodeKind::Layer(p)) => {
                     let comp = self.shot_span();
@@ -16071,14 +16052,14 @@ impl Gfx {
                 .get(&id)
                 .map(|n| editor::node_label(&n.kind))
                 .unwrap_or_default();
-            let sel = self.layer_sel.get(&id).copied().unwrap_or(0);
+            let sel = self.layer.sel.get(&id).copied().unwrap_or(0);
             let default_canvas = self.comp.output_size().unwrap_or((1920, 1080));
             let global_fmt = self.script_format();
             let cur_t = self.eval_tick();
             let script = self.script_range();
             let inout = self.play_range.map(|(a, b)| (a as i64, b as i64));
             match meta {
-                None => self.layer_popout = None,
+                None => self.layer.popout = None,
                 Some((comp, names, lens)) => {
                     let ranges = minibar::Ranges {
                         comp: (script.0 as i64, script.1 as i64),
@@ -16120,7 +16101,7 @@ impl Gfx {
                         ctx.memory(|m| m.area_rect(egui::Id::new(("layer-window", id))));
                     if let Some((o, open)) = result {
                         if !open {
-                            self.layer_popout = None;
+                            self.layer.popout = None;
                         }
                         if o.changed {
                             layerui::prune_outputs(&mut self.egraph, id);
@@ -16129,7 +16110,7 @@ impl Gfx {
                         }
                         if o.add {
                             layerui::restack(&mut self.egraph, id, None);
-                            self.layer_sel.insert(id, 0);
+                            self.layer.sel.insert(id, 0);
                             self.release_render_cache();
                         }
                         if let Some(k) = o.del {
@@ -16138,12 +16119,12 @@ impl Gfx {
                                 Some(NodeKind::Layer(p)) => p.layers.len(),
                                 _ => 0,
                             };
-                            self.layer_sel.insert(id, k.min(n.saturating_sub(1)));
+                            self.layer.sel.insert(id, k.min(n.saturating_sub(1)));
                             self.release_render_cache();
                         }
                         match o.action {
                             Some(layerui::TimelineAction::Select(i)) => {
-                                self.layer_sel.insert(id, i);
+                                self.layer.sel.insert(id, i);
                             }
                             Some(layerui::TimelineAction::Seek(f)) => self.seek_to(f),
                             None => {}
@@ -21265,7 +21246,7 @@ impl Gfx {
         for id in ids {
             let n = self.egraph.node(id).map_or(0, |n| n.kind.input_count());
             let wired: Vec<bool> = (0..n).map(|i| self.egraph.input_of(id, i).is_some()).collect();
-            if let Some(prev) = self.layer_wired_prev.get(&id) {
+            if let Some(prev) = self.layer.wired_prev.get(&id) {
                 let count = |v: &[bool]| v.iter().filter(|w| **w).count();
                 if prev.len() == wired.len() && count(&wired) + 1 == count(prev) && wired.len() > 1 {
                     if let Some(k) = (0..wired.len()).find(|i| prev[*i] && !wired[*i]) {
@@ -21277,7 +21258,7 @@ impl Gfx {
             }
             seen.insert(id, wired);
         }
-        self.layer_wired_prev = seen;
+        self.layer.wired_prev = seen;
     }
 
     /// Inside a 2dini: every Merge packs its wires to the front and keeps
@@ -23441,10 +23422,10 @@ impl Gfx {
         self.prop.order
             .iter()
             .copied()
-            .chain(self.layer_popout)
+            .chain(self.layer.popout)
             .filter_map(|id| match self.egraph.nodes.get(&id).map(|n| &n.kind) {
                 Some(NodeKind::Layer(p)) if !p.layers.is_empty() => {
-                    let sel = self.layer_sel.get(&id).copied().unwrap_or(0);
+                    let sel = self.layer.sel.get(&id).copied().unwrap_or(0);
                     Some((id, sel.min(p.layers.len() - 1)))
                 }
                 _ => None,
@@ -24469,7 +24450,7 @@ impl Gfx {
                         }
                         _ => None,
                     };
-                let layer_sel_now = self.layer_sel.get(&node).copied().unwrap_or(0);
+                let layer_sel_now = self.layer.sel.get(&node).copied().unwrap_or(0);
                 // The node's own format, read BEFORE the &mut borrow below —
                 // the Spline's transform bakes in pixel space and cannot ask
                 // for it once the node is borrowed.
@@ -25984,7 +25965,7 @@ impl Gfx {
                     layerui::restack(&mut self.egraph, node, None);
                     // The new layer is the top one, and it is what you want
                     // to be pointing at.
-                    self.layer_sel.insert(node, 0);
+                    self.layer.sel.insert(node, 0);
                     self.release_render_cache();
                 }
                 if let Some((before, after)) = gw_replace {
@@ -26027,18 +26008,18 @@ impl Gfx {
                         Some(NodeKind::Layer(p)) => p.layers.len(),
                         _ => 0,
                     };
-                    self.layer_sel.insert(node, k.min(n.saturating_sub(1)));
+                    self.layer.sel.insert(node, k.min(n.saturating_sub(1)));
                     self.release_render_cache();
                 }
                 if let Some(b) = layer_bars {
-                    self.layer_bars = b;
+                    self.layer.bars = b;
                 }
                 if layer_popout {
-                    self.layer_popout = Some(node);
+                    self.layer.popout = Some(node);
                 }
                 match layer_act {
                     Some(layerui::TimelineAction::Select(i)) => {
-                        self.layer_sel.insert(node, i);
+                        self.layer.sel.insert(node, i);
                     }
                     Some(layerui::TimelineAction::Seek(f)) => self.seek_to(f),
                     None => {}

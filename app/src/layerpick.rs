@@ -268,7 +268,7 @@ impl crate::Gfx {
         match owner(&self.egraph, c) {
             Pick::Node(id) => self.reveal_node(id, reveal),
             Pick::Layer(stack, i) => {
-                self.layer_sel.insert(stack, i);
+                self.layer.sel.insert(stack, i);
                 self.reveal_node(stack, reveal);
             }
         }
@@ -437,8 +437,8 @@ impl crate::Gfx {
                 }
                 match clicks.get(k) {
                     Some(&(at, m)) => {
-                        self.layer_grab = screen(self, at);
-                        click(raw, self.layer_grab, m, true);
+                        self.layer.grab = screen(self, at);
+                        click(raw, self.layer.grab, m, true);
                         next = stage + 1;
                     }
                     None => {
@@ -454,7 +454,7 @@ impl crate::Gfx {
             }
             2 | 4 | 6 | 8 if frames > 2 => {
                 let (_, m) = clicks[(stage as usize - 2) / 2];
-                click(raw, self.layer_grab, m, false);
+                click(raw, self.layer.grab, m, false);
                 next = stage + 1;
             }
             _ => {}

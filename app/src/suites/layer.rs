@@ -56,23 +56,23 @@ impl Gfx {
             }
             // Slide layer 2's bar to the right: its START moves with it, and
             // nothing else about the stack does.
-            1 if frames > 20 && self.layer_bars.len() == 2 && self.layout_settled() => {
-                self.layer_grab = self.layer_bars[1].center();
-                press(raw, self.layer_grab, true);
+            1 if frames > 20 && self.layer.bars.len() == 2 && self.layout_settled() => {
+                self.layer.grab = self.layer.bars[1].center();
+                press(raw, self.layer.grab, true);
                 next = 2;
             }
             2 if frames > 2 => {
                 // Two moves: egui needs one to call it a drag at all, and the
                 // second is the one the widget acts on.
-                mv(raw, self.layer_grab + egui::vec2(20.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(20.0, 0.0));
                 next = 3;
             }
             3 if frames > 2 => {
-                mv(raw, self.layer_grab + egui::vec2(60.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(60.0, 0.0));
                 next = 4;
             }
             4 if frames > 2 => {
-                press(raw, self.layer_grab + egui::vec2(60.0, 0.0), false);
+                press(raw, self.layer.grab + egui::vec2(60.0, 0.0), false);
                 next = 5;
             }
             5 if frames > 4 => {
@@ -88,27 +88,27 @@ impl Gfx {
                     println!("LAYER TEST FAIL: the other layer moved too ({})", l[0].start);
                     std::process::exit(1);
                 }
-                self.layer_slid = l[1].start;
+                self.layer.slid = l[1].start;
                 // ALT-drag layer 1's right end: a STRETCH (AE's ctrl+alt) —
                 // the footage still plays whole, it just takes longer.
                 // Alt goes down before the press and stays down (egui's
                 // modifiers are sticky) until the release has landed.
-                self.layer_grab =
-                    egui::pos2(self.layer_bars[0].max.x - 2.0, self.layer_bars[0].center().y);
+                self.layer.grab =
+                    egui::pos2(self.layer.bars[0].max.x - 2.0, self.layer.bars[0].center().y);
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers { alt: true, ..Default::default() }));
-                press(raw, self.layer_grab, true);
+                press(raw, self.layer.grab, true);
                 next = 51;
             }
             51 if frames > 2 => {
-                mv(raw, self.layer_grab + egui::vec2(20.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(20.0, 0.0));
                 next = 52;
             }
             52 if frames > 2 => {
-                mv(raw, self.layer_grab + egui::vec2(90.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(90.0, 0.0));
                 next = 53;
             }
             53 if frames > 2 => {
-                press(raw, self.layer_grab + egui::vec2(90.0, 0.0), false);
+                press(raw, self.layer.grab + egui::vec2(90.0, 0.0), false);
                 next = 54;
             }
             54 if frames > 4 => {
@@ -126,30 +126,30 @@ impl Gfx {
                     println!("LAYER TEST FAIL: a stretch trimmed the layer instead");
                     std::process::exit(1);
                 }
-                self.layer_speed = l[0].speed;
+                self.layer.speed = l[0].speed;
                 // A plain drag on layer 2's LEFT end TRIMS (AE): the in
                 // point moves, the footage and its rate stay put.
-                self.layer_grab =
-                    egui::pos2(self.layer_bars[1].min.x + 2.0, self.layer_bars[1].center().y);
-                press(raw, self.layer_grab, true);
+                self.layer.grab =
+                    egui::pos2(self.layer.bars[1].min.x + 2.0, self.layer.bars[1].center().y);
+                press(raw, self.layer.grab, true);
                 next = 55;
             }
             55 if frames > 2 => {
-                mv(raw, self.layer_grab + egui::vec2(10.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(10.0, 0.0));
                 next = 56;
             }
             56 if frames > 2 => {
-                mv(raw, self.layer_grab + egui::vec2(40.0, 0.0));
+                mv(raw, self.layer.grab + egui::vec2(40.0, 0.0));
                 next = 57;
             }
             57 if frames > 2 => {
-                press(raw, self.layer_grab + egui::vec2(40.0, 0.0), false);
+                press(raw, self.layer.grab + egui::vec2(40.0, 0.0), false);
                 next = 58;
             }
             58 if frames > 4 => {
                 let l = layers(self);
                 match l[1].trim {
-                    Some((a, _)) if a > self.layer_slid => {}
+                    Some((a, _)) if a > self.layer.slid => {}
                     t => {
                         println!(
                             "LAYER TEST FAIL: dragging an end did not trim the in point \
@@ -159,7 +159,7 @@ impl Gfx {
                         std::process::exit(1);
                     }
                 }
-                if l[1].start != self.layer_slid || (l[1].speed - 1.0).abs() > 1e-6 {
+                if l[1].start != self.layer.slid || (l[1].speed - 1.0).abs() > 1e-6 {
                     println!(
                         "LAYER TEST FAIL: a trim moved the footage (start {} speed {})",
                         l[1].start, l[1].speed
@@ -216,52 +216,52 @@ impl Gfx {
                 }
                 // A vertical drag must NOT restack (bars move left and right only):
                 // drag layer 1's bar DOWN past layer 2's centre.
-                self.layer_grab = self.layer_bars[0].center();
-                press(raw, self.layer_grab, true);
+                self.layer.grab = self.layer.bars[0].center();
+                press(raw, self.layer.grab, true);
                 next = 6;
             }
             6 if frames > 2 => {
-                let d = self.layer_bars[1].center().y - self.layer_grab.y;
-                mv(raw, self.layer_grab + egui::vec2(0.0, d * 0.5));
+                let d = self.layer.bars[1].center().y - self.layer.grab.y;
+                mv(raw, self.layer.grab + egui::vec2(0.0, d * 0.5));
                 next = 7;
             }
             7 if frames > 2 => {
-                let d = self.layer_bars[1].center().y - self.layer_grab.y;
-                mv(raw, self.layer_grab + egui::vec2(0.0, d));
+                let d = self.layer.bars[1].center().y - self.layer.grab.y;
+                mv(raw, self.layer.grab + egui::vec2(0.0, d));
                 next = 8;
             }
             8 if frames > 2 => {
-                press(raw, self.layer_grab, false);
+                press(raw, self.layer.grab, false);
                 next = 9;
             }
             9 if frames > 4 => {
                 let l = layers(self);
                 // The slid layer is still layer 2, on the wire it came in on.
-                if l[1].start != self.layer_slid || self.egraph.input_of(lid, 1) != Some(self.layer_wire1) {
+                if l[1].start != self.layer.slid || self.egraph.input_of(lid, 1) != Some(self.layer.wire1) {
                     println!(
                         "LAYER TEST FAIL: a vertical drag restacked the layers (layer 2 start {},                          wanted {}; input {:?}, wanted {:?})",
                         l[1].start,
-                        self.layer_slid,
+                        self.layer.slid,
                         self.egraph.input_of(lid, 1),
-                        Some(self.layer_wire1)
+                        Some(self.layer.wire1)
                     );
                     std::process::exit(1);
                 }
                 // Finally the OTHER way into a layer: ctrl-click ON the
                 // picture. Nothing upstream places these plates, so the
                 // viewer's pick lands on the topmost layer itself.
-                self.layer_sel.insert(lid, 1);
+                self.layer.sel.insert(lid, 1);
                 // Well inside the frame but away from the pivot (the image
                 // centre) and from every handle that orbits it.
-                self.layer_grab = self.image_rect.min
+                self.layer.grab = self.image_rect.min
                     + egui::vec2(
                         self.image_rect.width() * 0.2,
                         self.image_rect.height() * 0.2,
                     );
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers { ctrl: true, ..Default::default() }));
-                raw.events.push(egui::Event::PointerMoved(self.layer_grab));
+                raw.events.push(egui::Event::PointerMoved(self.layer.grab));
                 raw.events.push(egui::Event::PointerButton {
-                    pos: self.layer_grab,
+                    pos: self.layer.grab,
                     button: egui::PointerButton::Primary,
                     pressed: true,
                     modifiers: egui::Modifiers { ctrl: true, ..Default::default() },
@@ -271,7 +271,7 @@ impl Gfx {
             111 if frames > 2 => {
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers { ctrl: true, ..Default::default() }));
                 raw.events.push(egui::Event::PointerButton {
-                    pos: self.layer_grab,
+                    pos: self.layer.grab,
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     modifiers: egui::Modifiers { ctrl: true, ..Default::default() },
@@ -282,7 +282,7 @@ impl Gfx {
                 // Pop the stack out into its own window and check it really
                 // laid out — a window that draws nothing is the failure this
                 // catches, and it looks like nothing at all.
-                self.layer_popout = Some(lid);
+                self.layer.popout = Some(lid);
                 next = 113;
             }
             113 if frames > 12 => {
@@ -294,11 +294,11 @@ impl Gfx {
                     println!("LAYER TEST FAIL: the popped-out window came up empty");
                     std::process::exit(1);
                 }
-                self.layer_popout = None;
+                self.layer.popout = None;
                 next = 114;
             }
             114 if frames > 4 => {
-                let sel = self.layer_sel.get(&lid).copied().unwrap_or(9);
+                let sel = self.layer.sel.get(&lid).copied().unwrap_or(9);
                 if sel != 0 {
                     println!(
                         "LAYER TEST FAIL: ctrl-clicking the image picked layer {} , \
@@ -344,7 +344,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                self.layer_slots = slots.len();
+                self.layer.slots = slots.len();
                 // Then the per-layer outputs: view layer 1's own output,
                 // with a smaller picture on its wire than the stack's canvas.
                 let small = self.egraph.add(
@@ -419,11 +419,11 @@ impl Gfx {
                          {:.0}x{:.0}, one plate on two layers decoded into {} reader slots, \
                          and layer 1's own output viewed it alone on its own timebase at \
                          its own 640x360 format",
-                        self.layer_slid,
-                        self.layer_speed,
+                        self.layer.slid,
+                        self.layer.speed,
                         self.last_layer_window.map(|r| r.width()).unwrap_or(0.0),
                         self.last_layer_window.map(|r| r.height()).unwrap_or(0.0),
-                        self.layer_slots
+                        self.layer.slots
                     );
                     std::process::exit(0);
                 }
@@ -439,7 +439,7 @@ impl Gfx {
         }
         // The wire the slid layer arrived on, captured before the restack.
         if stage == 5 {
-            self.layer_wire1 = self.egraph.input_of(lid, 1).unwrap_or(0);
+            self.layer.wire1 = self.egraph.input_of(lid, 1).unwrap_or(0);
         }
         self.test.layer = Some((next, if next == stage { frames } else { 0 }, lid));
     }
