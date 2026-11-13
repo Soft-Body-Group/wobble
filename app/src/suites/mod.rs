@@ -24,6 +24,7 @@ mod inout;
 mod keyer;
 mod keymap;
 mod layer;
+mod mblur;
 mod nodepack;
 mod paint;
 mod panelw;
