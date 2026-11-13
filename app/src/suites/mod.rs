@@ -10,6 +10,7 @@ mod dual;
 mod eyedrop;
 mod frames;
 mod gizmokey;
+mod harp;
 mod inout;
 mod layer;
 mod paint;
