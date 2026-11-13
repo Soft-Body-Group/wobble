@@ -43,6 +43,7 @@ mod panelw;
 mod patchlive;
 mod picker;
 mod planar;
+mod play;
 mod plugin;
 mod precache;
 mod propspie;
