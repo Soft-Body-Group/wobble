@@ -5838,18 +5838,7 @@ struct Gfx {
     /// viewer bar's lock). See [`ViewLock`].
     view_lock: Option<ViewLock>,
     spline: state::SplineUiState,
-    /// The CornerPin whose pins are picked, and which of its four are.
-    /// One pin node owns the pick at a time, like `spline_sel_node`.
-    pin_sel: Option<(u64, [bool; 4])>,
-    /// CornerPins whose viewer handles edit the `from` quad rather than the
-    /// pin. Presentation only (a toggle in the panel), so not in the setup.
-    pin_from: std::collections::HashSet<u64>,
-    /// A pin gesture in flight, snapshotted at its press (see `PinGrab`).
-    pin_grab: Option<PinGrab>,
-    /// A background drag banding pins, in screen points.
-    pin_marquee: Option<egui::Rect>,
-    /// Where the pin box's rotate knob was drawn last (for the suite).
-    pin_knob: Option<egui::Pos2>,
+    pin: state::PinState,
     brush: state::BrushState,
     /// A GraphBake the Paint panel just inserted, and how many redraws to
     /// wait before starting it — the rig has to rebuild around the new
@@ -8070,11 +8059,13 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             sel_shape: 0,
             marquee: None,
         },
-        pin_sel: None,
-        pin_from: Default::default(),
-        pin_grab: None,
-        pin_marquee: None,
-        pin_knob: None,
+        pin: state::PinState {
+            sel: None,
+            from: Default::default(),
+            grab: None,
+            marquee: None,
+            knob: None,
+        },
         brush: state::BrushState {
             radius: 40.0,
             soft: 0.6,
@@ -18157,15 +18148,15 @@ impl Gfx {
             // moves the pick, two or more wear a box that scales and turns
             // them, and E / R / T held at a press scale, rotate or move the
             // pick about the press point.
-            if !selected.contains(&self.pin_sel.map_or(u64::MAX, |(n, _)| n)) {
-                self.pin_sel = selected
+            if !selected.contains(&self.pin.sel.map_or(u64::MAX, |(n, _)| n)) {
+                self.pin.sel = selected
                     .iter()
                     .copied()
                     .find(|n| matches!(self.egraph.node(*n).map(|n| &n.kind), Some(NodeKind::CornerPin(_))))
                     .map(|n| (n, [false; 4]));
             }
-            if self.pin_grab.as_ref().is_some_and(|g| !selected.contains(&g.node)) {
-                self.pin_grab = None;
+            if self.pin.grab.as_ref().is_some_and(|g| !selected.contains(&g.node)) {
+                self.pin.grab = None;
             }
             self.gizmo_corner_pin(
                 ui,
@@ -25959,7 +25950,7 @@ impl Gfx {
                                 cp,
                                 node,
                                 wired,
-                                &mut self.pin_from,
+                                &mut self.pin.from,
                                 &mut track_import_req,
                             ) {
                             hud_drag_out = Some(h);

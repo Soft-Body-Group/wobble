@@ -67,8 +67,8 @@ impl Gfx {
             3 => raw.events.push(egui::Event::PointerMoved(at(self, [0.9, 0.35]))),
             4 => click(raw, at(self, [0.9, 0.35]), false),
             5 => {
-                if self.pin_sel != Some((id, [true, true, false, false])) {
-                    fail(format!("the marquee picked {:?}", self.pin_sel));
+                if self.pin.sel != Some((id, [true, true, false, false])) {
+                    fail(format!("the marquee picked {:?}", self.pin.sel));
                 }
                 if cp(self).to != [[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]] {
                     fail("the marquee moved a pin".into());
@@ -105,14 +105,14 @@ impl Gfx {
                         fail(format!("stage {stage}: pin {k} at {p1:?}, wanted {want:?}"));
                     }
                 }
-                if self.pin_grab.is_some() {
+                if self.pin.grab.is_some() {
                     fail(format!("stage {stage}: the held-key edit outlived its release"));
                 }
             }
             // Arm `from`, give it a quad inside the frame, and drag its BR
             // corner: only `from` moves, and the pin grabbed becomes the pick.
             18 => {
-                self.pin_from.insert(id);
+                self.pin.from.insert(id);
                 if let Some(NodeKind::CornerPin(c)) = self.egraph.node_mut(id).map(|n| &mut n.kind) {
                     c.from = [[0.3, 0.3], [0.7, 0.3], [0.7, 0.7], [0.3, 0.7]];
                 }
@@ -134,8 +134,8 @@ impl Gfx {
                 if !near(at(self, c.from[2]), want) || c.from[0] != [0.3, 0.3] {
                     fail(format!("from is {:?}, wanted corner 2 at {want:?}", c.from));
                 }
-                if self.pin_sel != Some((id, [false, false, true, false])) {
-                    fail(format!("grabbing a pin outside the pick left the pick {:?}", self.pin_sel));
+                if self.pin.sel != Some((id, [false, false, true, false])) {
+                    fail(format!("grabbing a pin outside the pick left the pick {:?}", self.pin.sel));
                 }
             }
             // X held (the 0.1 rate): a 100px drag moves the pin 10px.
@@ -155,13 +155,13 @@ impl Gfx {
                     fail(format!("with X held a 100px drag put the pin at {got:?}, wanted {want:?}"));
                 }
                 // Back to editing the pin, three picked, a fresh quad.
-                self.pin_from.remove(&id);
+                self.pin.from.remove(&id);
                 if let Some(NodeKind::CornerPin(c)) = self.egraph.node_mut(id).map(|n| &mut n.kind) {
                     // The frame's own corners: the box's top edge IS the
                     // frame's, so a knob above it would be off the viewer.
                     *c = Default::default();
                 }
-                self.pin_sel = Some((id, [true, true, true, false]));
+                self.pin.sel = Some((id, [true, true, true, false]));
             }
             31 => {}
             // The box's rotate knob: 34px above the middle of its top edge.
@@ -175,7 +175,7 @@ impl Gfx {
                     hi = hi.max(at(self, q[k]));
                 }
                 let c = lo + (hi - lo) * 0.5;
-                let Some(knob) = self.pin_knob else { fail("no rotate knob drawn".into()) };
+                let Some(knob) = self.pin.knob else { fail("no rotate knob drawn".into()) };
                 if !self.viewer_rect.contains(knob) {
                     fail(format!("the rotate knob is off the viewer at {knob:?} ({:?})", self.viewer_rect));
                 }
@@ -202,7 +202,7 @@ impl Gfx {
                     let v = p0 - press;
                     let want = if k == 3 { p0 } else { press + egui::vec2(-v.y, v.x) };
                     if !near(p1, want) {
-                        fail(format!("the knob put pin {k} at {p1:?}, wanted {want:?} (pick {:?})", self.pin_sel));
+                        fail(format!("the knob put pin {k} at {p1:?}, wanted {want:?} (pick {:?})", self.pin.sel));
                     }
                 }
                 println!(

@@ -8,3 +8,5 @@ mod geo;
 pub(crate) use geo::GeoUiState;
 mod spline;
 pub(crate) use spline::SplineUiState;
+mod pin;
+pub(crate) use pin::PinState;

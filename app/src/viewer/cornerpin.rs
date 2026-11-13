@@ -46,7 +46,7 @@ impl Gfx {
             // now anchors them there too).
             let (lwf, lhf) = self.node_res_f32(node).unwrap_or((owf, ohf));
             let before_cp = cpw;
-            let edit_from = self.pin_from.contains(&node);
+            let edit_from = self.pin.from.contains(&node);
             // Under a SoftCrop the pins are the CROP's corners (where
             // they land), and a drag re-solves `to` around them. The
             // `from` quad is a plain quad in the node's space.
@@ -93,10 +93,10 @@ impl Gfx {
                 ink.seg(pts[k], pts[(k + 1) % 4], 1.5, 0.8, false);
             }
 
-            let group_ui = self.pin_sel.is_some_and(|(n, _)| n == node);
-            let mut pick = self.pin_sel.filter(|(n, _)| *n == node).map_or([false; 4], |(_, s)| s);
+            let group_ui = self.pin.sel.is_some_and(|(n, _)| n == node);
+            let mut pick = self.pin.sel.filter(|(n, _)| *n == node).map_or([false; 4], |(_, s)| s);
             let n_pick = pick.iter().filter(|b| **b).count();
-            let grab_live = self.pin_grab.as_ref().is_some_and(|g| g.node == node);
+            let grab_live = self.pin.grab.as_ref().is_some_and(|g| g.node == node);
             if group_ui && hud_key_list.is_empty() {
                 use hudkeys::{chord, key};
                 hud_key_list.push(key("S", "click: add to pick", egui::Key::S));
@@ -124,7 +124,7 @@ impl Gfx {
                     i.pointer.primary_pressed().then(|| i.pointer.press_origin()).flatten()
                 });
                 if let (Some(k), Some(o)) = (held, origin.filter(|o| rect.contains(*o))) {
-                    self.pin_grab = Some(PinGrab {
+                    self.pin.grab = Some(PinGrab {
                         node,
                         mode: match k {
                             egui::Key::E => PinMode::KeyScale,
@@ -144,7 +144,7 @@ impl Gfx {
             }
             // Anything already in flight (a held-key edit taken above, a
             // drag from an earlier frame) keeps the widgets' hands off.
-            let key_grab = self.pin_grab.as_ref().is_some_and(|g| g.node == node);
+            let key_grab = self.pin.grab.as_ref().is_some_and(|g| g.node == node);
 
             // The box round a pick of two or more: the spline's handle
             // language, axis-aligned in the node's pixels.
@@ -204,7 +204,7 @@ impl Gfx {
                     );
                     ink.rect(egui::Rect::from_center_size(hp, egui::vec2(11.0, 11.0)), 2.0, true, 0.0, 1.0, rs.hovered());
                     if rs.drag_started() && !key_grab {
-                        self.pin_grab = Some(PinGrab {
+                        self.pin.grab = Some(PinGrab {
                             node,
                             mode: PinMode::Scale(*hx != 0, *hy != 0),
                             origin: press.unwrap_or(hp),
@@ -234,7 +234,7 @@ impl Gfx {
                         let (t, k) = stalk(scr_px(at(0, -1)));
                         (t, t - (k - t) * 1.4)
                     });
-                self.pin_knob = Some(knob);
+                self.pin.knob = Some(knob);
                 hot.push(knob);
                 let rr = ui.interact(
                     egui::Rect::from_center_size(knob, egui::vec2(22.0, 22.0)),
@@ -244,7 +244,7 @@ impl Gfx {
                 ink.seg(top, knob, 1.0, 0.5, false);
                 ink.circle_stroke(knob, 6.0, 1.6, 1.0, rr.hovered());
                 if rr.drag_started() && !key_grab {
-                    self.pin_grab = Some(PinGrab {
+                    self.pin.grab = Some(PinGrab {
                         node,
                         mode: PinMode::Rotate,
                         origin: press.unwrap_or(knob),
@@ -266,7 +266,7 @@ impl Gfx {
                 );
                 ink.circle_stroke(cpts, 10.0, 1.6, 0.9, rt.hovered());
                 if rt.drag_started() && !key_grab {
-                    self.pin_grab = Some(PinGrab {
+                    self.pin.grab = Some(PinGrab {
                         node,
                         mode: PinMode::Move,
                         origin: press.unwrap_or(cpts),
@@ -312,7 +312,7 @@ impl Gfx {
                     }
                     let origin =
                         ui.input(|inp| inp.pointer.press_origin()).or(pointer_pos).unwrap_or(*p0);
-                    self.pin_grab = Some(PinGrab {
+                    self.pin.grab = Some(PinGrab {
                         node,
                         mode: PinMode::Move,
                         origin,
@@ -329,7 +329,7 @@ impl Gfx {
 
             // The gesture in flight, from its press.
             let rate = widgets::sens_factor(ui).unwrap_or(1.0);
-            if let Some(g) = self.pin_grab.as_mut().filter(|g| g.node == node) {
+            if let Some(g) = self.pin.grab.as_mut().filter(|g| g.node == node) {
                 // A fresh grab starts both at the press, so the travel
                 // past egui's drag threshold is not lost.
                 if g.vp == egui::Pos2::ZERO && g.last == egui::Pos2::ZERO {
@@ -393,10 +393,10 @@ impl Gfx {
                     widgets::claim_sens(ui.ctx());
                 }
                 if !ui.input(|i| i.pointer.primary_down()) {
-                    self.pin_grab = None;
+                    self.pin.grab = None;
                 }
             }
-            let grab_live = self.pin_grab.as_ref().is_some_and(|g| g.node == node);
+            let grab_live = self.pin.grab.as_ref().is_some_and(|g| g.node == node);
 
             // Marquee: a plain background drag bands pins (S held keeps
             // what was picked). cmd/ctrl-drag is the pan and Tab-drag the
@@ -409,10 +409,10 @@ impl Gfx {
                     && !grab_live;
                 if banding {
                     if let (Some(o), Some(p)) = (ui.input(|i| i.pointer.press_origin()), pointer_pos) {
-                        self.pin_marquee = Some(egui::Rect::from_two_pos(o, p));
+                        self.pin.marquee = Some(egui::Rect::from_two_pos(o, p));
                     }
                 }
-                if let Some(mq) = self.pin_marquee {
+                if let Some(mq) = self.pin.marquee {
                     ink.rect(mq, 0.0, false, 1.0, 0.5, false);
                     if !banding {
                         if !ui.input(|i| i.key_down(egui::Key::S)) {
@@ -423,7 +423,7 @@ impl Gfx {
                                 pick[k] = true;
                             }
                         }
-                        self.pin_marquee = None;
+                        self.pin.marquee = None;
                     }
                 }
                 if ui.input(|i| i.pointer.primary_clicked()) && !grab_live {
@@ -435,7 +435,7 @@ impl Gfx {
                         }
                     }
                 }
-                self.pin_sel = Some((node, pick));
+                self.pin.sel = Some((node, pick));
             }
 
             if cpw != before_cp {
