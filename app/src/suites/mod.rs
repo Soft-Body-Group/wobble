@@ -33,6 +33,7 @@ mod scrubperf;
 mod shader;
 mod shot;
 mod slice;
+mod still;
 mod subwob;
 mod tab;
 mod viewlock;
