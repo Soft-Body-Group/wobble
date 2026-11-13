@@ -34302,19 +34302,9 @@ impl Gfx {
                         }
                     }
                     NodeKind::Mix(m) => {
-                        // One number: 0 is all of input 1, 1 all of input 2.
-                        if let Some(h) = widgets::slider(
-                            ui,
-                            &mut rcx,
-                            "mix",
-                            &mut m.amount,
-                            0.0,
-                            1.0,
-                            &[anim::Channel::MixAmount],
-                        ) {
+                        if let Some(h) = nodes::mix::panel(ui, &mut rcx, m) {
                             hud_drag_out = Some(h);
                         }
-                        ui.weak("crossfades input 1 ➡ input 2");
                     }
                     NodeKind::LumaKey(k) => {
                         nodes::lumakey::panel(ui, k, node, zoom, &mut view_band_req);

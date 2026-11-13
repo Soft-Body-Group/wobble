@@ -88,6 +88,7 @@ pub mod timeremap;
 pub mod speed;
 pub mod lumakey;
 pub mod mattecombine;
+pub mod mix;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
