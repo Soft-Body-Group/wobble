@@ -2,6 +2,7 @@
 //! holding that suite's driver. main.rs only dispatches to them.
 mod anim;
 mod bake;
+mod blender;
 mod r#box;
 mod compose;
 mod cost;
