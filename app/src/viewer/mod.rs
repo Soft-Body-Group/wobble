@@ -11,3 +11,4 @@ mod geoviz;
 mod geohud;
 mod geoonion;
 mod geobrush;
+mod geoedit;
