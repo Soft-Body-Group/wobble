@@ -22,6 +22,7 @@ mod inout;
 mod keymap;
 mod layer;
 mod paint;
+mod panelw;
 mod patchlive;
 mod picker;
 mod plugin;
