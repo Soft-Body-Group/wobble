@@ -4,6 +4,7 @@ mod anim;
 mod bake;
 mod r#box;
 mod compose;
+mod cost;
 mod curveedit;
 mod curves;
 mod dual;
