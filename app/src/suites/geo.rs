@@ -202,8 +202,8 @@ impl Gfx {
                 } else if frames > 20 {
                     // Missed: go round again — but not forever. A suite that
                     // loops never reports, which is worse than failing.
-                    self.geo_click_tries += 1;
-                    if self.geo_click_tries > 5 {
+                    self.geo.click_tries += 1;
+                    if self.geo.click_tries > 5 {
                         println!("GEO TEST FAIL: an S-click in the viewer never laid point {k} down");
                         std::process::exit(1);
                     }
@@ -350,16 +350,16 @@ impl Gfx {
                     println!("GEO TEST FAIL: a live bake did not start");
                     std::process::exit(1);
                 }
-                self.geo_phys_node = ph;
-                self.geo_phys_seen = 0;
+                self.geo.phys_node = ph;
+                self.geo.phys_seen = 0;
                 next = 37;
             }
             37 => {
-                let ph = self.geo_phys_node;
+                let ph = self.geo.phys_node;
                 if let Some(j) = &self.physics_job {
                     // Progress while it runs: a partial bake in the viewer.
                     let done = j.bake.as_ref().map_or(0, |b| b.frames);
-                    self.geo_phys_seen = self.geo_phys_seen.max(done);
+                    self.geo.phys_seen = self.geo.phys_seen.max(done);
                     if frames > 600 {
                         println!("GEO TEST FAIL: the live bake never finished ({done} frames)");
                         std::process::exit(1);
@@ -400,7 +400,7 @@ impl Gfx {
                     }
                 }
                 // The display bar is up inside a 2dini.
-                if self.geo_viz_bar.is_none() {
+                if self.geo.viz_bar.is_none() {
                     println!("GEO TEST FAIL: no display bar inside the 2dini");
                     std::process::exit(1);
                 }
@@ -476,7 +476,7 @@ impl Gfx {
                     println!("GEO TEST FAIL: the rendered drawing reads {m:.4}");
                     std::process::exit(1);
                 }
-                self.geo_mean = m;
+                self.geo.mean = m;
                 // Outside, the HUD shows the selected 2dini's layer geometry:
                 // every scattered copy plus the drawn spline.
                 self.selected = vec![gid];
@@ -496,7 +496,7 @@ impl Gfx {
             }
             11 if frames > 40 => {
                 let Some(m) = self.probe_output_mean() else { return };
-                if m < self.geo_mean * 1.3 {
+                if m < self.geo.mean * 1.3 {
                     let value = self.egraph.node(gid).and_then(|n| match &n.kind {
                         NodeKind::Geo(g) => g.graph.exposed_value("size"),
                         _ => None,
@@ -504,7 +504,7 @@ impl Gfx {
                     println!(
                         "GEO TEST FAIL: driving the slider did not change the drawing \
                          ({:.4} -> {m:.4}); slider now {value:?}, layer {:?}, dirty {:?}",
-                        self.geo_mean,
+                        self.geo.mean,
                         self.comp.geo_stats(gid),
                         self.comp.geo_layer_dirty(gid)
                     );
@@ -514,7 +514,7 @@ impl Gfx {
                     "GEO TEST PASS: dived in, built a noise-driven scatter + instance with an \
                      exposed slider and a viewer-drawn spline, stepped out, rendered it \
                      (mean {:.3}) and drove the slider through its channel (mean {m:.3})",
-                    self.geo_mean
+                    self.geo.mean
                 );
                 std::process::exit(0);
             }

@@ -25,17 +25,17 @@ impl Gfx {
         // tapered shapes, posed. Drag a bone to turn it about its head
         // (keys the pose), alt-drag a tail to move that joint at rest,
         // alt-drag the root's head to move the whole rig.
-        if in_geo && !hud_hide && self.geo_tool.is_none() {
+        if in_geo && !hud_hide && self.geo.tool.is_none() {
             let skel_node = (self.selected.len() == 1).then(|| self.selected[0]).filter(|id| {
                 matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::GeoNode(engine::geo::GeoNode::Skeleton { .. })))
             });
             match skel_node {
-                None => self.geo_bone_drag = None,
+                None => self.geo.bone_drag = None,
                 Some(sn) => {
                     self.geo_hud_refresh(&[sn], owf, ohf, cur_t);
                     let g2s = |p: [f32; 2]| out_to_pts(egui::vec2(p[0] * owf, p[1] * owf));
                     let bones: Vec<engine::georig::SkelBone> = self
-                        .geo_hud_cache
+                        .geo.hud_cache
                         .as_ref()
                         .and_then(|c| c.geos.iter().find(|(n, _)| *n == sn))
                         .map(|(_, g)| g.bones.clone())
@@ -79,14 +79,14 @@ impl Gfx {
                         }
                     });
                     let over_bar = pointer_pos.is_some_and(|p| {
-                        self.geo_tool_bar.is_some_and(|b| b.contains(p)) || self.geo_viz_bar.is_some_and(|b| b.contains(p))
+                        self.geo.tool_bar.is_some_and(|b| b.contains(p)) || self.geo.viz_bar.is_some_and(|b| b.contains(p))
                     });
                     let in_view = pointer_pos.is_some_and(|p| rect.contains(p)) && !over_bar;
-                    if in_view && (hot.is_some() || self.geo_bone_drag.is_some()) {
+                    if in_view && (hot.is_some() || self.geo.bone_drag.is_some()) {
                         *geo_handle_hot = true;
                     }
                     let (pressed, down) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
-                    if pressed && in_view && self.geo_bone_drag.is_none() {
+                    if pressed && in_view && self.geo.bone_drag.is_none() {
                         if let (Some((i, root)), Some(p)) = (hot, pointer_pos) {
                             let (rest_bones, pose0) = match self.egraph.node(sn).map(|n| n.kind_at(cur_t)) {
                                 Some(NodeKind::GeoNode(engine::geo::GeoNode::Skeleton { bones, pose })) => {
@@ -95,7 +95,7 @@ impl Gfx {
                                 }
                                 _ => (Vec::new(), 0.0),
                             };
-                            self.geo_bone_drag = Some(BoneDrag {
+                            self.geo.bone_drag = Some(BoneDrag {
                                 node: sn,
                                 bone: i,
                                 origin: p,
@@ -105,7 +105,7 @@ impl Gfx {
                             });
                         }
                     }
-                    if let Some(bd) = self.geo_bone_drag.clone().filter(|b| b.node == sn) {
+                    if let Some(bd) = self.geo.bone_drag.clone().filter(|b| b.node == sn) {
                         if let Some(p) = pointer_pos {
                             match &bd.rest {
                                 None => {
@@ -177,12 +177,12 @@ impl Gfx {
                             }
                         }
                         if !down {
-                            self.geo_bone_drag = None;
+                            self.geo.bone_drag = None;
                         }
                     }
                     // Draw: each bone a long diamond from head to tail,
                     // a ring at the head; the hot one lit.
-                    let lit = self.geo_bone_drag.as_ref().map(|b| b.bone).or(hot.map(|h| h.0));
+                    let lit = self.geo.bone_drag.as_ref().map(|b| b.bone).or(hot.map(|h| h.0));
                     for (i, (h, t)) in ends.iter().enumerate() {
                         let ax = *t - *h;
                         let len = ax.length();

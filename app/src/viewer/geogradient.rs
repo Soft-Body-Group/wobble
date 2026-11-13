@@ -23,7 +23,7 @@ impl Gfx {
         // GRADIENT handles: a selected shape or Style with a linear or
         // radial fill shows its start (a ring: the fill) and end (a dot:
         // the gradient colour) on a line; either drags, from the press.
-        if self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo) && !hud_hide && self.geo_tool.is_none() {
+        if self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo) && !hud_hide && self.geo.tool.is_none() {
             let g2s = |p: [f32; 2]| out_to_pts(egui::vec2(p[0] * owf, p[1] * owf));
             let s2g = |p: egui::Pos2| {
                 let q = pts_to_out(p);
@@ -43,7 +43,7 @@ impl Gfx {
                 if gr.a == dflt.a && gr.b == dflt.b {
                     self.geo_hud_refresh(&[node], owf, ohf, cur_t);
                     let bb = self
-                        .geo_hud_cache
+                        .geo.hud_cache
                         .as_ref()
                         .and_then(|c| c.geos.iter().find(|(n, _)| *n == node))
                         .and_then(|(_, g)| g.bbox());
@@ -79,20 +79,20 @@ impl Gfx {
                         None
                     }
                 });
-                let held = self.geo_grad_drag.filter(|d| d.0 == node);
+                let held = self.geo.grad_drag.filter(|d| d.0 == node);
                 ink.circle_stroke(a, 6.0, 2.0, 0.95, near == Some(0) || held.is_some_and(|d| d.1 == 0));
                 ink.circle_fill(b, 5.0, 0.95, near == Some(1) || held.is_some_and(|d| d.1 == 1));
                 if near.is_some() || held.is_some() {
                     *geo_handle_hot = true;
                 }
-                if pressed && self.geo_xf_drag.is_none() {
+                if pressed && self.geo.xf_drag.is_none() {
                     if let (Some(k), Some(p)) = (near, pointer_pos) {
-                        self.geo_grad_drag = Some((node, k, p, if k == 0 { gr.a } else { gr.b }));
+                        self.geo.grad_drag = Some((node, k, p, if k == 0 { gr.a } else { gr.b }));
                     }
                 }
-                let Some((_, k, origin, start)) = self.geo_grad_drag.filter(|d| d.0 == node) else { continue };
+                let Some((_, k, origin, start)) = self.geo.grad_drag.filter(|d| d.0 == node) else { continue };
                 if !down {
-                    self.geo_grad_drag = None;
+                    self.geo.grad_drag = None;
                     continue;
                 }
                 let Some(p) = pointer_pos else { continue };

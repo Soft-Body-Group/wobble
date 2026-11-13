@@ -66,7 +66,7 @@ impl Gfx {
                         }
                     });
                 });
-            self.geo_viz_bar = Some(resp.response.rect);
+            self.geo.viz_bar = Some(resp.response.rect);
             // RULERS along the image's top and left, in output pixels,
             // the pointer marked on both.
             if viz.rulers {

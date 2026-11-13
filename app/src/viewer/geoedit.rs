@@ -27,17 +27,17 @@ impl Gfx {
         // drops one, alt-click puts it back where its input has it, a
         // drag on nothing boxes points. Moves are offsets from the
         // press, so a drag is never summed.
-        if in_geo && !hud_hide && self.geo_tool.is_none() {
+        if in_geo && !hud_hide && self.geo.tool.is_none() {
             let edit_node = (self.selected.len() == 1)
                 .then(|| self.selected[0])
                 .filter(|id| matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::GeoNode(engine::geo::GeoNode::Edit { .. }))));
-            if self.geo_edit_owner != edit_node {
-                self.geo_edit_pick.clear();
-                self.geo_edit_owner = edit_node;
+            if self.geo.edit_owner != edit_node {
+                self.geo.edit_pick.clear();
+                self.geo.edit_owner = edit_node;
             }
             match edit_node {
                 None => {
-                    self.geo_edit_drag = None;
+                    self.geo.edit_drag = None;
                 }
                 Some(en) => {
                     self.geo_hud_refresh(&[en], owf, ohf, cur_t);
@@ -48,7 +48,7 @@ impl Gfx {
                     };
                     // (key, screen spot), every vertex, capped.
                     let spots: Vec<((u32, u32), egui::Pos2)> = self
-                        .geo_hud_cache
+                        .geo.hud_cache
                         .as_ref()
                         .and_then(|c| c.geos.iter().find(|(n, _)| *n == en))
                         .map(|(_, g)| {
@@ -77,7 +77,7 @@ impl Gfx {
                             .map(|(k, _)| k)
                     });
                     let over_bar = pointer_pos.is_some_and(|p| {
-                        self.geo_tool_bar.is_some_and(|b| b.contains(p)) || self.geo_viz_bar.is_some_and(|b| b.contains(p))
+                        self.geo.tool_bar.is_some_and(|b| b.contains(p)) || self.geo.viz_bar.is_some_and(|b| b.contains(p))
                     });
                     let in_view = pointer_pos.is_some_and(|p| rect.contains(p)) && !over_bar;
                     if in_view {
@@ -85,7 +85,7 @@ impl Gfx {
                     }
                     let (pressed, down, mods) =
                         ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.modifiers));
-                    if pressed && in_view && self.geo_edit_drag.is_none() {
+                    if pressed && in_view && self.geo.edit_drag.is_none() {
                         let p = pointer_pos.unwrap_or_default();
                         match near {
                             Some(k) if mods.alt => {
@@ -96,32 +96,32 @@ impl Gfx {
                                 self.playback_dirty = true;
                             }
                             Some(k) if mods.shift => {
-                                if let Some(i) = self.geo_edit_pick.iter().position(|q| *q == k) {
-                                    self.geo_edit_pick.remove(i);
+                                if let Some(i) = self.geo.edit_pick.iter().position(|q| *q == k) {
+                                    self.geo.edit_pick.remove(i);
                                 } else {
-                                    self.geo_edit_pick.push(k);
+                                    self.geo.edit_pick.push(k);
                                 }
                             }
                             Some(k) => {
-                                if !self.geo_edit_pick.contains(&k) {
-                                    self.geo_edit_pick = vec![k];
+                                if !self.geo.edit_pick.contains(&k) {
+                                    self.geo.edit_pick = vec![k];
                                 }
-                                self.geo_edit_drag = Some(GeoEditDrag::Move { node: en, origin: p, start: edits.clone() });
+                                self.geo.edit_drag = Some(GeoEditDrag::Move { node: en, origin: p, start: edits.clone() });
                             }
                             None => {
                                 if !mods.shift {
-                                    self.geo_edit_pick.clear();
+                                    self.geo.edit_pick.clear();
                                 }
-                                self.geo_edit_drag = Some(GeoEditDrag::Box { node: en, origin: p });
+                                self.geo.edit_drag = Some(GeoEditDrag::Box { node: en, origin: p });
                             }
                         }
                     }
                     let mut boxed: Option<egui::Rect> = None;
-                    match self.geo_edit_drag.clone() {
+                    match self.geo.edit_drag.clone() {
                         Some(GeoEditDrag::Move { node, origin, start }) if node == en => {
                             if let Some(p) = pointer_pos {
                                 let (a, b) = (s2g(p), s2g(origin));
-                                let moved = edits_moved(&start, &self.geo_edit_pick, [a[0] - b[0], a[1] - b[1]]);
+                                let moved = edits_moved(&start, &self.geo.edit_pick, [a[0] - b[0], a[1] - b[1]]);
                                 if let Some(NodeKind::GeoNode(engine::geo::GeoNode::Edit { edits })) =
                                     self.egraph.node_mut(en).map(|n| &mut n.kind)
                                 {
@@ -132,7 +132,7 @@ impl Gfx {
                                 }
                             }
                             if !down {
-                                self.geo_edit_drag = None;
+                                self.geo.edit_drag = None;
                             }
                         }
                         Some(GeoEditDrag::Box { node, origin }) if node == en => {
@@ -141,24 +141,24 @@ impl Gfx {
                                 boxed = Some(r);
                                 if !down {
                                     for (k, s) in &spots {
-                                        if r.contains(*s) && !self.geo_edit_pick.contains(k) {
-                                            self.geo_edit_pick.push(*k);
+                                        if r.contains(*s) && !self.geo.edit_pick.contains(k) {
+                                            self.geo.edit_pick.push(*k);
                                         }
                                     }
                                 }
                             }
                             if !down {
-                                self.geo_edit_drag = None;
+                                self.geo.edit_drag = None;
                             }
                         }
-                        Some(_) => self.geo_edit_drag = None,
+                        Some(_) => self.geo.edit_drag = None,
                         None => {}
                     }
                     // Draw: every vertex a small square, moved ones
                     // filled, picked ones lit, the hovered one grown.
                     for (k, s) in &spots {
                         let moved = edits.iter().any(|e| (e.prim, e.vert) == *k);
-                        let picked = self.geo_edit_pick.contains(k);
+                        let picked = self.geo.edit_pick.contains(k);
                         let r = if near == Some(*k) { 4.5 } else { 3.0 };
                         ink.rect(egui::Rect::from_center_size(*s, egui::vec2(2.0 * r, 2.0 * r)), 1.0, moved || picked, 0.9, 1.0, picked);
                     }

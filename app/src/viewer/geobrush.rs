@@ -21,11 +21,11 @@ impl Gfx {
         // BRUSH: with one Brush selected, a drag in the viewer paints a
         // stroke into it, a point every couple of pixels; a fast hand
         // thins the line, a slow one fills it out.
-        if in_geo && !hud_hide && self.geo_tool.is_none() {
+        if in_geo && !hud_hide && self.geo.tool.is_none() {
             let brush = (self.selected.len() == 1)
                 .then(|| self.selected[0])
                 .filter(|id| matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::GeoNode(engine::geo::GeoNode::Brush { .. }))));
-            let over_bar = pointer_pos.is_some_and(|p| self.geo_tool_bar.is_some_and(|b| b.contains(p)));
+            let over_bar = pointer_pos.is_some_and(|p| self.geo.tool_bar.is_some_and(|b| b.contains(p)));
             let (pressed, down, mods) =
                 ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.modifiers));
             if let Some(b) = brush {
@@ -36,18 +36,18 @@ impl Gfx {
                     let q = pts_to_out(p);
                     [q.x / owf, q.y / owf]
                 };
-                if let Some(p) = pointer_pos.filter(|p| pressed && mods.is_none() && rect.contains(*p) && !over_bar && self.geo_xf_drag.is_none()) {
+                if let Some(p) = pointer_pos.filter(|p| pressed && mods.is_none() && rect.contains(*p) && !over_bar && self.geo.xf_drag.is_none()) {
                     let g = to_g(p);
                     if let Some(NodeKind::GeoNode(engine::geo::GeoNode::Brush { strokes, .. })) =
                         self.egraph.node_mut(b).map(|n| &mut n.kind)
                     {
                         strokes.push(engine::geo::BrushStroke { pts: vec![[g[0], g[1], 1.0]] });
                     }
-                    self.geo_brush_drag = Some((b, p));
+                    self.geo.brush_drag = Some((b, p));
                     self.playback_dirty = true;
                 }
             }
-            if let Some((b, last)) = self.geo_brush_drag {
+            if let Some((b, last)) = self.geo.brush_drag {
                 *geo_handle_hot = true;
                 if let Some(p) = pointer_pos.filter(|p| (*p - last).length() >= 2.0) {
                     let dt = ui.input(|i| i.stable_dt).max(1e-3);
@@ -61,11 +61,11 @@ impl Gfx {
                             s.pts.push([q.x / owf, q.y / owf, pressure]);
                         }
                     }
-                    self.geo_brush_drag = Some((b, p));
+                    self.geo.brush_drag = Some((b, p));
                     self.playback_dirty = true;
                 }
                 if !down {
-                    self.geo_brush_drag = None;
+                    self.geo.brush_drag = None;
                     // A click that never moved, on a shape some OTHER
                     // node made: that is a pick, not a dab.
                     let dab = matches!(
@@ -89,7 +89,7 @@ impl Gfx {
                 }
             }
         } else {
-            self.geo_brush_drag = None;
+            self.geo.brush_drag = None;
         }
     }
 }

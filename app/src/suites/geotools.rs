@@ -38,7 +38,7 @@ impl Gfx {
             let r = s.image_rect;
             r.min + egui::vec2(p[0], p[1]) * r.width()
         };
-        let tool = |s: &Self, t: GeoTool| s.geo_tool_spots.iter().find(|(k, _)| *k == t).map(|(_, r)| r.center());
+        let tool = |s: &Self, t: GeoTool| s.geo.tool_spots.iter().find(|(k, _)| *k == t).map(|(_, r)| r.center());
         let kind = |s: &Self, id: u64| match s.egraph.node(id).map(|n| &n.kind) {
             Some(NodeKind::GeoNode(k)) => Some(k.clone()),
             _ => None,
@@ -105,8 +105,8 @@ impl Gfx {
                 next = 4;
             }
             4 if step => {
-                if self.geo_tool != Some(GeoTool::Circle) {
-                    fail(format!("the circle button did not arm the tool ({:?})", self.geo_tool));
+                if self.geo.tool != Some(GeoTool::Circle) {
+                    fail(format!("the circle button did not arm the tool ({:?})", self.geo.tool));
                 }
                 press(raw, g2s(self, [0.4, 0.25]), true);
                 next = 5;
@@ -137,8 +137,8 @@ impl Gfx {
                 }).prims.is_empty() {
                     fail("the circle is not wired into the drawing".into());
                 }
-                if self.selected != [c] || self.geo_tool.is_some() {
-                    fail(format!("after drawing: selected {:?}, tool {:?}", self.selected, self.geo_tool));
+                if self.selected != [c] || self.geo.tool.is_some() {
+                    fail(format!("after drawing: selected {:?}, tool {:?}", self.selected, self.geo.tool));
                 }
                 self.test.geotools_ids.insert("circle", c);
                 // Its centre handle: drag it right by 0.1.
@@ -723,7 +723,7 @@ impl Gfx {
                 self.test.geotools_ids.insert("edit", e);
                 // Its points come from the gizmo's own evaluation.
                 let p0 = self
-                    .geo_hud_cache
+                    .geo.hud_cache
                     .as_ref()
                     .and_then(|cc| cc.geos.iter().find(|(n, _)| *n == e))
                     .and_then(|(_, g)| g.prims.first().and_then(|pr| pr.verts.first()).and_then(|v| g.points.get(*v as usize)))
@@ -812,11 +812,11 @@ impl Gfx {
                 next = 74;
             }
             74 if self.test.geotools_mark.is_some_and(|m| m.elapsed().as_secs_f32() > 1.0) => {
-                let near: Vec<u64> = self.geo_onion_cache.iter().map(|(f, ..)| *f).collect();
+                let near: Vec<u64> = self.geo.onion_cache.iter().map(|(f, ..)| *f).collect();
                 if !(near.contains(&1018) && near.contains(&1022)) {
                     fail(format!("onion skins were not drawn either side of 1020: {near:?}"));
                 }
-                let pts = |f: u64| self.geo_onion_cache.iter().find(|(ff, ..)| *ff == f).map_or(0, |(_, _, g)| g.points.len());
+                let pts = |f: u64| self.geo.onion_cache.iter().find(|(ff, ..)| *ff == f).map_or(0, |(_, _, g)| g.points.len());
                 if pts(1018) == 0 || pts(1018) == pts(1022) && pts(1018) == 0 {
                     fail("the onion skins hold no particles".into());
                 }

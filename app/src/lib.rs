@@ -5587,49 +5587,11 @@ struct Gfx {
 
     playback: Option<Playback>,
     playback_dirty: bool,
-    /// What the vector HUD last evaluated inside a 2dini dive, so a still
-    /// drawing is evaluated once and an animated one once per tick.
-    geo_hud_cache: Option<GeoHudCache>,
+    geo: state::GeoUiState,
     /// A Physics bake in flight.
     physics_job: Option<PhysicsJob>,
-    /// The last 2dini web-page export: (node, what happened).
-    geo_web_status: Option<(u64, String)>,
-    /// Export web pages that evaluate live and play forever (vs loop the
-    /// play range's frames).
-    geo_web_live: bool,
-    /// A 2dini Transform handle being dragged: (node, handle, press point,
-    /// the node's translate/rotate/scale/pivot at the press).
-    geo_xf_drag: Option<GeoXfDrag>,
-    /// Where the display bar was last frame, so a click on it is not a
-    /// click-through into the drawing under it.
-    geo_viz_bar: Option<egui::Rect>,
-    /// The 2dini tool bar down the viewer's left edge, last drawn.
-    geo_tool_bar: Option<egui::Rect>,
-    /// The armed shape tool: the next press in the viewer draws one.
-    geo_tool: Option<GeoTool>,
-    /// A shape being drawn with the armed tool: the node and where the
-    /// press landed, geo space.
-    geo_tool_drag: Option<(u64, [f32; 2])>,
-    /// A brush stroke being painted: the Brush node and the last point
-    /// laid (screen).
-    geo_brush_drag: Option<(u64, egui::Pos2)>,
-    /// The Edit node's picked points, (shape, vertex).
-    geo_edit_pick: Vec<(u32, u32)>,
-    /// Which Edit node the pick belongs to.
-    geo_edit_owner: Option<u64>,
     /// Each Layer node's wired inputs last frame, for closing up gaps.
     layer_wired_prev: std::collections::HashMap<u64, Vec<bool>>,
-    /// Onion skins drawn lately: (frame, the graph at it, its geometry).
-    geo_onion_cache: Vec<(u64, engine::geo::GeoGraph, engine::geo::Geometry)>,
-    /// An Edit gesture in flight: a point drag (the edits as they were at
-    /// the press) or a box (its first corner).
-    geo_edit_drag: Option<GeoEditDrag>,
-    geo_bone_drag: Option<BoneDrag>,
-    /// A gradient handle being dragged: node, 0 start / 1 end, the press,
-    /// and the point as it was.
-    geo_grad_drag: Option<(u64, u8, egui::Pos2, [f32; 2])>,
-    /// Last frame's tool buttons (screen), for the suites.
-    geo_tool_spots: Vec<(GeoTool, egui::Rect)>,
     /// Sequence-aware browser (one at a time, targeting one Read node).
     browser: Option<browser::SeqBrowser>,
     pinned_dirs: Vec<std::path::PathBuf>,
@@ -6272,14 +6234,6 @@ struct Gfx {
     /// --test-nodeux: the panel not appearing was a shipped bug (the rack's
     /// empty-state early-returned past it).
     group_panel_shown: bool,
-    /// --test-geo: the rendered mean before the exposed slider was driven.
-    geo_mean: f32,
-    /// --test-geo: the Physics node under test and the most frames its live
-    /// bake was seen with.
-    geo_phys_node: u64,
-    geo_phys_seen: u32,
-    /// --test-geo: viewer clicks retried, capped so a miss fails loudly.
-    geo_click_tries: u32,
     /// --test-mblur: the tick the gain triangle peaks on.
     mblur_peak: u64,
     /// --test-curveedit: the curve canvas rect, and the shape before a drag.
@@ -7810,24 +7764,30 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         uploader: CopyUploader,
         playback: None,
         playback_dirty: false,
-        geo_hud_cache: None,
+        geo: state::GeoUiState {
+            hud_cache: None,
+            web_status: None,
+            web_live: false,
+            xf_drag: None,
+            viz_bar: None,
+            tool_bar: None,
+            tool: None,
+            tool_drag: None,
+            brush_drag: None,
+            edit_pick: Vec::new(),
+            edit_owner: None,
+            onion_cache: Vec::new(),
+            edit_drag: None,
+            bone_drag: None,
+            grad_drag: None,
+            tool_spots: Vec::new(),
+            mean: 0.0,
+            phys_node: 0,
+            phys_seen: 0,
+            click_tries: 0,
+        },
         physics_job: None,
-        geo_web_status: None,
-        geo_web_live: false,
-        geo_xf_drag: None,
-        geo_viz_bar: None,
-        geo_tool_bar: None,
-        geo_tool: None,
-        geo_tool_drag: None,
-        geo_brush_drag: None,
-        geo_edit_pick: Vec::new(),
-        geo_edit_owner: None,
         layer_wired_prev: Default::default(),
-        geo_onion_cache: Vec::new(),
-        geo_edit_drag: None,
-        geo_bone_drag: None,
-        geo_grad_drag: None,
-        geo_tool_spots: Vec::new(),
         browser: None,
         current_setup: None,
         setup_error: None,
@@ -8316,10 +8276,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         last_path_points: 0,
         path_drag: None,
         group_panel_shown: false,
-        geo_mean: 0.0,
-        geo_phys_node: 0,
-        geo_phys_seen: 0,
-        geo_click_tries: 0,
         mblur_peak: 0,
         curve_rect: None,
         curve_screen: Vec::new(),
@@ -18352,10 +18308,10 @@ impl Gfx {
             // merged into the drawing and selected so its handles are up.
             // A line or spline is made at once and drawn with S-clicks.
             let in_geo = self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo);
-            self.geo_tool_bar = None;
+            self.geo.tool_bar = None;
             if !in_geo {
-                self.geo_tool = None;
-                self.geo_tool_drag = None;
+                self.geo.tool = None;
+                self.geo.tool_drag = None;
             }
             self.gizmo_geo_tools(
                 ui,
@@ -18417,8 +18373,8 @@ impl Gfx {
             // and a click on nothing leaves the selection alone.
             if self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo)
                 && !geo_handle_hot
-                && !pointer_pos.is_some_and(|p| self.geo_viz_bar.is_some_and(|b| b.contains(p)))
-                && !pointer_pos.is_some_and(|p| self.geo_tool_bar.is_some_and(|b| b.contains(p)))
+                && !pointer_pos.is_some_and(|p| self.geo.viz_bar.is_some_and(|b| b.contains(p)))
+                && !pointer_pos.is_some_and(|p| self.geo.tool_bar.is_some_and(|b| b.contains(p)))
                 && ui.input(|i| {
                     i.pointer.primary_clicked()
                         && i.modifiers.is_none()
@@ -18469,7 +18425,7 @@ impl Gfx {
             // whenever a 2dini is in play (inside one, or one selected).
             let geo_in_play = self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo)
                 || selected.iter().any(|id| matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::Geo(_))));
-            self.geo_viz_bar = None;
+            self.geo.viz_bar = None;
             self.gizmo_geo_viz_bar(ui, geo_in_play, hud_hide, owf, pointer_pos, &out_to_pts, rect);
 
             self.gizmo_tracker(
@@ -20995,7 +20951,7 @@ impl Gfx {
     /// memoise: the compositor's layer geometry is read directly.
     fn geo_hud_refresh(&mut self, selected: &[u64], owf: f32, ohf: f32, cur_t: u64) {
         let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::Geo) else {
-            self.geo_hud_cache = None;
+            self.geo.hud_cache = None;
             return;
         };
         let g = self.live_geo();
@@ -21024,7 +20980,7 @@ impl Gfx {
         let (aspect, px_per_unit) = (ohf / owf.max(1.0), owf.max(1.0));
         // Layout and the id counter are not part of the geometry: dragging
         // a node across the canvas must not re-evaluate anything.
-        let same = self.geo_hud_cache.as_ref().is_some_and(|c| {
+        let same = self.geo.hud_cache.as_ref().is_some_and(|c| {
             c.seed == seed
                 && c.tick == tick
                 && c.aspect == aspect
@@ -21036,10 +20992,10 @@ impl Gfx {
                 && c.graph.nodes == g.nodes
         });
         if !same {
-            self.geo_hud_cache =
+            self.geo.hud_cache =
                 Some(GeoHudCache { graph: g, seed, tick, aspect, px_per_unit, field, geos: Vec::new() });
         }
-        let cache = self.geo_hud_cache.as_mut().unwrap();
+        let cache = self.geo.hud_cache.as_mut().unwrap();
         let targets = {
             let mut t: Vec<u64> = selected
                 .iter()
@@ -21090,7 +21046,7 @@ impl Gfx {
         let mut items = Vec::new();
         match self.dive.last().map(|d| d.kind) {
             Some(DiveKind::Geo) => {
-                let Some(cache) = self.geo_hud_cache.as_ref() else { return items };
+                let Some(cache) = self.geo.hud_cache.as_ref() else { return items };
                 for t in self.geo_hud_targets(&cache.graph, selected) {
                     if let Some((_, geo)) = cache.geos.iter().find(|(n, _)| *n == t) {
                         items.push((None, geo, None));
@@ -21223,7 +21179,7 @@ impl Gfx {
         {
             *slot = bake;
         }
-        self.geo_hud_cache = None;
+        self.geo.hud_cache = None;
         self.playback_dirty = true;
     }
 
@@ -21241,7 +21197,7 @@ impl Gfx {
         };
         let (pa, pb) = self.play_span();
         let title = path.file_stem().and_then(|s| s.to_str()).unwrap_or("wobble").to_owned();
-        let built = if self.geo_web_live {
+        let built = if self.geo.web_live {
             geo_web_live_setup(&self.egraph, node, pa, self.comp.output_size()).map(|(setup, w, h)| {
                 (
                     engine::geoweb::export_live_html(&title, &setup, GEOPLAYER_WASM, w, h, self.fps, pa as f32),
@@ -21259,10 +21215,10 @@ impl Gfx {
             )
         };
         let Some((html, what)) = built else {
-            self.geo_web_status = Some((node, "export failed: the node is gone".into()));
+            self.geo.web_status = Some((node, "export failed: the node is gone".into()));
             return;
         };
-        self.geo_web_status = Some((
+        self.geo.web_status = Some((
             node,
             match std::fs::write(&path, &html) {
                 Ok(()) => format!(
@@ -21308,7 +21264,7 @@ impl Gfx {
             {
                 slot.0 = None;
             }
-            self.geo_hud_cache = None;
+            self.geo.hud_cache = None;
             self.playback_dirty = true;
             return;
         }
@@ -21349,7 +21305,7 @@ impl Gfx {
             j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             self.seek_to(j.return_to);
         }
-        self.geo_hud_cache = None;
+        self.geo.hud_cache = None;
         self.playback_dirty = true;
     }
 
@@ -21405,7 +21361,7 @@ impl Gfx {
             // Follow the simulation: the newest frame is the one on screen.
             let t = (start + done as i64 - 1).max(0) as u64;
             self.seek_to(t);
-            self.geo_hud_cache = None;
+            self.geo.hud_cache = None;
             self.playback_dirty = true;
         }
     }
@@ -21511,7 +21467,7 @@ impl Gfx {
             Some(NodeKind::Geo(p)) => p.seed,
             _ => 0.0,
         };
-        if let Some((_, gg, geo)) = self.geo_onion_cache.iter().find(|(ff, gg, _)| *ff == f && *gg == g) {
+        if let Some((_, gg, geo)) = self.geo.onion_cache.iter().find(|(ff, gg, _)| *ff == f && *gg == g) {
             let _ = gg;
             return Some(geo.clone());
         }
@@ -21539,10 +21495,10 @@ impl Gfx {
         };
         let geo = engine::geo::eval(&g, &cx);
         // Keep the frames the skins are on now; the rest go.
-        self.geo_onion_cache.retain(|(ff, gg, _)| *gg == g && ff.abs_diff(f) < 64);
-        self.geo_onion_cache.push((f, g, geo.clone()));
-        if self.geo_onion_cache.len() > 32 {
-            self.geo_onion_cache.remove(0);
+        self.geo.onion_cache.retain(|(ff, gg, _)| *gg == g && ff.abs_diff(f) < 64);
+        self.geo.onion_cache.push((f, g, geo.clone()));
+        if self.geo.onion_cache.len() > 32 {
+            self.geo.onion_cache.remove(0);
         }
         Some(geo)
     }
@@ -21862,7 +21818,7 @@ impl Gfx {
         {
             slot.0 = Some(std::sync::Arc::new(b));
         }
-        self.geo_hud_cache = None;
+        self.geo.hud_cache = None;
         self.playback_dirty = true;
     }
 
@@ -22832,7 +22788,7 @@ impl Gfx {
     fn dive_out(&mut self) -> Result<(), String> {
         let Some(d) = self.dive.pop() else { return Ok(()) };
         if d.kind == DiveKind::Geo {
-            self.geo_hud_cache = None;
+            self.geo.hud_cache = None;
             let body = std::mem::replace(&mut self.egraph, d.graph);
             self.egraph.node_status_min = body.node_status_min;
             let geo = editor_to_geo(&body);
@@ -23805,8 +23761,8 @@ impl Gfx {
         let mut geo_edit_req: Option<u64> = None;
         // A Merge panel's noodle edits, written back after the panel.
         let mut merge_edit: Option<(u64, Vec<(usize, engine::geo::Layering)>)> = None;
-        let geo_web_msg = self.geo_web_status.clone();
-        let mut geo_web_live = self.geo_web_live;
+        let geo_web_msg = self.geo.web_status.clone();
+        let mut geo_web_live = self.geo.web_live;
         let mut extract_layers_req: Option<u64> = None;
         // Which Transforms in the rack have a SoftCrop upstream (the node
         // borrow below cannot ask).
@@ -26531,7 +26487,7 @@ impl Gfx {
         if let Some((id, bake)) = ragdoll_req {
             self.ragdoll_bake(id, !bake);
         }
-        self.geo_web_live = geo_web_live;
+        self.geo.web_live = geo_web_live;
         if let Some(id) = geo_web_req {
             self.export_geo_web(id);
         }

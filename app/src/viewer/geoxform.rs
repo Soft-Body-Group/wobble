@@ -20,7 +20,7 @@ impl Gfx {
         geo_handle_hot: &mut bool,
         ink: &mut ink::InkShapes,
     ) {
-        if self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo) && !hud_hide && self.geo_tool.is_none() {
+        if self.dive.last().is_some_and(|d| d.kind == DiveKind::Geo) && !hud_hide && self.geo.tool.is_none() {
             for node in selected.iter().copied() {
                 let Some(NodeKind::GeoNode(gk)) = self.live_kind(node, cur_t) else { continue };
                 // An inheriting Transform turns about what it is fed.
@@ -29,7 +29,7 @@ impl Gfx {
                         match self.egraph.input_of(node, 0) {
                             Some(src) => {
                                 self.geo_hud_refresh(&[src], owf, ohf, cur_t);
-                                self.geo_hud_cache
+                                self.geo.hud_cache
                                     .as_ref()
                                     .and_then(|c| c.geos.iter().find(|(n, _)| *n == src))
                                     .and_then(|(_, g)| g.centre())
@@ -61,7 +61,7 @@ impl Gfx {
                 }
                 let near = pointer_pos
                     .and_then(|p| handles.iter().find(|(_, h)| (*h - p).length() < 9.0).map(|(k, _)| *k));
-                let dragging = self.geo_xf_drag.as_ref().is_some_and(|d| d.node == node);
+                let dragging = self.geo.xf_drag.as_ref().is_some_and(|d| d.node == node);
                 *geo_handle_hot |= near.is_some() || dragging;
                 // Draw: ring, axes, handles (hovered ones highlight).
                 if fr.turns {
@@ -71,7 +71,7 @@ impl Gfx {
                 ink.seg(c, hy, 1.0, 0.8, false);
                 for (k, h) in &handles {
                     let hi = near == Some(*k)
-                        || self.geo_xf_drag.as_ref().is_some_and(|d| d.node == node && d.handle == *k);
+                        || self.geo.xf_drag.as_ref().is_some_and(|d| d.node == node && d.handle == *k);
                     if *k <= 1 {
                         ink.circle_fill(*h, 5.0, 0.9, hi);
                     } else {
@@ -86,12 +86,12 @@ impl Gfx {
                             Some(NodeKind::GeoNode(k)) => k.clone(),
                             _ => continue,
                         };
-                        self.geo_xf_drag = Some(GeoXfDrag { node, handle: k, origin: p, start, frame: fr, base });
+                        self.geo.xf_drag = Some(GeoXfDrag { node, handle: k, origin: p, start, frame: fr, base });
                     }
                 }
-                let Some(d) = self.geo_xf_drag.clone().filter(|d| d.node == node) else { continue };
+                let Some(d) = self.geo.xf_drag.clone().filter(|d| d.node == node) else { continue };
                 if !down {
-                    self.geo_xf_drag = None;
+                    self.geo.xf_drag = None;
                     continue;
                 }
                 let Some(p) = pointer_pos else { continue };

@@ -20,7 +20,7 @@ impl Gfx {
     ) {
         if in_geo && !hud_hide {
             let mut clicked: Option<GeoTool> = None;
-            let armed = self.geo_tool;
+            let armed = self.geo.tool;
             let swatch = self.geo_style_target().map(|(_, st)| (st.fill, st.stroke)).unwrap_or(([1.0; 4], [0.0; 4]));
             let mut spots = Vec::new();
             let resp = egui::Area::new(egui::Id::new("geo-tool-bar"))
@@ -79,24 +79,24 @@ impl Gfx {
                         }
                     });
                 });
-            self.geo_tool_bar = Some(resp.response.rect);
-            self.geo_tool_spots = spots;
+            self.geo.tool_bar = Some(resp.response.rect);
+            self.geo.tool_spots = spots;
             match clicked {
                 Some(GeoTool::Transform) => self.geo_tool_transform(),
                 Some(GeoTool::Direct) => self.geo_tool_edit(),
                 Some(GeoTool::Fill | GeoTool::StrokeColour) => self.geo_tool_style(),
                 Some(t @ (GeoTool::Line | GeoTool::Spline | GeoTool::Brush)) => {
-                    self.geo_tool = None;
+                    self.geo.tool = None;
                     let n = self.geo_tool_add(t.make());
                     self.geo_select(n);
                 }
-                Some(t) => self.geo_tool = if armed == Some(t) { None } else { Some(t) },
+                Some(t) => self.geo.tool = if armed == Some(t) { None } else { Some(t) },
                 None => {}
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.geo_tool = None;
+                self.geo.tool = None;
             }
-            let over_bar = pointer_pos.is_some_and(|p| self.geo_tool_bar.is_some_and(|b| b.contains(p)));
+            let over_bar = pointer_pos.is_some_and(|p| self.geo.tool_bar.is_some_and(|b| b.contains(p)));
             let s2g = |p: egui::Pos2| {
                 let q = pts_to_out(p);
                 [q.x / owf, q.y / owf]
@@ -104,18 +104,18 @@ impl Gfx {
             let (pressed, down) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
             let free = ui.input(|i| i.modifiers.ctrl);
             let px_scr = (out_to_pts(egui::vec2(owf, 0.0)) - out_to_pts(egui::vec2(0.0, 0.0))).x; // screen points per geo unit
-            if let Some(t) = self.geo_tool.filter(|_| self.geo_tool_drag.is_none()) {
+            if let Some(t) = self.geo.tool.filter(|_| self.geo.tool_drag.is_none()) {
                 *geo_handle_hot = true; // the press is the tool's
                 if let Some(p) = pointer_pos.filter(|p| pressed && rect.contains(*p) && !over_bar) {
                     let at = self.geo_snap(s2g(p), owf, px_scr, None, free).0;
                     let n = self.geo_tool_add(geo_tool_place(t.make(), at, at));
                     self.geo_select(n);
-                    self.geo_tool_drag = Some((n, at));
+                    self.geo.tool_drag = Some((n, at));
                 }
             }
-            if let Some((n, at)) = self.geo_tool_drag {
+            if let Some((n, at)) = self.geo.tool_drag {
                 *geo_handle_hot = true;
-                if let (Some(p), Some(t)) = (pointer_pos, self.geo_tool) {
+                if let (Some(p), Some(t)) = (pointer_pos, self.geo.tool) {
                     let to = self.geo_snap(s2g(p), owf, px_scr, Some(n), free).0;
                     let moved = ((to[0] - at[0]).powi(2) + (to[1] - at[1]).powi(2)).sqrt() > 3.0 / owf;
                     let k = if moved { geo_tool_place(t.make(), at, to) } else { geo_tool_place(t.make(), at, at) };
@@ -125,8 +125,8 @@ impl Gfx {
                     self.playback_dirty = true;
                 }
                 if !down {
-                    self.geo_tool_drag = None;
-                    self.geo_tool = None;
+                    self.geo.tool_drag = None;
+                    self.geo.tool = None;
                 }
             }
         }

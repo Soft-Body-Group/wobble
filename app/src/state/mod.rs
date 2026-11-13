@@ -4,3 +4,5 @@ mod test;
 pub(crate) use test::SuiteState;
 mod brush;
 pub(crate) use brush::BrushState;
+mod geo;
+pub(crate) use geo::GeoUiState;
