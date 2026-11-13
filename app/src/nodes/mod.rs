@@ -71,6 +71,7 @@ pub mod vectorblur;
 pub mod vectorwarp;
 pub mod todata;
 pub mod torgba;
+pub mod switch;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
