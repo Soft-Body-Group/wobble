@@ -10,6 +10,7 @@ mod curveedit;
 mod curves;
 mod dual;
 mod eyedrop;
+mod focus;
 mod frames;
 mod gizmokey;
 mod harp;
