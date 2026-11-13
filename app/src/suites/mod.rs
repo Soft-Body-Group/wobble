@@ -17,6 +17,7 @@ mod dual;
 mod eyedrop;
 mod focus;
 mod frames;
+mod geo;
 mod geotools;
 mod gizmokey;
 mod grow;
