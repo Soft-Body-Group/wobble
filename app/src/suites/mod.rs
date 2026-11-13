@@ -23,6 +23,7 @@ mod frames;
 mod geo;
 mod geotools;
 mod gizmokey;
+mod gridwarp;
 mod grow;
 mod harp;
 mod inout;
