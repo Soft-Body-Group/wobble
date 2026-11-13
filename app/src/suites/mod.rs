@@ -6,3 +6,4 @@ mod eyedrop;
 mod shot;
 mod slice;
 mod subwob;
+mod viewlock;
