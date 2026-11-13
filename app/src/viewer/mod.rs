@@ -19,3 +19,4 @@ mod geoxform;
 mod paintcursor;
 mod spline;
 mod cornerpin;
+mod pathedit;
