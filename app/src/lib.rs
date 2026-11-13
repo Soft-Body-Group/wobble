@@ -5866,14 +5866,7 @@ struct Gfx {
     redo_stack: Vec<EditorGraph>,
     /// The graph as of the last recorded history step.
     undo_last: EditorGraph,
-    help_open: bool,
-    /// The pointer is over the hotkeys window: a key pressed there finds
-    /// its row instead of firing (last frame's answer, read by the hotkeys).
-    help_hover: bool,
-    /// Where the hotkeys window is (suites aim at it).
-    help_rect: Option<egui::Rect>,
-    /// The hotkeys row a key press jumped to: (key, which match, row, when).
-    help_jump: Option<(egui::Key, usize, usize, Instant)>,
+    help: state::HelpState,
     /// The keys… window (hotkey remapper): open flag + capture state.
     keys_ui: keymap::KeysUi,
     /// The colours… window (UI theme).
@@ -7990,10 +7983,12 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         dope_view: false,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
-        help_open: false,
-        help_hover: false,
-        help_rect: None,
-        help_jump: None,
+        help: state::HelpState {
+            open: false,
+            hover: false,
+            rect: None,
+            jump: None,
+        },
         keys_ui: keymap::KeysUi::default(),
         theme_ui: theme::ThemeUi::default(),
         bottom: BottomTab::Properties,
@@ -15295,7 +15290,7 @@ impl Gfx {
             && !rgbslider::grabbing(&ctx)
             && !keymap::capturing()
             && self.setup_browser.is_none()
-            && !(self.help_open && self.help_hover)
+            && !(self.help.open && self.help.hover)
         {
             use keymap::Act;
             let chan_key = ctx.input(|i| {
@@ -15781,7 +15776,7 @@ impl Gfx {
                         ui.close();
                     }
                     if ui.button("hotkeys").clicked() {
-                        self.help_open = !self.help_open;
+                        self.help.open = !self.help.open;
                         ui.close();
                     }
                 });
@@ -16105,8 +16100,8 @@ impl Gfx {
                 }
             }
         }
-        if self.help_open {
-            let mut open = self.help_open;
+        if self.help.open {
+            let mut open = self.help.open;
             // The key column reads the LIVE keymap, so a remapped key shows
             // what it really is (keys… in the menubar moves them). Gesture
             // rows stay literal.
@@ -16220,7 +16215,7 @@ impl Gfx {
             ];
             // A key pressed over the window jumps to the row that uses it;
             // the same key again walks on to the next such row.
-            let pressed = if self.help_hover && !ctx.egui_wants_keyboard_input() {
+            let pressed = if self.help.hover && !ctx.egui_wants_keyboard_input() {
                 ctx.input(|i| {
                     i.events.iter().find_map(|e| match e {
                         egui::Event::Key { key, pressed: true, repeat: false, .. } => Some(*key),
@@ -16234,15 +16229,15 @@ impl Gfx {
             if let Some(k) = pressed {
                 let hits = help_key_rows(rows.iter().map(|(l, _)| l.as_str()), k);
                 if !hits.is_empty() {
-                    let n = match self.help_jump {
+                    let n = match self.help.jump {
                         Some((was, n, _, _)) if was == k => (n + 1) % hits.len(),
                         _ => 0,
                     };
-                    self.help_jump = Some((k, n, hits[n], Instant::now()));
+                    self.help.jump = Some((k, n, hits[n], Instant::now()));
                     scroll_to = Some(hits[n]);
                 }
             }
-            let lit = self.help_jump.filter(|j| j.3.elapsed().as_secs_f32() < 2.0).map(|j| j.2);
+            let lit = self.help.jump.filter(|j| j.3.elapsed().as_secs_f32() < 2.0).map(|j| j.2);
             let hl = ctx.global_style().visuals.selection.bg_fill;
             let shown = egui::Window::new("hotkeys").open(&mut open).resizable(false).show(
                 &ctx,
@@ -16276,12 +16271,12 @@ impl Gfx {
             if lit.is_some() {
                 ctx.request_repaint();
             }
-            self.help_hover = shown.as_ref().is_some_and(|r| r.response.contains_pointer());
-            self.help_rect = shown.map(|r| r.response.rect);
-            self.help_open = open;
+            self.help.hover = shown.as_ref().is_some_and(|r| r.response.contains_pointer());
+            self.help.rect = shown.map(|r| r.response.rect);
+            self.help.open = open;
         } else {
-            self.help_hover = false;
-            self.help_rect = None;
+            self.help.hover = false;
+            self.help.rect = None;
         }
         // The keys… window (hotkey remapper). A changed binding goes
         // into prefs at once — a remap must survive a crash.

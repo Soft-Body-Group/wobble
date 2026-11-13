@@ -277,12 +277,12 @@ impl Gfx {
                 }
                 // The hotkeys window: a key pressed over it finds its row
                 // and does NOT do what it is bound to.
-                self.help_open = true;
+                self.help.open = true;
                 next = 118;
             }
-            118 if self.help_rect.is_none() || !self.layout_settled() => {}
+            118 if self.help.rect.is_none() || !self.layout_settled() => {}
             118 => {
-                let r = self.help_rect.unwrap();
+                let r = self.help.rect.unwrap();
                 raw.events.push(egui::Event::PointerMoved(r.center()));
                 next = 119;
             }
@@ -295,11 +295,11 @@ impl Gfx {
                     fail(format!("Q over the hotkeys window fired: {:?}", self.viewer_mode));
                 }
                 let want = keymap::label(&self.egui_ctx, Act::FullscreenPane);
-                match self.help_jump {
+                match self.help.jump {
                     Some((egui::Key::Q, 0, row, _)) if row == 0 => {}
                     j => fail(format!("Q over the hotkeys window jumped to {j:?}, not the {want} row")),
                 }
-                self.help_open = false;
+                self.help.open = false;
                 println!(
                     "KEYMAP TEST PASS: a rebind is honoured live (old key inert, new \
                      key fires), the keys window's capture takes a real key event and \

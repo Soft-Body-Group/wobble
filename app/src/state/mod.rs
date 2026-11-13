@@ -22,3 +22,5 @@ mod cache;
 pub(crate) use cache::CacheUiState;
 mod curve;
 pub(crate) use curve::CurveEditState;
+mod help;
+pub(crate) use help::HelpState;
