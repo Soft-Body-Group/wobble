@@ -31305,53 +31305,24 @@ impl Gfx {
                         }
                     }
                     NodeKind::SoftCrop(p) if tab == "bake" => {
-                        // The Crop's own bake: the Bake node's machinery on
-                        // the Crop itself (`editor::lower_crop_bakes`).
-                        let clicks = bake_rows(ui, &BakeRows {
-                            running: self
-                                .graph_bake
-                                .as_ref()
-                                .filter(|b| b.node == key)
-                                .map(|b| (b.next, b.len)),
-                            playing: self.loaded.get(&key).map(|l| {
-                                (l.seq.proxy, l.seq.frames.len(), l.seq.info.width, l.seq.info.height)
-                            }),
-                            current: gb_current,
-                            on_disk: gb_target.is_some(),
-                            half_waiting: self.proxy >= 1.0
-                                && gb_proxy_dir.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-                            proxy_on: self.proxy < 1.0,
-                            can_bake: gb_key.is_some(),
-                        });
-                        if clicks.bake {
-                            if p.bake.is_none() {
-                                // First bake: the Crop takes a reader slot,
-                                // and the bake starts once the rig has
-                                // rebuilt around it (the Paint precedent).
-                                p.bake = Some(self.next_read_slot);
-                                self.next_read_slot += 1;
-                                self.playback_dirty = true;
-                                self.auto_bake = Some((key, 6));
-                            } else {
-                                graph_bake_click = true;
-                            }
-                        }
-                        if clicks.clear {
-                            // Back to the plain Crop it was: no slot, nothing lowered.
-                            p.bake = None;
-                            graph_bake_clear = true;
-                        }
-                        graph_bake_cancel |= clicks.cancel;
-                        if let Some(e) = self.load_errors.get(&key) {
-                            ui.colored_label(theme::error(), e);
-                        }
-                        ui.weak(match p.mode() {
-                            engine::graph::CropMode::Crop => {
-                                "stores only the box, played back where it sits"
-                            }
-                            engine::graph::CropMode::Reformat => "stores the box's format",
-                            engine::graph::CropMode::BoundingBox => "stores the whole frame",
-                        });
+                        nodes::softcropbake::panel(ui, nodes::softcropbake::Cx {
+                                p,
+                                key,
+                                gb_current,
+                                gb_key,
+                                gb_proxy_dir: &gb_proxy_dir,
+                                gb_target: &gb_target,
+                                playback_dirty: &mut self.playback_dirty,
+                                auto_bake: &mut self.auto_bake,
+                                next_read_slot: &mut self.next_read_slot,
+                                proxy: self.proxy,
+                                loaded: &self.loaded,
+                                load_errors: &self.load_errors,
+                                graph_bake: &self.graph_bake,
+                                graph_bake_cancel: &mut graph_bake_cancel,
+                                graph_bake_clear: &mut graph_bake_clear,
+                                graph_bake_click: &mut graph_bake_click,
+                            });
                     }
                     NodeKind::SoftCrop(p) => {
                         if let Some(h) = nodes::softcrop::panel(ui, &mut rcx, p) {
