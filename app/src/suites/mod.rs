@@ -11,6 +11,7 @@ mod frames;
 mod inout;
 mod layer;
 mod paint;
+mod picker;
 mod range;
 mod record;
 mod shot;
