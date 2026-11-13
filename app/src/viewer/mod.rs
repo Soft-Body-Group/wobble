@@ -17,3 +17,4 @@ mod geotools;
 mod geogradient;
 mod geoxform;
 mod paintcursor;
+mod spline;
