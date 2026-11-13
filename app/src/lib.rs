@@ -30892,38 +30892,25 @@ impl Gfx {
                         });
                     }
                     NodeKind::Layer(lp) => {
-                        // The whole panel lives in layerui, because the
-                        // pop-out window draws exactly the same thing.
-                        if let Some((comp, names, lens)) = &layer_meta {
-                            let o = layerui::panel(
-                                ui,
+                        if let Some(h) = nodes::layer::panel(ui, &mut rcx, nodes::layer::Cx {
                                 lp,
-                                &mut rcx,
-                                node,
-                                layer_sel_now,
-                                names,
-                                lens,
-                                *comp,
                                 cur_t,
-                                minibar::Ranges {
-                                    comp: script,
-                                    node: (comp.0 as i64, comp.1 as i64),
-                                    inout: self.play_range.map(|(a, b)| (a as i64, b as i64)),
-                                },
+                                node,
                                 blend_res,
-                                self.comp.output_size().unwrap_or((1920, 1080)),
                                 global_fmt,
-                                true,
-                            );
-                            layer_act = o.action;
-                            layer_changed |= o.changed;
-                            layer_bars = Some(o.bars);
-                            layer_add = o.add;
-                            layer_del = o.del;
-                            layer_popout = o.popout;
-                            if o.hud.is_some() {
-                                hud_drag_out = o.hud;
-                            }
+                                layer_meta: &layer_meta,
+                                layer_sel_now,
+                                script,
+                                play_range: &mut self.play_range,
+                                compositor: &self.comp,
+                                layer_act: &mut layer_act,
+                                layer_add: &mut layer_add,
+                                layer_bars: &mut layer_bars,
+                                layer_changed: &mut layer_changed,
+                                layer_del: &mut layer_del,
+                                layer_popout: &mut layer_popout,
+                            }) {
+                            hud_drag_out = Some(h);
                         }
                     }
                     NodeKind::Transform(t) => {
