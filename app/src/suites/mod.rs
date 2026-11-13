@@ -44,6 +44,7 @@ mod range;
 mod record;
 mod region;
 mod rgb;
+mod roto;
 mod scrub;
 mod scrubfid;
 mod scrubperf;
