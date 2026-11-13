@@ -6,6 +6,7 @@ mod bin;
 mod blender;
 mod blendnav;
 mod r#box;
+mod browser;
 mod cachemeter;
 mod channels;
 mod colourkey;
