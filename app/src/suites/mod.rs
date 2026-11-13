@@ -31,6 +31,7 @@ mod keymap;
 mod layer;
 mod magnet;
 mod mblur;
+mod mswipe;
 mod nodepack;
 mod nodeux;
 mod noise;
