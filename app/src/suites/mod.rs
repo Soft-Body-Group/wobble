@@ -66,6 +66,7 @@ mod tv;
 mod viewlock;
 mod viewpie;
 mod viewswitch;
+mod warp;
 mod write;
 mod zones;
 mod zoom;
