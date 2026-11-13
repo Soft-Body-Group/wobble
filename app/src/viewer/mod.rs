@@ -26,3 +26,4 @@ mod hudsliders;
 mod cryptopick;
 mod eyedroppick;
 mod focuspick;
+mod keyersample;
