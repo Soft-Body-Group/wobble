@@ -7,6 +7,7 @@ mod eyedrop;
 mod frames;
 mod inout;
 mod layer;
+mod range;
 mod record;
 mod shot;
 mod slice;
