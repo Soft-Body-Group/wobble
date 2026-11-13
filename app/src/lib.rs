@@ -30043,48 +30043,9 @@ impl Gfx {
                         ui.weak("iteration 0). wire it into the loop's body.");
                     }
                     NodeKind::LoopOut(lp) => {
-                        let h = widgets::drags(
-                            ui,
-                            &mut rcx,
-                            "iterations",
-                            &mut [&mut lp.n],
-                            0.25,
-                            (1.0, engine::graph::LOOP_MAX),
-                            &[anim::Channel::LoopN],
-                        );
-                        if h.is_some() {
-                            hud_drag_out = h;
+                        if let Some(h) = nodes::loopout::panel(ui, &mut rcx, lp, loop_state) {
+                            hud_drag_out = Some(h);
                         }
-                        // Say exactly what will run. The engine degrades a
-                        // loop it cannot iterate; the panel must not let
-                        // that pass silently.
-                        if loop_state == Some(0) {
-                            ui.weak(format!(
-                                "runs the body {}x per frame (a full pass each — \
-                                 watch the cost)",
-                                lp.n.round().clamp(1.0, engine::graph::LOOP_MAX)
-                            ));
-                        } else if loop_state == Some(1) {
-                            ui.colored_label(
-                                theme::error(),
-                                "no LoopIn paired — body runs ONCE",
-                            );
-                            ui.weak(
-                                "drag a wire from a downstream output back into an \
-                                 upstream input and the pair is made for you",
-                            );
-                        } else {
-                            ui.colored_label(
-                                theme::error(),
-                                "a pass node (blur/glow/…) sits between LoopIn and \
-                                 here — body runs ONCE",
-                            );
-                            ui.weak(
-                                "a pass can only run once a frame; keep the tap's \
-                                 chain pointwise (grade, transform, merge, distort)",
-                            );
-                        }
-                        ui.weak("input 1 seeds iteration 0; unwired = transparent");
                     }
                     NodeKind::Switch(sw) => {
                         if let Some(h) = nodes::switch::panel(ui, &mut rcx, sw) {
