@@ -8,6 +8,7 @@ mod compose;
 mod cost;
 mod curveedit;
 mod curves;
+mod dpx;
 mod dual;
 mod eyedrop;
 mod focus;
