@@ -6,6 +6,7 @@ mod bin;
 mod blender;
 mod r#box;
 mod cachemeter;
+mod channels;
 mod colourkey;
 mod compose;
 mod cost;
