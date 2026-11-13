@@ -106,6 +106,7 @@ pub mod layer;
 pub mod graphbake;
 pub mod softcropbake;
 pub mod field;
+pub mod geo;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
