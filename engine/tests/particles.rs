@@ -210,6 +210,28 @@ fn a_look_edit_redraws_without_simulating_and_nothing_recompiles() {
     assert_eq!(g.topology_hash(), g3.topology_hash());
 }
 
+/// A comp that starts at 1001 with the sim starting at 1 is a thousand
+/// steps on the first frame. That must be a handful of passes (Metal
+/// refuses a 4097th outstanding command buffer), a bounded number of
+/// checkpoints, and the same pixels as playing there.
+#[test]
+fn a_long_catch_up_is_a_few_passes_and_lands_on_the_same_frame() {
+    let Some(ctx) = ctx() else { return };
+    let g = alone(fountain(W, H), W, H);
+    let mut jumped = Compositor::new(ctx.device.clone(), ctx.queue.clone(), 1);
+    let cold = frame(&ctx, &mut jumped, &at(g.clone(), 1000.0), W, H);
+    let (_, steps, cks) = jumped.particle_layer_state(1).unwrap();
+    assert_eq!(steps, 1000);
+    assert!(cks.len() <= 33, "a long catch-up checkpoints coarsely: {}", cks.len());
+    assert!(cks.iter().all(|k| k % 8 == 0));
+    let mut played = Compositor::new(ctx.device.clone(), ctx.queue.clone(), 1);
+    let mut last = Vec::new();
+    for t in (0..=1000).step_by(7).chain([1000]) {
+        last = frame(&ctx, &mut played, &at(g.clone(), t as f32), W, H);
+    }
+    assert_eq!(cold, last);
+}
+
 /// The corona preset scaled into a 320 canvas: (params, centre, radius).
 fn small_corona(sphere: f32, occlude: bool) -> (ParticlesParams, [f32; 2], f32) {
     let (cx, cy, r) = (160.0f32, 160.0f32, 80.0f32);

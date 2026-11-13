@@ -830,6 +830,12 @@ README has the user story. What must stay true:
   thousand-frame catch-up is one encoder, and two sims in one submit can't
   clobber each other's frame number. The table (`Compiled::sim`) is
   written only when `sim_hash` changes, and that also resets the state.
+- **A run of steps is ONE compute pass.** wgpu spends a backend command
+  buffer per pass and Metal treats the 4097th outstanding one as device
+  lost: a pass per step crashed the Mac on a comp whose playhead sat a
+  thousand frames past `start`. `ParticleRaster::run` alternates step and
+  tick inside one pass; the pass breaks only for a checkpoint copy, and a
+  long catch-up checkpoints coarsely (at most ~32 breaks).
 - **Checkpoints thin, never truncate.** Every `interval` (8) frames from
   the origin, under `CHECKPOINT_BUDGET` per node; over budget the interval
   doubles and odd checkpoints go. A node too big for one checkpoint still

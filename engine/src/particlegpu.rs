@@ -702,6 +702,26 @@ impl ParticleRaster {
         pass.dispatch_workgroups(n, 1, 1);
     }
 
+    /// `n` frames of simulation in ONE compute pass: step, tick, step,
+    /// tick… (dispatches in a pass run in order).
+    fn run(&self, encoder: &mut wgpu::CommandEncoder, layer: &ParticleLayer, groups: u32, n: u64) {
+        let Some(bind) = &layer.sim_bind else { return };
+        if n == 0 {
+            return;
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("particles-sim"),
+            timestamp_writes: None,
+        });
+        pass.set_bind_group(0, bind, &[]);
+        for _ in 0..n {
+            pass.set_pipeline(&self.step);
+            pass.dispatch_workgroups(groups, 1, 1);
+            pass.set_pipeline(&self.tick);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+    }
+
     /// Keep a checkpoint of frame `f`, thinning the set to fit the budget.
     fn checkpoint(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, layer: &mut ParticleLayer, f: i64) {
         let bytes = layer.state_bytes();
@@ -756,12 +776,24 @@ impl ParticleRaster {
                         layer.origin
                     }
                 };
+                // Every pass costs the backend a command buffer (Metal
+                // gives up at 4096 outstanding), so a run of steps is ONE
+                // pass, broken only to copy a checkpoint aside — and a
+                // long catch-up checkpoints more coarsely, so it breaks
+                // at most ~32 times however far it has to go.
+                let mut coarse = layer.interval.max(1);
+                while (t - cur) / coarse > 32 {
+                    coarse *= 2;
+                }
                 while cur < t {
-                    self.dispatch(encoder, layer, &self.step, groups);
-                    self.dispatch(encoder, layer, &self.tick, 1);
-                    cur += 1;
-                    layer.last_steps += 1;
-                    self.checkpoint(device, encoder, layer, cur);
+                    let next = layer.origin + ((cur - layer.origin).div_euclid(coarse) + 1) * coarse;
+                    let end = next.min(t);
+                    self.run(encoder, layer, groups, (end - cur) as u64);
+                    layer.last_steps += (end - cur) as u64;
+                    cur = end;
+                    if cur == next {
+                        self.checkpoint(device, encoder, layer, cur);
+                    }
                 }
                 layer.at = Some(t);
             }
