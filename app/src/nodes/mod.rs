@@ -80,6 +80,7 @@ pub mod channelselect;
 pub mod read;
 pub mod shader;
 pub mod tomatte;
+pub mod mult;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.
