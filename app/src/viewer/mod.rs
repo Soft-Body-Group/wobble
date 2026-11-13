@@ -8,3 +8,4 @@ mod camtrack;
 mod planar;
 mod tracker;
 mod geoviz;
+mod geohud;
