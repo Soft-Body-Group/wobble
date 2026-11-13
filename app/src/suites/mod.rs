@@ -9,6 +9,7 @@ mod cachemeter;
 mod colourkey;
 mod compose;
 mod cost;
+mod cpick;
 mod curveedit;
 mod curves;
 mod dpx;
