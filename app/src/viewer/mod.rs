@@ -24,3 +24,4 @@ mod transform;
 mod hudchips;
 mod hudsliders;
 mod cryptopick;
+mod eyedroppick;
