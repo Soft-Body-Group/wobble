@@ -126,7 +126,7 @@ templates:
    COPY of every glyph: add the node to `colors/src/glyphs.rs` (`Icon`,
    `NODES`, the arm in `body` — copy the shape code verbatim).
    `glyph_parity` fails, naming the node, until the copy matches.
-   `main.rs` — the `properties_ui` arm (four lines: call `panel`, keep its
+   `lib.rs` — the `properties_ui` arm (four lines: call `panel`, keep its
    HUD slider); `node_resolution` only if the node declares its own
    format (a generator or a Reformat).
    `widgets.rs::tiles_for` — one arm; `panel_tabs` only if the panel is

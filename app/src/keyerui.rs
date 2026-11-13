@@ -129,7 +129,7 @@ pub struct SampleDrag {
     pub ended: bool,
 }
 
-/// Everything the keyer needs from the app shell, in one field so `main.rs`
+/// Everything the keyer needs from the app shell, in one field so `lib.rs`
 /// carries one member and four call sites.
 #[derive(Default)]
 pub struct KeyerState {

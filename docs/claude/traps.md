@@ -12,7 +12,7 @@
 - **`report.rs` / `report_win.rs` must stay warning-free on all three
   OSes** (CI's `-D warnings`), and Windows-only code cannot be built for
   Windows on this Mac (C deps). Check it in a scratch crate that `#[path]`s
-  both files in, calls them the way `main.rs` does, and stubs `wgpu`
+  both files in, calls them the way `lib.rs` does, and stubs `wgpu`
   (only `AdapterInfo`) + `ureq` (`default-features = false`):
   `WOBBLE_GIT=x WOBBLE_STAMP=0 RUSTFLAGS="-D warnings" cargo check --offline
   --target x86_64-pc-windows-msvc` (and the linux + darwin targets). The

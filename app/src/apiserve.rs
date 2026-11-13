@@ -16,7 +16,7 @@
 //!   cable-driven one is refused, as the gizmos refuse them.
 //!
 //! This is `impl Gfx` (the app state) from a child module, so it reads the app's private
-//! state without main.rs growing another thousand lines.
+//! state without lib.rs growing another thousand lines.
 
 use crate::anim::{self, Channel};
 use crate::editor::{self, EditorGraph, ModKind, PDst, PSrc};

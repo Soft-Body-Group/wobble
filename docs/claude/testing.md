@@ -98,12 +98,17 @@ What each covers, so you know what to re-run:
 
 ### Adding a suite
 
-A flag has to be registered in **seven** places in `main.rs` — miss one and
+A flag has to be registered in **seven** places in `lib.rs` — miss one and
 it fails in a way that looks like anything but a missing registration:
 `Options` field, its initialiser, the `--test-x` arm of the arg parser,
 `any_test()`, the `test_x` state field, its initialiser, and the
 `drive_test_x()` call in the frame loop. Add it to the `options_tests` table
 too, which is what catches the `any_test()` omission.
+
+The driver itself is NOT in `lib.rs`: `fn drive_test_x` lives in
+`app/src/suites/x.rs` (an `impl Gfx` block, `use crate::*;`), with one
+`mod x;` line in `app/src/suites/mod.rs`. Helpers a suite shares with the
+app stay where they are.
 
 ### Rules for suites
 

@@ -749,7 +749,7 @@
   Deliberately NOT slots: anything that IS data — rgb lanes and tints,
   swatches and picker gradients, plugin manifest colours, user-picked
   region/backdrop colours, cryptomatte ids, band tints — and the viewer's
-  image-adaptive HUD ink (`ink.rs` and the main.rs greys that mirror it).
+  image-adaptive HUD ink (`ink.rs` and the lib.rs greys that mirror it).
   With nothing overridden every slot is its old literal, and
   `theme::tests::default_visuals_are_egui_dark` pins egui's look.
 

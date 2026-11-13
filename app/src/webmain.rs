@@ -1,6 +1,6 @@
 //! The browser build's glue (`web/`): what start-up and the event loop do
 //! differently when wobble runs on WebGPU inside a page. Everything here is
-//! wasm32-only; main.rs reaches it from a handful of cfg-gated lines.
+//! wasm32-only; lib.rs reaches it from a handful of cfg-gated lines.
 //!
 //! What a page changes, and where it is answered:
 //! - **No blocking.** The adapter and device resolve on the JS event loop,

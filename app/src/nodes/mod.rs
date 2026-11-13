@@ -2,7 +2,7 @@
 //! glyph and its channel bindings. The engine half — params, WGSL, the
 //! facts the graph needs — is `engine::nodes`, one file with the same name.
 //!
-//! Same rule as there: `NodeKind` dispatches, and the arms in `main.rs`,
+//! Same rule as there: `NodeKind` dispatches, and the arms in `lib.rs`,
 //! `editor.rs`, `anim.rs`, `curves.rs` and `widgets.rs` are one-liners
 //! into here. The `Channel` variants themselves stay in `anim.rs` — one
 //! flat enum, because a channel's NAME is what a patch cable and a setup

@@ -174,7 +174,7 @@ spent a long stretch documented here as a deadlock it never had.
 **Under test the loop is unpaced, so a frame count is not a duration**: any suite waiting on real time must time out on an `Instant`. Suites also: are listed in `Options::any_test()` (hermetic, default prefs, never save prefs), aim at controls through `widgets::note_rect` and check the clip, anchor gestures to a settled layout and to the PRESS point, set `raw.modifiers` every frame of a chord, and gate on state, not throughput.
 
 Suites, what each covers, and the rules for writing one: [docs/claude/testing.md](docs/claude/testing.md).
-**Adding a suite** means registering the flag in SEVEN places in `main.rs` (see testing.md). **Adding a node / model / weights**: [docs/claude/recipes.md](docs/claude/recipes.md) — one `CATALOG` row per file with sha256 pinned, declare in `NodeKind::models()`, load only via `models::ready_path`, missing weights = passthrough, nothing downloads without a click; a built-in node is two files (`engine/src/nodes/<n>.rs`, `app/src/nodes/<n>.rs`) plus one-line arms, and the add menus come from `editor::node_catalog()` alone.
+**Adding a suite** means registering the flag in SEVEN places in `lib.rs` (see testing.md). **Adding a node / model / weights**: [docs/claude/recipes.md](docs/claude/recipes.md) — one `CATALOG` row per file with sha256 pinned, declare in `NodeKind::models()`, load only via `models::ready_path`, missing weights = passthrough, nothing downloads without a click; a built-in node is two files (`engine/src/nodes/<n>.rs`, `app/src/nodes/<n>.rs`) plus one-line arms, and the add menus come from `editor::node_catalog()` alone.
 Check wasm with `cargo check -p app --target wasm32-unknown-unknown` (no threads, no blocking, no `std::time`, no filesystem in a page — see testing.md).
 
 ## Invariants worth protecting (headlines)
@@ -349,7 +349,9 @@ codegen prelude splices in), `nodes/` (one file per built-in node — see
 tagged EXR writer every subtree render lands through), `sdf.rs` (the SDF
 sub-graph: shapes as distances, ops, effects, compiled into the fused pass).
 
-`app/`: `main.rs` (shell, viewer, properties, suites — large), `editor.rs`
+`app/`: `lib.rs` (shell, viewer, properties — large, and known debt: see
+CONTRIBUTING.md; `main.rs` is only `app::run()`), `suites/` (one file per
+`--test-*` driver), `editor.rs`
 (node graph, patch model), `widgets.rs` (tile/row widgets), `curves.rs`
 (curve editor), `wheels.rs` (grade wheels), `browser.rs` (sequence browser),
 `anim.rs` (channels, curves), `exprs.rs` (patch expression language),
