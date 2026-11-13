@@ -8,7 +8,7 @@ impl Gfx {
     /// check that what was authored is what renders. The conversions have
     /// their own unit tests; this is the machinery around them.
     pub(crate) fn drive_test_noise(&mut self) {
-        let Some((stage, mut frames, nid)) = self.test_noise else { return };
+        let Some((stage, mut frames, nid)) = self.test.noise else { return };
         frames += 1;
         if frames > 900 {
             println!("NOISE TEST FAIL: timeout at stage {stage}");
@@ -25,7 +25,7 @@ impl Gfx {
                     println!("NOISE TEST FAIL: could not open the node: {e}");
                     std::process::exit(1);
                 }
-                self.test_noise = Some((1, 0, id));
+                self.test.noise = Some((1, 0, id));
                 return;
             }
             // Inside: build a field whose fBm scale is driven by a Coord,
@@ -138,6 +138,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_noise = Some((next, if next == stage { frames } else { 0 }, nid));
+        self.test.noise = Some((next, if next == stage { frames } else { 0 }, nid));
     }
 }

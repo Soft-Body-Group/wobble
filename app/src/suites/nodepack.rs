@@ -9,7 +9,7 @@ impl Gfx {
     /// format actually drives the output resolution, and that a TimeOffset
     /// moves which source frame the reader decodes.
     pub(crate) fn drive_test_nodepack(&mut self) {
-        let Some((stage, mut frames, chain)) = self.test_nodepack else { return };
+        let Some((stage, mut frames, chain)) = self.test.nodepack else { return };
         // `frames` counts frames IN THIS STAGE, reset on every advance: a
         // global counter would make every later `frames > N` already true
         // after a slow first load, and the whole state machine would run in
@@ -37,7 +37,7 @@ impl Gfx {
                 );
                 self.egraph.connect(un, 0, 0); // Read A
                 self.egraph.view = Some(un);
-                self.test_nodepack = Some((1, 0, un));
+                self.test.nodepack = Some((1, 0, un));
                 return;
             }
             // The chain must render, and must not be black.
@@ -65,7 +65,7 @@ impl Gfx {
                 );
                 self.egraph.connect(rf, 0, chain);
                 self.egraph.view = Some(rf);
-                self.test_nodepack = Some((3, 0, rf));
+                self.test.nodepack = Some((3, 0, rf));
                 return;
             }
             3 if frames > 60 => {
@@ -108,7 +108,7 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 self.egraph.view = Some(gm);
-                self.test_nodepack = Some((31, 0, chain));
+                self.test.nodepack = Some((31, 0, chain));
                 return;
             }
             31 if frames > 60 => {
@@ -140,7 +140,7 @@ impl Gfx {
                     egui::pos2(560.0, 0.0),
                 );
                 self.egraph.view = Some(grid);
-                self.test_nodepack = Some((5, 0, grid));
+                self.test.nodepack = Some((5, 0, grid));
                 return;
             }
             5 if frames > 60 => {
@@ -180,7 +180,7 @@ impl Gfx {
                 self.egraph.connect(mg, 0, off);
                 self.egraph.connect(mg, 1, 0); // the same Read, un-retimed
                 self.egraph.view = Some(mg);
-                self.test_nodepack = Some((7, 0, off));
+                self.test.nodepack = Some((7, 0, off));
                 return;
             }
             7 if frames > 60 => {
@@ -212,7 +212,7 @@ impl Gfx {
                     // Park the playhead mid-timeline, paused.
                     self.playing = false;
                     self.seek_to(7);
-                    self.test_nodepack = Some((8, 0, chain));
+                    self.test.nodepack = Some((8, 0, chain));
                     return;
                 }
                 if frames > 400 {
@@ -235,7 +235,7 @@ impl Gfx {
                     p.offset = 9;
                 }
                 // `chain` becomes the displayed-total mark from here on.
-                self.test_nodepack = Some((9, 0, shown));
+                self.test.nodepack = Some((9, 0, shown));
                 return;
             }
             9 => {
@@ -275,6 +275,6 @@ impl Gfx {
             _ => {}
         }
         let frames = if next == stage { frames } else { 0 };
-        self.test_nodepack = Some((next, frames, chain));
+        self.test.nodepack = Some((next, frames, chain));
     }
 }

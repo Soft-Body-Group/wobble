@@ -6,7 +6,7 @@ impl Gfx {
     /// --test-mswipe driver. See `Options::test_mswipe`. Default graph:
     /// Read A 0, Read B 1, Transform 2 (A's chain), Grade 3, Blend 4.
     pub(crate) fn drive_test_mswipe(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, home, drop)) = self.test_mswipe else { return };
+        let Some((stage, mut frames, home, drop)) = self.test.mswipe else { return };
         frames += 1;
         if frames > 1200 {
             println!("MSWIPE TEST FAIL: timeout at stage {stage}");
@@ -83,7 +83,7 @@ impl Gfx {
                     if let Some(r) = rect_of(self, rb) {
                         raw.events.push(egui::Event::PointerMoved(r.center()));
                     }
-                    self.test_mswipe = Some((1, frames, p, drop));
+                    self.test.mswipe = Some((1, frames, p, drop));
                     return;
                 }
             }
@@ -100,7 +100,7 @@ impl Gfx {
                 let Some(p) = path(self, k) else { return };
                 raw.events.push(egui::Event::PointerMoved(p));
                 if k == 14 {
-                    self.test_mswipe = Some((114, frames, home, p));
+                    self.test.mswipe = Some((114, frames, home, p));
                     return;
                 }
                 next = stage + 1;
@@ -176,7 +176,7 @@ impl Gfx {
                 );
                 self.selected = vec![sp];
                 let home = self.egraph.node(sp).map(|n| n.pos).unwrap_or_default();
-                self.test_mswipe = Some((201, frames, home, drop));
+                self.test.mswipe = Some((201, frames, home, drop));
                 return;
             }
             201 | 202 => next = stage + 1, // let the new node be drawn
@@ -210,9 +210,9 @@ impl Gfx {
                 } else {
                     b + egui::vec2(40.0, 30.0) * ((k - 10) as f32 / 4.0)
                 };
-                let p = if k > 10 { self.test_mswipe.map(|t| t.3).unwrap_or(p) + egui::vec2(10.0, 7.5) } else { p };
+                let p = if k > 10 { self.test.mswipe.map(|t| t.3).unwrap_or(p) + egui::vec2(10.0, 7.5) } else { p };
                 raw.events.push(egui::Event::PointerMoved(p));
-                self.test_mswipe = Some((stage + 1, frames, home, p));
+                self.test.mswipe = Some((stage + 1, frames, home, p));
                 return;
             }
             218 | 318 => {
@@ -282,7 +282,7 @@ impl Gfx {
                 b_key(raw, true);
                 self.selected = vec![rb];
                 btn(raw, r.center(), true);
-                self.test_mswipe = Some((401, frames, p, drop));
+                self.test.mswipe = Some((401, frames, p, drop));
                 return;
             }
             401..=414 => {
@@ -296,7 +296,7 @@ impl Gfx {
                     drop + egui::vec2(10.0, 7.5)
                 };
                 raw.events.push(egui::Event::PointerMoved(p));
-                self.test_mswipe = Some((stage + 1, frames, home, p));
+                self.test.mswipe = Some((stage + 1, frames, home, p));
                 return;
             }
             415 => {
@@ -341,7 +341,7 @@ impl Gfx {
                 b_key(raw, true);
                 b_key(raw, false);
                 let n = self.egraph.nodes.len() as f32;
-                self.test_mswipe = Some((420, frames, egui::pos2(n, 0.0), drop));
+                self.test.mswipe = Some((420, frames, egui::pos2(n, 0.0), drop));
                 return;
             }
             420 | 421 => next = stage + 1,
@@ -367,6 +367,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_mswipe = Some((next, frames, home, drop));
+        self.test.mswipe = Some((next, frames, home, drop));
     }
 }

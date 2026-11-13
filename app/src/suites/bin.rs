@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_bin(&mut self) {
-        let Some((stage, mut frames, before)) = self.test_bin else { return };
+        let Some((stage, mut frames, before)) = self.test.bin else { return };
         frames += 1;
         if frames > 2400 {
             println!("BIN TEST FAIL: timeout at stage {stage}");
@@ -23,7 +23,7 @@ impl Gfx {
                     b.test_set_tile(140.0);
                     b.test_search(2);
                 }
-                self.test_bin = Some((1, frames, n));
+                self.test.bin = Some((1, frames, n));
             }
             // Wait for the walk to finish, then bin three of its hits.
             1 => {
@@ -55,7 +55,7 @@ impl Gfx {
                     }
                     log::info!("bin: {hits} hits over {dirs} dirs");
                     self.commit_picks(picks);
-                    self.test_bin = Some((2, frames, before));
+                    self.test.bin = Some((2, frames, before));
                 }
             }
             // The new Reads must exist AND resolve to real frames.
@@ -95,7 +95,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_bin = Some((stage, frames, before)),
+            _ => self.test.bin = Some((stage, frames, before)),
         }
     }
 }

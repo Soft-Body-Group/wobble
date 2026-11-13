@@ -566,7 +566,7 @@ impl Gfx {
     /// recipe: STALE until re-run, into a new directory. Waits are
     /// wall-clock.
     pub(crate) fn drive_test_seedvr(&mut self) {
-        let Some(mut t) = self.test_seedvr.take() else { return };
+        let Some(mut t) = self.test.seedvr.take() else { return };
         let fail = |m: String| -> ! {
             println!("SEEDVR TEST FAIL: {m}");
             std::process::exit(1);
@@ -674,6 +674,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_seedvr = Some(t);
+        self.test.seedvr = Some(t);
     }
 }

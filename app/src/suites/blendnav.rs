@@ -11,7 +11,7 @@ impl Gfx {
     /// ctrl+MMB zoom. Everything is asserted relative to a baseline packed
     /// into the state tuple, so the suite is indifferent to window size.
     pub(crate) fn drive_test_blendnav(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, base_pan, mut base_zoom)) = self.test_blendnav else {
+        let Some((stage, mut frames, base_pan, mut base_zoom)) = self.test.blendnav else {
             return;
         };
         frames += 1;
@@ -76,7 +76,7 @@ impl Gfx {
             0 => {
                 if self.layout_settled() && frames >= 6 {
                     let (p, z) = set_base(self);
-                    self.test_blendnav = Some((1, frames, p, z));
+                    self.test.blendnav = Some((1, frames, p, z));
                     return;
                 }
             }
@@ -104,7 +104,7 @@ impl Gfx {
                     fail("MMB pan must not zoom".into());
                 }
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((5, frames, p, z));
+                self.test.blendnav = Some((5, frames, p, z));
                 return;
             }
             // --- graph: ctrl+MMB drag-zooms (up = in) ---
@@ -133,7 +133,7 @@ impl Gfx {
                 self.node_editor.pan = egui::Vec2::ZERO;
                 self.node_editor.zoom = 1.0;
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((9, frames, p, z));
+                self.test.blendnav = Some((9, frames, p, z));
                 return;
             }
             // --- graph: alt+LMB pans even when the drag STARTS ON A NODE ---
@@ -169,7 +169,7 @@ impl Gfx {
                     ));
                 }
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((13, frames, p, z));
+                self.test.blendnav = Some((13, frames, p, z));
                 return;
             }
             // --- graph: ctrl+alt+LMB drag-zooms ---
@@ -194,7 +194,7 @@ impl Gfx {
                     ));
                 }
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((17, frames, p, z));
+                self.test.blendnav = Some((17, frames, p, z));
                 return;
             }
             // --- graph wheel family ---
@@ -210,7 +210,7 @@ impl Gfx {
                     fail(format!("wheel should zoom ({bz} -> {})", self.node_editor.zoom));
                 }
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((19, frames, p, z));
+                self.test.blendnav = Some((19, frames, p, z));
                 return;
             }
             19 => {
@@ -229,7 +229,7 @@ impl Gfx {
                     fail("trackpad pan must not zoom".into());
                 }
                 let (p, z) = set_base(self);
-                self.test_blendnav = Some((21, frames, p, z));
+                self.test.blendnav = Some((21, frames, p, z));
                 return;
             }
             21 => {
@@ -250,7 +250,7 @@ impl Gfx {
                 // Viewer baselines ride the same slots from here.
                 let vp = pack2(self.view_pan.x, self.view_pan.y);
                 let vz = pack2(self.view_zoom, 0.0);
-                self.test_blendnav = Some((23, frames, vp, vz));
+                self.test.blendnav = Some((23, frames, vp, vz));
                 return;
             }
             // --- viewer: alt+LMB pans, ctrl+MMB zooms ---
@@ -360,6 +360,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_blendnav = Some((next, frames, base_pan, base_zoom));
+        self.test.blendnav = Some((next, frames, base_pan, base_zoom));
     }
 }

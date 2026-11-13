@@ -12,7 +12,7 @@ impl Gfx {
     /// group, then alt-clicks one away — the four things that are the whole
     /// reason the widget exists, and none of which a unit test can reach.
     pub(crate) fn drive_test_curveedit(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, cid)) = self.test_curveedit else { return };
+        let Some((stage, mut frames, cid)) = self.test.curveedit else { return };
         frames += 1;
         if frames > 900 {
             println!("CURVEEDIT TEST FAIL: timeout at stage {stage}");
@@ -54,7 +54,7 @@ impl Gfx {
                 self.prop_order = vec![id];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
-                self.test_curveedit = Some((1, 0, id));
+                self.test.curveedit = Some((1, 0, id));
                 return;
             }
             // Shift-click in an empty part of the canvas: a third point.
@@ -94,7 +94,7 @@ impl Gfx {
             5 if frames > 2 => {
                 let r = self.curve_rect.unwrap();
                 press(raw, r.max - egui::vec2(2.0, 2.0), false, Default::default());
-                self.test_curveedit = Some((6, 0, cid));
+                self.test.curveedit = Some((6, 0, cid));
                 // Remember the shape before the group drag.
                 self.curve_before = points(self);
                 return;
@@ -190,6 +190,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_curveedit = Some((next, if next == stage { frames } else { 0 }, cid));
+        self.test.curveedit = Some((next, if next == stage { frames } else { 0 }, cid));
     }
 }

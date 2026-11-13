@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_box(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_box else { return };
+        let Some((stage, mut frames)) = self.test.box_ else { return };
         frames += 1;
         if frames > 900 {
             println!("BOX TEST FAIL: timeout at stage {stage}");
@@ -145,7 +145,7 @@ impl Gfx {
                     .unwrap_or(egui::Vec2::ZERO);
                 // Stash the pre-rotate relative vector (min) and the pivot
                 // (max) — the centre a rotation does not move.
-                self.test_rect = egui::Rect {
+                self.test.rect = egui::Rect {
                     min: egui::pos2(d.x, d.y),
                     max: r.center(),
                 };
@@ -160,7 +160,7 @@ impl Gfx {
                 next = 13;
             }
             13 | 14 => {
-                let c = self.test_rect.max;
+                let c = self.test.rect.max;
                 let p = if stage == 13 {
                     c + egui::vec2(90.0, -90.0)
                 } else {
@@ -170,7 +170,7 @@ impl Gfx {
                 next = stage + 1;
             }
             15 => {
-                let c = self.test_rect.max;
+                let c = self.test.rect.max;
                 press(raw, c + egui::vec2(380.0, 0.0), false);
                 raw.events.push(egui::Event::Key {
                     key: egui::Key::R,
@@ -184,7 +184,7 @@ impl Gfx {
             16 => {
                 // The tf->gr relative vector must have turned ~90° (was
                 // mostly vertical, now mostly horizontal), same length.
-                let before = egui::vec2(self.test_rect.min.x, self.test_rect.min.y);
+                let before = egui::vec2(self.test.rect.min.x, self.test.rect.min.y);
                 let Some(after) = center(self, 2)
                     .zip(center(self, 3))
                     .map(|(a, c)| c - a)
@@ -208,6 +208,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_box = Some((next, frames));
+        self.test.box_ = Some((next, frames));
     }
 }

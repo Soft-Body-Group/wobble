@@ -17,7 +17,7 @@ impl Gfx {
     /// * a shader that does not compile leaves the comp RENDERING, which is
     ///   the whole premise of typing into a live compositor.
     pub(crate) fn drive_test_shader(&mut self) {
-        let Some((stage, mut frames, node)) = self.test_shader else { return };
+        let Some((stage, mut frames, node)) = self.test.shader else { return };
         frames += 1;
         // A WALL-CLOCK budget: this suite waits for three novel-WGSL
         // pipeline builds (~100-150ms of Metal PSO compile each) and, at
@@ -65,12 +65,12 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                 );
                 self.egraph.connect(id, 0, 3);
                 self.egraph.view = Some(id);
-                self.test_shader = Some((1, frames, id));
+                self.test.shader = Some((1, frames, id));
             }
             // The starter shader must reach a live pipeline.
             1 if frames > 20 => {
                 if !self.last_pipeline_ready {
-                    self.test_shader = Some((1, frames, node));
+                    self.test.shader = Some((1, frames, node));
                     return;
                 }
                 let ch = anim::Channel::Shader(anim::intern("amount"));
@@ -108,12 +108,12 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                 if self.egraph.to_engine_graph().topology_hash() == after {
                     fail("editing the source did not move the topology hash".into());
                 }
-                self.test_shader = Some((2, frames, node));
+                self.test.shader = Some((2, frames, node));
             }
             // The two-pass shader must come up too.
             2 if frames > 20 => {
                 if !self.last_pipeline_ready {
-                    self.test_shader = Some((2, frames, node));
+                    self.test.shader = Some((2, frames, node));
                     return;
                 }
                 set_src(self, BROKEN);
@@ -124,16 +124,16 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                 {
                     fail("the broken source compiled".into());
                 }
-                self.test_shader = Some((3, frames, node));
+                self.test.shader = Some((3, frames, node));
             }
             // ...and a broken one leaves the comp rendering, passing through.
             3 if frames > 20
-                && self.test_focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
+                && self.test.focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
                     > web_time::Duration::from_millis(1500) =>
             {
-                self.test_focus_t = None;
+                self.test.focus_t = None;
                 if !self.last_pipeline_ready {
-                    self.test_shader = Some((3, frames, node));
+                    self.test.shader = Some((3, frames, node));
                     return;
                 }
                 if self.displayed_total < 2 {
@@ -144,7 +144,7 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                 );
                 std::process::exit(0);
             }
-            _ => self.test_shader = Some((stage, frames, node)),
+            _ => self.test.shader = Some((stage, frames, node)),
         }
     }
 }

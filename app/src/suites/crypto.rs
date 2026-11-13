@@ -10,13 +10,13 @@ impl Gfx {
     /// through the manifest to "cube" (and alt-click that removes it).
     pub(crate) fn drive_test_crypto(&mut self, raw: &mut egui::RawInput) {
         use engine::cryptomatte as cm;
-        let Some((stage, mut frames, sid)) = self.test_crypto else { return };
+        let Some((stage, mut frames, sid)) = self.test.crypto else { return };
         frames += 1;
         // Persist the count FIRST: the stage arms `return` early while they
         // wait, and a count that only lands on the fall-through path is a
         // timeout that never fires (the run just sits there).
-        self.test_crypto = Some((stage, frames, sid));
-        let since = self.test_crypto_since.get_or_insert_with(web_time::Instant::now).elapsed();
+        self.test.crypto = Some((stage, frames, sid));
+        let since = self.test.crypto_since.get_or_insert_with(web_time::Instant::now).elapsed();
         let budget = web_time::Duration::from_secs(20);
         // A click whose readback caught a frame in flight lands nothing;
         // a person just clicks again, and so does the suite (the 60s cap
@@ -43,7 +43,7 @@ impl Gfx {
                 modifiers,
             });
         };
-        let total = self.test_crypto_t0.get_or_insert_with(web_time::Instant::now).elapsed();
+        let total = self.test.crypto_t0.get_or_insert_with(web_time::Instant::now).elapsed();
         if total > web_time::Duration::from_secs(60) {
             println!("CRYPTO TEST FAIL: timeout at stage {stage} after {total:?}");
             std::process::exit(1);
@@ -121,8 +121,8 @@ impl Gfx {
                 }
                 self.egraph.view = Some(cid);
                 self.playback_dirty = true;
-                self.test_crypto_since = None;
-                self.test_crypto = Some((2, 0, cid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((2, 0, cid));
                 return;
             }
             // The cube is picked: solid matte inside its disc. Viewed, the
@@ -167,8 +167,8 @@ impl Gfx {
                 self.egraph.connect(mid, 0, 1);
                 self.egraph.connect(mid, 1, sid);
                 self.egraph.view = Some(mid);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((21, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((21, 0, sid));
                 return;
             }
             // Downstream gets the same matte — from the decode-side bake.
@@ -233,8 +233,8 @@ impl Gfx {
                 {
                     c.invert = true;
                 }
-                self.test_crypto_since = None;
-                self.test_crypto = Some((3, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((3, 0, sid));
                 return;
             }
             // Inverted: the same box goes black — and it is a uniform, so
@@ -257,8 +257,8 @@ impl Gfx {
                     c.invert = false;
                     c.picks.clear();
                 }
-                self.test_crypto_since = None;
-                self.test_crypto = Some((4, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((4, 0, sid));
                 return;
             }
             // Viewed: the ids picture — red is the cube id's low chunk over
@@ -279,14 +279,14 @@ impl Gfx {
                 self.test_dump("crypto-ids");
                 // A PLAIN click on the cube: not a pick, nothing changes.
                 click(raw, at(cube_px), none, true);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((41, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((41, 0, sid));
                 return;
             }
             41 if frames > 2 => {
                 click(raw, at(cube_px), none, false);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((5, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((5, 0, sid));
                 return;
             }
             // Give a readback every chance to land, then: still nothing.
@@ -298,23 +298,23 @@ impl Gfx {
                 }
                 // Cmd-click the cube: ADDS.
                 click(raw, at(cube_px), cmd, true);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((51, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((51, 0, sid));
                 return;
             }
             51 if frames > 2 => {
                 click(raw, at(cube_px), cmd, false);
                 raw.events.insert(0, egui::Event::ModifiersChanged(none));
-                self.test_crypto_since = None;
-                self.test_crypto = Some((52, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((52, 0, sid));
                 return;
             }
             52 if frames > 10 => {
                 let picks = picked(&self.egraph);
                 if picks.is_empty() {
                     if since > retry {
-                        self.test_crypto_since = None;
-                        self.test_crypto = Some((5, 0, sid)); // click again
+                        self.test.crypto_since = None;
+                        self.test.crypto = Some((5, 0, sid)); // click again
                     }
                     return;
                 }
@@ -324,23 +324,23 @@ impl Gfx {
                 }
                 // Cmd-click the sphere: adds to it.
                 click(raw, at(sphere_px), cmd, true);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((53, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((53, 0, sid));
                 return;
             }
             53 if frames > 2 => {
                 click(raw, at(sphere_px), cmd, false);
                 raw.events.insert(0, egui::Event::ModifiersChanged(none));
-                self.test_crypto_since = None;
-                self.test_crypto = Some((54, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((54, 0, sid));
                 return;
             }
             54 if frames > 10 => {
                 let picks = picked(&self.egraph);
                 if picks.len() < 2 {
                     if since > retry {
-                        self.test_crypto_since = None;
-                        self.test_crypto = Some((52, 0, sid)); // click again
+                        self.test.crypto_since = None;
+                        self.test.crypto = Some((52, 0, sid)); // click again
                     }
                     return;
                 }
@@ -350,23 +350,23 @@ impl Gfx {
                 }
                 // Cmd+shift-click the lit cube: REMOVES it, sphere stays.
                 click(raw, at(cube_px), cmd_shift, true);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((55, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((55, 0, sid));
                 return;
             }
             55 if frames > 2 => {
                 click(raw, at(cube_px), cmd_shift, false);
                 raw.events.insert(0, egui::Event::ModifiersChanged(none));
-                self.test_crypto_since = None;
-                self.test_crypto = Some((6, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((6, 0, sid));
                 return;
             }
             6 if frames > 10 => {
                 let picks = picked(&self.egraph);
                 if picks.len() != 1 {
                     if since > retry {
-                        self.test_crypto_since = None;
-                        self.test_crypto = Some((54, 0, sid)); // click again
+                        self.test.crypto_since = None;
+                        self.test.crypto = Some((54, 0, sid)); // click again
                     }
                     return;
                 }
@@ -376,23 +376,23 @@ impl Gfx {
                 }
                 // ...and the lit sphere.
                 click(raw, at(sphere_px), cmd_shift, true);
-                self.test_crypto_since = None;
-                self.test_crypto = Some((61, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((61, 0, sid));
                 return;
             }
             61 if frames > 2 => {
                 click(raw, at(sphere_px), cmd_shift, false);
                 raw.events.insert(0, egui::Event::ModifiersChanged(none));
-                self.test_crypto_since = None;
-                self.test_crypto = Some((7, 0, sid));
+                self.test.crypto_since = None;
+                self.test.crypto = Some((7, 0, sid));
                 return;
             }
             7 if frames > 10 => {
                 let picks = picked(&self.egraph);
                 if !picks.is_empty() {
                     if since > retry {
-                        self.test_crypto_since = None;
-                        self.test_crypto = Some((6, 0, sid)); // click again
+                        self.test.crypto_since = None;
+                        self.test.crypto = Some((6, 0, sid)); // click again
                     }
                     return;
                 }
@@ -410,8 +410,8 @@ impl Gfx {
         }
         let frames = if next == stage { frames } else { 0 };
         if next != stage {
-            self.test_crypto_since = None;
+            self.test.crypto_since = None;
         }
-        self.test_crypto = Some((next, frames, sid));
+        self.test.crypto = Some((next, frames, sid));
     }
 }

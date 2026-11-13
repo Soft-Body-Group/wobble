@@ -8,7 +8,7 @@ impl Gfx {
     /// frame of the Read is in the RAM tier with nothing played; then a
     /// second run is cancelled and must actually stop. Wall-clock waits.
     pub(crate) fn drive_test_precache(&mut self) {
-        let Some((stage, t0)) = self.test_precache else { return };
+        let Some((stage, t0)) = self.test.precache else { return };
         let fail = |m: String| -> ! {
             println!("PRECACHE TEST FAIL: {m}");
             std::process::exit(1);
@@ -34,7 +34,7 @@ impl Gfx {
                     fail(format!("{before} frames resident before the precache"));
                 }
                 self.node_editor.precache_req = Some(vec![0]);
-                self.test_precache = Some((1, Instant::now()));
+                self.test.precache = Some((1, Instant::now()));
             }
             1 => {
                 let Some(run) = &self.precache else { fail("no run".into()) };
@@ -56,13 +56,13 @@ impl Gfx {
                 // Second run, every Read, cancelled at once.
                 let reads: Vec<u64> = self.egraph.nodes.keys().copied().collect();
                 self.precache_start(reads);
-                self.test_precache = Some((2, Instant::now()));
+                self.test.precache = Some((2, Instant::now()));
             }
             2 => {
                 let Some(run) = &self.precache else { fail("no second run".into()) };
                 let Some(job) = run.job() else { return };
                 job.stop();
-                self.test_precache = Some((3, Instant::now()));
+                self.test.precache = Some((3, Instant::now()));
             }
             3 => {
                 let Some(job) = self.precache.as_ref().and_then(|r| r.job()) else {

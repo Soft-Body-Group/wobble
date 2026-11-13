@@ -9,15 +9,15 @@ impl Gfx {
     /// range until it defines its own; and a viewer range pinned past a
     /// plate's end gets that plate's edge behaviour — black, hold, loop.
     pub(crate) fn drive_test_range(&mut self) {
-        let Some((stage, mut frames)) = self.test_range else { return };
+        let Some((stage, mut frames)) = self.test.range else { return };
         frames += 1;
-        let elapsed = self.test_range_t0.get_or_insert_with(Instant::now).elapsed();
+        let elapsed = self.test.range_t0.get_or_insert_with(Instant::now).elapsed();
         if elapsed > web_time::Duration::from_secs(90) {
             println!(
                 "RANGE TEST FAIL: timeout at stage {stage} (frame {}, span {:?}, seen {:?})",
                 self.timeline_pos,
                 self.shot_span(),
-                self.test_range_seen
+                self.test.range_seen
             );
             std::process::exit(1);
         }
@@ -33,12 +33,12 @@ impl Gfx {
         let settled = |s: &Self| !s.force_display && s.eval_tick() == s.timeline_pos;
         let stable = |s: &mut Self| -> Option<f32> {
             if !settled(s) {
-                s.test_range_last = None;
+                s.test.range_last = None;
                 return None;
             }
             let v = s.probe_output_box(200, 200, 32, 32, 1)?;
-            let same = s.test_range_last.is_some_and(|p| (p - v).abs() < 1e-4);
-            s.test_range_last = Some(v);
+            let same = s.test.range_last.is_some_and(|p| (p - v).abs() < 1e-4);
+            s.test.range_last = Some(v);
             same.then_some(v)
         };
         let set_after = |s: &mut Self, e: engine::graph::ReadEdge| {
@@ -148,55 +148,55 @@ impl Gfx {
                 self.view_range = Some((PLACE, last + 6));
                 set_after(self, engine::graph::ReadEdge::Black);
                 self.seek_to(last + 3);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 4;
             }
             4 if frames > 6 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
                 if v.abs() > 1e-3 {
                     fail(format!("past the end with a BLACK edge the plate reads {v:.4}"));
                 }
-                self.test_range_seen.push((last + 3, v));
+                self.test.range_seen.push((last + 3, v));
                 set_after(self, engine::graph::ReadEdge::Hold);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 5;
             }
             5 if frames > 6 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
-                self.test_range_seen.push((last + 3, v));
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
+                self.test.range_seen.push((last + 3, v));
                 // What the last real frame shows, to compare the hold with.
                 self.seek_to(last);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 6;
             }
             6 if frames > 6 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
-                let held = self.test_range_seen[1].1;
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
+                let held = self.test.range_seen[1].1;
                 if (v - held).abs() > 1e-3 || v < 1e-3 {
                     fail(format!("a HELD frame past the end reads {held:.4}, the last frame {v:.4}"));
                 }
-                self.test_range_seen.push((last, v));
+                self.test.range_seen.push((last, v));
                 // Loop: three past the end is the clip's frame 2 again.
                 set_after(self, engine::graph::ReadEdge::Loop);
                 self.seek_to(last + 3);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 7;
             }
             7 if frames > 6 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
-                self.test_range_seen.push((last + 3, v));
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
+                self.test.range_seen.push((last + 3, v));
                 self.seek_to(PLACE + 2);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 8;
             }
             8 if frames > 6 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
-                let looped = self.test_range_seen[3].1;
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
+                let looped = self.test.range_seen[3].1;
                 if (v - looped).abs() > 1e-3 {
                     fail(format!(
                         "a LOOPED frame past the end reads {looped:.4}, the clip's frame 2 {v:.4}"
@@ -213,12 +213,12 @@ impl Gfx {
                 }
                 self.playback_dirty = true;
                 self.seek_to(last + 2);
-                self.test_range_last = None;
+                self.test.range_last = None;
                 frames = 0;
                 next = 9;
             }
             9 if frames > 8 => {
-                let Some(v) = stable(self) else { self.test_range = Some((next, frames)); return };
+                let Some(v) = stable(self) else { self.test.range = Some((next, frames)); return };
                 if v.abs() > 1e-3 {
                     fail(format!("a frame in the Read's range with no file reads {v:.4}, not black"));
                 }
@@ -250,6 +250,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_range = Some((next, frames));
+        self.test.range = Some((next, frames));
     }
 }

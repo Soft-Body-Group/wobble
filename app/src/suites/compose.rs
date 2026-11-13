@@ -11,8 +11,8 @@ impl Gfx {
     /// nearest cell only at release; the right bar scales; a drop onto
     /// another control puts it back.
     pub(crate) fn drive_test_compose(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_compose else { return };
-        let ids = self.test_compose_ids;
+        let Some((stage, mut frames)) = self.test.compose else { return };
+        let ids = self.test.compose_ids;
         frames += 1;
         if frames > 1200 {
             println!("COMPOSE TEST FAIL: timeout at stage {stage}");
@@ -54,7 +54,7 @@ impl Gfx {
         // stored in `test_compose_at`, a step a frame, checking the live
         // rect trails the pointer by exactly one frame's travel.
         let drag_step = |s: &mut Self, raw: &mut egui::RawInput, want: egui::Vec2, id: u64, check: bool| -> bool {
-            let (press, last, start) = s.test_compose_at;
+            let (press, last, start) = s.test.compose_at;
             let done = last - press;
             if check && done.length() > 0.0 {
                 // What the pass that saw `last` drew: the control moved by
@@ -82,7 +82,7 @@ impl Gfx {
             let dir = want / want.length();
             let p = press + dir * (done.length() + STEP).min(want.length());
             raw.events.push(egui::Event::PointerMoved(p));
-            s.test_compose_at.1 = p;
+            s.test.compose_at.1 = p;
             false
         };
         match stage {
@@ -134,7 +134,7 @@ impl Gfx {
                         e.ui_span = Some([4, 3]);
                         e.ui_label = ["offset", "lift", "gamma", "gain"][k].into();
                     }
-                    self.test_compose_ids[k] = id;
+                    self.test.compose_ids[k] = id;
                 }
                 let mut g = std::mem::take(&mut self.egraph);
                 tools::place_controls(&mut g, cols, rows);
@@ -161,7 +161,7 @@ impl Gfx {
                 let r = rect_of(self, ids[1]);
                 let press = egui::pos2(r.min.x + r.width() * 0.35, r.center().y);
                 button(raw, press, true);
-                self.test_compose_at = (press, press, r);
+                self.test.compose_at = (press, press, r);
                 next = 2;
             }
             // Just short of three columns right (the panel edge): snaps to [8,0].
@@ -182,7 +182,7 @@ impl Gfx {
                 let r = rect_of(self, ids[0]);
                 let press = egui::pos2(r.max.x - 5.0, r.center().y);
                 button(raw, press, true);
-                self.test_compose_at = (press, press, r);
+                self.test.compose_at = (press, press, r);
                 next = 4;
             }
             4 if frames > 1 => {
@@ -202,7 +202,7 @@ impl Gfx {
                 let r = rect_of(self, ids[2]);
                 let press = r.center() - egui::vec2(r.width() * 0.1, 0.0);
                 button(raw, press, true);
-                self.test_compose_at = (press, press, r);
+                self.test.compose_at = (press, press, r);
                 next = 6;
             }
             6 if frames > 1 => {
@@ -253,7 +253,7 @@ impl Gfx {
                     pressed: true,
                     modifiers: ctrl,
                 });
-                self.test_compose_at = (press, press, r);
+                self.test.compose_at = (press, press, r);
                 next = 9;
             }
             // Pull it: a short drag starts the pull, then carry it to an
@@ -261,13 +261,13 @@ impl Gfx {
             9 | 10 => {
                 let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
                 raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
-                let (press, last, _) = self.test_compose_at;
+                let (press, last, _) = self.test.compose_at;
                 let to = self.compose_area.min
                     + egui::vec2(0.5 * tools::CELL_W, 7.5 * tools::CELL_H);
                 if stage == 9 {
                     let p = last + egui::vec2(6.0, 4.0);
                     raw.events.push(egui::Event::PointerMoved(p));
-                    self.test_compose_at.1 = p;
+                    self.test.compose_at.1 = p;
                     if self.hud_drag.is_some() {
                         if !self.hud_drag.as_ref().is_some_and(|h| h.wheel && h.rgb && h.chans.len() == 3) {
                             fail("the pulled wheel is not marked as a wheel triple".into());
@@ -280,7 +280,7 @@ impl Gfx {
                     let d = to - last;
                     let p = if d.length() <= 24.0 { to } else { last + d.normalized() * 24.0 };
                     raw.events.push(egui::Event::PointerMoved(p));
-                    self.test_compose_at.1 = p;
+                    self.test.compose_at.1 = p;
                     if p == to && frames > 2 {
                         raw.events.push(egui::Event::PointerButton {
                             pos: to,
@@ -328,9 +328,9 @@ impl Gfx {
             _ => {}
         }
         if next != stage {
-            self.test_compose = Some((next, 0));
+            self.test.compose = Some((next, 0));
         } else {
-            self.test_compose = Some((stage, frames));
+            self.test.compose = Some((stage, frames));
         }
     }
 }

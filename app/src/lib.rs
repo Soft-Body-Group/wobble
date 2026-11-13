@@ -12,6 +12,7 @@ mod assets;
 mod collect;
 mod stress;
 mod doc;
+mod state;
 mod suites;
 mod viewer;
 mod animnoise;
@@ -5722,8 +5723,7 @@ struct Gfx {
     /// A frame being typed on the time bar: what, the text, where the
     /// field sits, and whether it still has to take focus.
     track_edit: Option<(TrackEdit, String, egui::Pos2, bool)>,
-    /// --test-inout: the in point a mark drag started from.
-    test_inout_mark: Option<u64>,
+    test: state::SuiteState,
     track_move: Option<((f32, f32), web_time::Instant)>,
     /// The time bar panned / zoomed by hand (`nav::bar_nav`): the frames it
     /// shows, over the comp / node / in–out pick until another pick (or a
@@ -5927,14 +5927,6 @@ struct Gfx {
     pin_marquee: Option<egui::Rect>,
     /// Where the pin box's rotate knob was drawn last (for the suite).
     pin_knob: Option<egui::Pos2>,
-    /// --test-spline: where the transformed-shape drag pressed. The cursor
-    /// path has to be anchored there, not re-read from the point it is
-    /// dragging — now that the point tracks the cursor exactly, moving
-    /// relative to the point compounds each hop.
-    test_spline_press: Option<egui::Pos2>,
-    /// --test-spline: screen positions a pivot / distort stage holds on to
-    /// across its gesture (the stash is only two floats).
-    test_spline_aux: Vec<egui::Pos2>,
     spline_sel: std::collections::BTreeSet<usize>,
     spline_sel_node: Option<u64>,
     /// Point count the pick was made against; a change we did not make
@@ -6297,212 +6289,15 @@ struct Gfx {
     dump_after: Option<(u64, std::path::PathBuf)>,
     /// Screen rects of every node last frame (from the viewer hook).
     node_rects: Vec<(u64, egui::Rect)>,
-    /// --test-click state machine: frame counter for inject/verify stages.
-    test_click: Option<u32>,
-    /// The node the test clicked, pinned at injection time (draw order — and
-    /// therefore node_rects order — changes when a click raises a node).
-    test_target: Option<(u64, egui::Pos2)>,
-    /// --test-seek state machine: (stage, frames elapsed, displayed marker).
-    test_seek: Option<(u32, u32, u64)>,
-    /// --test-play state machine: (stage, displayed marker, stage start).
-    test_play: Option<(u32, u64, Instant)>,
-    /// --test-browser state machine: (frames elapsed, row selected yet).
-    test_browser: Option<(u32, bool)>,
-    /// --test-setup: (stage, frames, expected nodes, expected loads).
-    test_setup: Option<(u32, u32, usize, usize)>,
-    /// --test-slice: (stage, frames, spliced-node id).
-    test_slice: Option<(u32, u32, u64)>,
-    /// --test-box: (stage, frames).
-    test_box: Option<(u32, u32)>,
-    /// --test-curves: (stage, frames).
-    test_curves: Option<(u32, u32)>,
-    /// --test-curves: where the group-scale drag grabbed the box edge.
-    test_scale_from: Option<egui::Pos2>,
-    /// --test-inout: (stage, frames).
-    test_inout: Option<(u32, u32)>,
-    /// (stage, frames in stage) for `--test-frames`.
-    test_frames: Option<(u32, u32)>,
     /// Motion-path samples drawn in the viewer last frame (0 = no path).
     last_path_points: usize,
     /// A keyframe grabbed on a motion path: (node, that key's frame, the
     /// offset from the pointer to the key at the press).
     path_drag: Option<(u64, f64, egui::Vec2)>,
-    /// `--test-gizmokey`: the key its first phase landed, so the second can
-    /// prove a LOCKED channel still holds it, and the key its second landed.
-    test_gizmokey_key6: f32,
-    test_gizmokey_y8: f32,
-    /// `--test-gizmokey`: the element's position before the path-key drag.
-    test_gizmokey_before: [f32; 2],
-    /// (stage, frames in stage) for `--test-bake`.
-    test_bake: Option<(u32, u32)>,
-    /// (stage, frames in stage) for `--test-range`, its clock, the last
-    /// probe (a reading is believed once two agree) and the frames probed.
-    test_range: Option<(u32, u32)>,
-    test_range_t0: Option<Instant>,
-    test_range_last: Option<f32>,
-    test_range_seen: Vec<(u64, f32)>,
-    /// `--test-bake`: what the LIVE subtree showed at each probed frame.
-    test_bake_live: Vec<(u64, f32)>,
-    /// `--test-bake`: what the BAKED node showed, frame by frame.
-    test_bake_seen: Vec<(u64, f32)>,
-    /// `--test-bake`: the unplaced pass's live readings, by OFFSET into the
-    /// shot. Placing a plate changes what a frame is CALLED, never what it
-    /// shows, so the placed pass must read the same values.
-    test_bake_ref: Vec<(u64, f32)>,
-    /// `--test-bake`: which pass — 0 = a plain shot, 1 = the same comp with
-    /// its plate PLACED at 1011, which is where a bake and the comp can
-    /// disagree about what frame a frame is.
-    test_bake_pass: u32,
-    /// `--test-bake`: the previous probe, so a value is only believed once
-    /// it has stopped changing (a seek lands, then the comp renders, then
-    /// the texture shows it — reading earlier reads the frame before).
-    test_bake_last: Option<f32>,
-    test_bake_t0: Option<Instant>,
-    /// Frames `--test-frames` actually saw during playback.
-    test_frames_seen: Vec<u64>,
-    /// When `--test-frames` started. It waits on real decodes, so it times
-    /// out on a CLOCK — a redraw budget just measures how fast this machine
-    /// spins its UI loop (see CLAUDE.md, "Rules for suites").
-    test_frames_t0: Option<Instant>,
-    /// --test-shot: (stage, frames, mark).
-    test_shot: Option<(u32, u32, u64)>,
-    /// --test-paint: (stage, frames, paint node id).
-    test_paint: Option<(u32, u32, u64)>,
-    /// --test-paint: the Bake its last stages inserted.
-    test_paint_bake: Option<u64>,
-    /// --test-tab: (stage, frames).
-    test_tab: Option<(u32, u32)>,
-    /// --test-zones: (stage, frames in it, the Grade), the press point, and
-    /// the wall-clock start the budget runs on.
-    test_zones: Option<(u32, u32, u64)>,
-    test_zones_at: egui::Pos2,
-    test_zones_t0: Option<Instant>,
-    test_zones_since: Instant,
-    test_zones_px: Option<[f32; 3]>,
-    test_picker: Option<(u32, u32)>,
-    /// Input-injection suites: the viewer rect last frame + how long it has
-    /// held still, and the anchor a gesture was started from. Panels animate
-    /// their height, so a press computed from a moving rect can miss its
-    /// handle by a few pixels.
-    test_prev_rect: egui::Rect,
-    test_stable: u32,
-    test_pos: Option<egui::Pos2>,
-    /// `--test-click` proxy phase: (full-res pivot-drag translate x the
-    /// on-screen image width, full-res canvas width). The product is what
-    /// must survive proxy: the same screen drag has to move the image the
-    /// same distance on screen, whatever size the canvas is.
-    test_proxy_drag: (f32, u32, Option<web_time::Instant>),
-    /// The viewer rect a multi-click gesture was anchored to.
-    test_rect: egui::Rect,
-    /// --test-anim: (stage, frames, last sampled tick, good samples, interp seen).
-    test_anim: Option<(u32, u32, u64, u32, bool)>,
-    /// --test-patchlive: (stage, frames).
-    test_patchlive: Option<(u32, u32)>,
-    /// --test-gizmokey: (stage, frames).
-    test_gizmokey: Option<(u32, u32)>,
-    /// --test-magnet: (stage, frames, new node id).
-    test_magnet: Option<(u32, u32, u64)>,
-    /// --test-nodeux: (stage, frames, scratch blend id, scratch grade id).
-    test_nodeux: Option<(u32, u32, u64, u64)>,
-    /// --test-blendnav: (stage, frames, packed pan baseline, packed zoom
-    /// baseline) — f32 bits, because the gestures are asserted RELATIVE to
-    /// where the view was when each one began.
-    test_blendnav: Option<(u32, u32, u64, u64)>,
-    /// --test-tv: (stage, frames, frames spent in the current wait).
-    test_tv: Option<(u32, u32, u32)>,
-    /// --test-mswipe: (stage, frames, Read B's start pos, release point).
-    test_mswipe: Option<(u32, u32, egui::Pos2, egui::Pos2)>,
     /// Did the properties rack draw a backdrop panel this frame? Read by
     /// --test-nodeux: the panel not appearing was a shipped bug (the rack's
     /// empty-state early-returned past it).
     group_panel_shown: bool,
-    /// --test-spline: (stage, frames, spline node id).
-    /// (stage, frames, node, stash) — the stash carries the pre-drag
-    /// bounds across the group-scale stages.
-    test_spline: Option<(u32, u32, u64, [f32; 2])>,
-    /// --test-cornerpin: (stage, frames, node, press point, pins at the press).
-    test_cornerpin: Option<(u32, u32, u64, egui::Pos2, [[f32; 2]; 4])>,
-    /// --test-gridwarp: (stage, node, press point, deadline).
-    test_gridwarp: Option<(u32, u64, egui::Pos2, Instant)>,
-    /// --test-warp: (stage, node, press point, deadline).
-    test_warp: Option<(u32, u64, egui::Pos2, Instant)>,
-    /// --test-gridwarp: the destination grid at a box gesture's press, and
-    /// the pivot it turned about.
-    test_gridwarp_snap: Vec<[f32; 2]>,
-    test_gridwarp_pivot: egui::Pos2,
-    /// --test-cornerpin: where the box's rotate knob was at its press.
-    test_cornerpin_knob: egui::Pos2,
-    /// --test-keyer: (stage, frames, node id).
-    test_keyer: Option<(u32, u32, u64)>,
-    /// --test-colourkey: (stage, frames, keyer node id).
-    test_colourkey: Option<(u32, u32, u64)>,
-    /// The matte the colourkey suite measured before inverting.
-    test_colourkey_m: f32,
-    /// --test-rgb: (stage, frames, Mult node id).
-    test_rgb: Option<(u32, u32, u64)>,
-    /// The triple the rgb suite banked before the gesture under test.
-    test_rgb_before: [f32; 3],
-    /// Where its current drag was pressed, and how wide the track was.
-    /// Captured ONCE per gesture: the knob moves as the value changes, so a
-    /// position recomputed each frame would chase itself and the drag would
-    /// accelerate.
-    test_rgb_anchor: (egui::Pos2, f32),
-    /// --test-cpick: (stage, frames, Grid node id).
-    test_cpick: Option<(u32, u32, u64)>,
-    /// (stage, frames in stage, the Grid) and the row's settled rect.
-    test_propspie: Option<(u32, u32, u64)>,
-    test_propspie_at: (egui::Rect, u32),
-    /// --test-viewpie: (stage, frames in it, started).
-    test_viewpie: Option<(u32, u32, web_time::Instant)>,
-    /// The Grid's line colour before the picker touched it.
-    test_cpick_before: [f32; 4],
-    /// The rect the current gesture is anchored to, and how many frames it
-    /// has held still — captured once, like `test_rgb_anchor`.
-    test_cpick_at: (egui::Rect, u32),
-    /// Wall clock for the stage that waits on real decodes.
-    test_cpick_t0: web_time::Instant,
-    /// The picker's scale before the resize under test.
-    test_cpick_scale: egui::Vec2,
-    /// Viewer and graph zoom when the pinch went in, which it must not move.
-    test_cpick_zoom: (f32, f32),
-    /// --test-nodepack: (stage, frames, node under test).
-    test_nodepack: Option<(u32, u32, u64)>,
-    /// --test-planar: (stage, frames, planar node), its clock, and where
-    /// the gizmo press landed.
-    test_planar: Option<(u32, u32, u64)>,
-    test_planar_t0: web_time::Instant,
-    /// --test-planar: the stabilise CornerPin's worst corner residual.
-    test_planar_stab: f64,
-    test_planar_press: egui::Pos2,
-    /// --test-track: (stage, frames, tracker node).
-    test_track: Option<(u32, u32, u64)>,
-    /// --test-channels: (stage, frames, shuffle node).
-    test_channels: Option<(u32, u32, u64)>,
-    test_crypto: Option<(u32, u32, u64)>,
-    /// When the crypto suite entered its current stage: its waits are on
-    /// the WALL CLOCK (a rig rebuild and a decode take real time; a frame
-    /// count is not a duration under test).
-    test_crypto_since: Option<web_time::Instant>,
-    /// When the crypto suite started: the overall cap, which a per-stage
-    /// retry must not keep resetting.
-    test_crypto_t0: Option<web_time::Instant>,
-    /// --test-curveedit: (stage, frames, curve node id).
-    test_curveedit: Option<(u32, u32, u64)>,
-    /// --test-noise: (stage, frames, the Noise node).
-    test_noise: Option<(u32, u32, u64)>,
-    /// --test-geo: (stage, frames, the 2dini node).
-    test_geo: Option<(u32, u32, u64)>,
-    /// --test-geotools: (stage, frames in it, when the run began).
-    test_geotools: Option<(u32, u32, web_time::Instant)>,
-    /// --test-geotools: the nodes it is tracking, by role.
-    test_geotools_ids: std::collections::HashMap<&'static str, u64>,
-    /// --test-geotools: when a wall-clock wait began.
-    test_geotools_mark: Option<web_time::Instant>,
-    /// --test-sdf: (stage, frames, the SDF node), its last pixel probe (and
-    /// when), and the reading the stage is waiting to move away from.
-    test_sdf: Option<(u32, u32, u64)>,
-    test_sdf_last: Option<(Instant, [f32; 3])>,
-    test_sdf_base: Option<[f32; 3]>,
     /// --test-geo: the rendered mean before the exposed slider was driven.
     geo_mean: f32,
     /// --test-geo: the Physics node under test and the most frames its live
@@ -6511,8 +6306,6 @@ struct Gfx {
     geo_phys_seen: u32,
     /// --test-geo: viewer clicks retried, capped so a miss fails loudly.
     geo_click_tries: u32,
-    /// --test-mblur: (stage, frames, the unblurred mean in bits).
-    test_mblur: Option<(u32, u32, u64)>,
     /// --test-mblur: the tick the gain triangle peaks on.
     mblur_peak: u64,
     /// --test-curveedit: the curve canvas rect, and the shape before a drag.
@@ -6522,118 +6315,9 @@ struct Gfx {
     curve_before: Vec<[f32; 2]>,
     /// Where the driver grabbed a point, so the move and release match it.
     curve_grab: egui::Pos2,
-    /// --test-write: (stage, frames, write node).
-    test_write: Option<(u32, u32, u64)>,
-    /// Frames the running track had keyed last time the suite looked —
-    /// the suite waits on PROGRESS, not on a frame count, so a machine
-    /// under GPU load can't time it out mid-track.
-    test_track_progress: u64,
-    /// When the track suite last saw a stage change or bake progress: its
-    /// timeout is WALL CLOCK (a pattern frame is real work, and the
-    /// unpaced test loop spins thousands of iterations a second).
-    test_track_clock: web_time::Instant,
-    /// --test-track's single- and multi-point worst errors, for the report.
-    test_track_worst: f64,
-    test_track_points_worst: f64,
-    /// --test-track: the inner-graph drag in progress (press, release) and
-    /// where the dragged node started.
-    test_track_drag: (egui::Pos2, egui::Pos2),
-    test_track_move_from: [f32; 2],
-    /// --test-track: the frame-0 reference track, so the second (mid-
-    /// playhead) pass can be checked against it.
-    test_track_ref: Vec<(u64, f32, f32)>,
-    /// --test-track: where the second pass seeds its pattern (the point the
-    /// reference track reached at the frame it restarts from).
-    test_track_seed: [f32; 2],
-    /// --test-zoom: (stage, frames, panel width measured at zoom 1).
-    test_zoom: Option<(u32, u32, f32)>,
-    /// The tail of --test-zoom: per-panel width through real input.
-    test_panelw: Option<PanelWTest>,
     /// The docked strip's panel rects as of last frame (suites aim at them).
     prop_panel_rects: Vec<(u64, egui::Rect)>,
-    /// --test-cachemeter: (stage, frames).
-    test_cachemeter: Option<(u32, u32)>,
-    /// --test-precache: (stage, when the stage began).
-    test_precache: Option<(u32, Instant)>,
-    /// --test-bin: (stage, frames, nodes before).
-    test_bin: Option<(u32, u32, usize)>,
-    /// (stage, frames, bin size before) for `--edit-browse`.
-    test_edit_browse: Option<(u8, u32, usize)>,
-    /// (stage, frames, stage clock) for `--edit-blank`.
-    test_edit_blank: Option<(u8, u32, Instant)>,
-    /// (stage, frames, stage clock) for `--edit-undo`.
-    test_edit_undo: Option<(u8, u32, Instant)>,
-    test_edit_undo_shot: Option<u64>,
-    /// (stage, frames) for `--edit-source`: marks then insert.
-    test_source_insert: Option<(u8, u32)>,
-    /// (period, frames seen, flips done) for `--edit-churn`.
-    test_churn: Option<(u32, u32, u32)>,
-    /// Timeline uids before the test insert, so the new one can be found —
-    /// clips are kept sorted by start, so it is not simply the last.
-    test_source_before: Vec<u64>,
     edit_browse_dir: Option<std::path::PathBuf>,
-    /// --test-thumbs: (stage, frames).
-    test_thumbs: Option<(u32, u32)>,
-    /// --test-dpx: (stage, frames, node).
-    test_dpx: Option<(u32, u32, u64)>,
-    test_still: Option<(u32, u32, u64)>,
-    test_scrub: Option<(u32, u32, usize)>,
-    test_scrubperf: Option<(u32, u64, u64)>,
-    /// --test-scrubfid: scrub FIDELITY — the hand's target against the tick
-    /// on screen, per displayed frame (`drive_test_scrubfid`).
-    test_scrubfid: Option<Box<ScrubFid>>,
-    /// --test-proxy: a proxy toggle re-renders everything at the new size,
-    /// effects included, with no further input (`drive_test_proxy`).
-    test_proxy: Option<Box<ProxyTest>>,
-    /// The crop-into-Layer workflow under load (`stress.rs`).
-    test_stress: Option<Box<stress::StressTest>>,
-    test_grow: Option<(u32, u64, u64)>,
-    /// Wall clock for --test-scrub. Under test the event loop spins far
-    /// faster than real time, so a frame COUNT is not a duration — and
-    /// this suite is waiting on a 24fps transport and real decodes.
-    test_scrub_t0: Option<web_time::Instant>,
-    /// Wall clock for --test-seek: stage 5 waits on 24 frames at 24fps,
-    /// which is a SECOND, and under test the loop spins far faster than
-    /// real time — a frame budget there times out in ~0.2s.
-    test_seek_t0: Option<web_time::Instant>,
-    test_rc_t0: Option<web_time::Instant>,
-    test_grow_t0: Option<web_time::Instant>,
-    /// --test-plugin: (stage, frames, node).
-    test_plugin: Option<(u32, u32, u64)>,
-    /// --test-shader: (stage, frames, Shader node id).
-    test_shader: Option<(u32, u32, u64)>,
-    /// --test-cost: (stage, frames, slow node id).
-    test_cost: Option<(u32, u32, u64)>,
-    /// --test-blender: stage, wall clocks, the node, the fake bridge.
-    test_blender: Option<TestBlender>,
-    /// --test-genai: its stages, clocks and stand-in fal.
-    test_genai: Option<genaiui::TestGenai>,
-    test_corridor: Option<corridorkey::TestCorridor>,
-    test_seedvr: Option<seedvr::TestSeedVr>,
-    test_depth: Option<depth::TestDepth>,
-    test_ltxhdr: Option<ltxhdr::TestLtxHdr>,
-    test_upscale: Option<upscaleui::TestUpscale>,
-    test_hdrcnn: Option<hdrcnnui::TestHdrCnn>,
-    test_flow: Option<flowui::TestFlow>,
-    test_stab: Option<stabilizeui::TestStab>,
-    /// --test-stabilize: the lock-off residual it measured.
-    test_stab_lock: f64,
-    test_camtrack: Option<camtrackui::TestCamTrack>,
-    test_sammie: Option<sammie::TestSammie>,
-    /// --test-focus: (stage, frames, Defocus node id).
-    test_focus: Option<(u32, u32, u64)>,
-    /// --test-focus: wall clock for the waits on a view switch.
-    test_focus_t: Option<web_time::Instant>,
-    /// --test-viewswitch: (stage, frames).
-    test_viewswitch: Option<(u32, u32)>,
-    /// --test-keymap: (stage, frames).
-    test_keymap: Option<(u32, u32)>,
-    /// --test-region: (stage, frames).
-    test_region: Option<(u32, u32)>,
-    /// --test-harp: (stage, stage start, scratch: rig builds, delivered,
-    /// displayed at the window mark; rig builds + displayed at the last view
-    /// flip; probe values as f32 bits).
-    test_harp: Option<(u32, Instant, [u64; 8])>,
     /// How many times the playback rig has been (re)built — a diagnostic the
     /// harp suite gates on: a rig rebuilt during steady playback throws the
     /// player's decoded frames away.
@@ -6659,37 +6343,6 @@ struct Gfx {
     /// stable across rebuilds) so its first pump does not decode the whole
     /// graph; a slot this has never seen starts active, never starved.
     inactive_slots: std::collections::HashSet<usize>,
-    /// --test-layer: (stage, frames, node).
-    test_layer: Option<(u32, u32, u64)>,
-    /// --test-layerpick: stage, frames in stage, and the two Transforms
-    /// (foreground, background) a ctrl-click should land on.
-    test_layerpick: Option<(u32, u32, [u64; 2])>,
-    /// --test-roto: (stage, frames in stage, the Spline).
-    test_roto: Option<(u32, u32, u64)>,
-    /// --test-roto: a gesture's press and release points.
-    test_roto_drag: (egui::Pos2, egui::Pos2),
-    test_roto_clock: Option<web_time::Instant>,
-    /// --test-eyedrop: (stage, frames in stage, the Blank node).
-    test_eyedrop: Option<(u32, u32, u64)>,
-    test_text: Option<textui::TestText>,
-    /// --test-viewlock: (stage, frames in stage, [subwob instance, tail], the
-    /// readout before the inner edit).
-    test_viewlock: Option<(u32, u32, [u64; 2], [f32; 4])>,
-    /// --test-dual: (stage, frames in stage, the Grade the right pane views).
-    test_dual: Option<(u32, u32, u64)>,
-    /// `--test-record`: stage and when it began.
-    test_record: Option<(u32, web_time::Instant)>,
-    /// --test-compose: (stage, frames in stage), the press point, the
-    /// pointer last frame, and the dragged control's rect at the press.
-    test_compose: Option<(u32, u32)>,
-    test_compose_at: (egui::Pos2, egui::Pos2, egui::Rect),
-    /// The fixture's four rgb controls, at [0,0] [5,0] [0,3] [5,3].
-    test_compose_ids: [u64; 4],
-    /// --test-subwob: (stage, frames in stage); then the wall clock of the
-    /// last edit, the picture's mean before the collapse, and the ids
-    /// (Read, Grade, Blur, the subwob node).
-    test_subwob: Option<(u32, u32, web_time::Instant)>,
-    test_subwob_at: (web_time::Instant, [f32; 3], [u64; 4]),
     /// --test-layer: a screen point captured on the frame the gesture that
     /// uses it was planned, so a settling panel cannot move it mid-drag.
     layer_grab: egui::Pos2,
@@ -6709,9 +6362,6 @@ struct Gfx {
     last_layer_window: Option<egui::Rect>,
     /// --test-click hud-off phase: translate.x before the inert drag.
     hud_off_tx0: f32,
-    /// --test-click: the transform's forward affine before the ctrl-drag
-    /// pivot phase, which must leave it unchanged.
-    test_pivot_aff: [f32; 6],
     /// Width of the first properties panel laid out last frame — the zoom
     /// suite reads it.
     last_panel_w: f32,
@@ -6727,8 +6377,6 @@ struct Gfx {
     last_strip_h: f32,
     /// --test-zoom: panel x and the anchor used, sampled at 1x.
     zoom_x_1x: f32,
-    /// --test-rendercache: (stage, frames, displayed marker).
-    test_rc: Option<(u32, u32, u64)>,
 }
 
 impl ApplicationHandler for App {
@@ -8255,7 +7903,184 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         track_shown: None,
         track_view: None,
         track_edit: None,
-        test_inout_mark: None,
+        test: state::SuiteState {
+            inout_mark: None,
+            spline_press: None,
+            spline_aux: Vec::new(),
+            click: opts.test_click.then_some(0),
+            target: None,
+            seek: opts.test_seek.then_some((0, 0, 0)),
+            play: opts.test_play.then_some((0, 0, Instant::now())),
+            browser: opts.test_browser.then_some((0, false)),
+            setup: opts.test_setup.then_some((0, 0, 0, 0)),
+            slice: opts.test_slice.then_some((0, 0, 0)),
+            box_: opts.test_box.then_some((0, 0)),
+            curves: opts.test_curves.then_some((0, 0)),
+            scale_from: None,
+            inout: opts.test_inout.then_some((0, 0)),
+            frames: opts.test_frames.then_some((0, 0)),
+            gizmokey_key6: 0.0,
+            gizmokey_y8: 0.0,
+            gizmokey_before: [0.0; 2],
+            bake: opts.test_bake.then_some((0, 0)),
+            range: opts.test_range.then_some((0, 0)),
+            range_t0: None,
+            range_last: None,
+            range_seen: Vec::new(),
+            bake_live: Vec::new(),
+            bake_seen: Vec::new(),
+            bake_last: None,
+            bake_pass: 0,
+            bake_ref: Vec::new(),
+            bake_t0: None,
+            frames_seen: Vec::new(),
+            frames_t0: None,
+            shot: opts.test_shot.then_some((0, 0, 0)),
+            paint: opts.test_paint.then_some((0, 0, 0)),
+            paint_bake: None,
+            tab: opts.test_tab.then_some((0, 0)),
+            zones: opts.test_zones.then_some((0, 0, 0)),
+            zones_at: egui::Pos2::ZERO,
+            zones_t0: None,
+            zones_since: Instant::now(),
+            zones_px: None,
+            picker: opts.test_picker.then_some((0, 0)),
+            prev_rect: egui::Rect::NOTHING,
+            stable: 0,
+            pos: None,
+            proxy_drag: (0.0, 0, None),
+            rect: egui::Rect::NOTHING,
+            anim: opts.test_anim.then_some((0, 0, u64::MAX, 0, false)),
+            patchlive: opts.test_patchlive.then_some((0, 0)),
+            gizmokey: opts.test_gizmokey.then_some((0, 0)),
+            magnet: opts.test_magnet.then_some((0, 0, 0)),
+            nodeux: opts.test_nodeux.then_some((0, 0, 0, 0)),
+            blendnav: opts.test_blendnav.then_some((0, 0, 0, 0)),
+            tv: opts.test_tv.then_some((0, 0, 0)),
+            mswipe: opts.test_mswipe.then_some((0, 0, egui::Pos2::ZERO, egui::Pos2::ZERO)),
+            spline: opts.test_spline.then_some((0, 0, 0, [0.0; 2])),
+            cornerpin_knob: egui::Pos2::ZERO,
+            gridwarp_snap: Vec::new(),
+            warp: opts.test_warp.then(|| (0, 0, egui::Pos2::ZERO, Instant::now() + std::time::Duration::from_secs(40))),
+            gridwarp_pivot: egui::Pos2::ZERO,
+            gridwarp: opts.test_gridwarp.then(|| (0, 0, egui::Pos2::ZERO, Instant::now() + std::time::Duration::from_secs(40))),
+            cornerpin: opts.test_cornerpin.then_some((0, 0, 0, egui::Pos2::ZERO, [[0.0; 2]; 4])),
+            keyer: opts.test_keyer.then_some((0, 0, 0)),
+            colourkey: opts.test_colourkey.then_some((0, 0, 0)),
+            colourkey_m: 0.0,
+            rgb: opts.test_rgb.then_some((0, 0, 0)),
+            rgb_before: [1.0; 3],
+            rgb_anchor: (egui::Pos2::ZERO, 1.0),
+            cpick: opts.test_cpick.then_some((0, 0, 0)),
+            propspie: opts.test_propspie.then_some((0, 0, 0)),
+            propspie_at: (egui::Rect::NOTHING, 0),
+            viewpie: opts.test_viewpie.then(|| (0, 0, web_time::Instant::now())),
+            cpick_before: [0.0; 4],
+            cpick_at: (egui::Rect::NOTHING, 0),
+            cpick_t0: web_time::Instant::now(),
+            cpick_scale: egui::Vec2::ZERO,
+            cpick_zoom: (0.0, 0.0),
+            nodepack: opts.test_nodepack.then_some((0, 0, 0)),
+            track: opts.test_track.then_some((0, 0, 0)),
+            planar: opts.test_planar.then_some((0, 0, 0)),
+            planar_t0: web_time::Instant::now(),
+            planar_stab: 0.0,
+            planar_press: egui::Pos2::ZERO,
+            channels: opts.test_channels.then_some((0, 0, 0)),
+            crypto: opts.test_crypto.then_some((0, 0, 0)),
+            crypto_since: None,
+            crypto_t0: None,
+            curveedit: opts.test_curveedit.then_some((0, 0, 0)),
+            noise: opts.test_noise.then_some((0, 0, 0)),
+            geo: opts.test_geo.then_some((0, 0, 0)),
+            geotools: opts.test_geotools.then(|| (0, 0, web_time::Instant::now())),
+            geotools_ids: Default::default(),
+            geotools_mark: None,
+            sdf: opts.test_sdf.then_some((0, 0, 0)),
+            sdf_last: None,
+            sdf_base: None,
+            mblur: opts.test_mblur.then_some((0, 0, 0)),
+            write: opts.test_write.then_some((0, 0, 0)),
+            track_progress: 0,
+            track_clock: web_time::Instant::now(),
+            track_worst: 0.0,
+            track_points_worst: 0.0,
+            track_drag: (egui::Pos2::ZERO, egui::Pos2::ZERO),
+            track_move_from: [0.0; 2],
+            track_ref: Vec::new(),
+            track_seed: [0.5, 0.5],
+            zoom: opts.test_zoom.then_some((0, 0, 0.0)),
+            panelw: None,
+            cachemeter: opts.test_cachemeter.then_some((0, 0)),
+            precache: opts.test_precache.then(|| (0, Instant::now())),
+            bin: opts.test_bin.then_some((0, 0, 0)),
+            edit_browse: opts.edit_browse.as_ref().map(|_| (0, 0, 0)),
+            edit_blank: opts.edit_blank.then(|| (0, 0, Instant::now())),
+            edit_undo: opts.edit_undo.then(|| (0, 0, Instant::now())),
+            edit_undo_shot: None,
+            source_insert: None,
+            churn: opts.edit_churn.map(|n| (n.max(1), 0, 0)),
+            source_before: Vec::new(),
+            thumbs: opts.test_thumbs.then_some((0, 0)),
+            dpx: opts.test_dpx.then_some((0, 0, 0)),
+            still: opts.test_still.then_some((0, 0, 0)),
+            scrub: opts.test_scrub.then_some((0, 0, 0)),
+            scrubperf: opts.test_scrubperf.then_some((0, 0, 0)),
+            scrubfid: opts.test_scrubfid.then(|| Box::new(ScrubFid::new())),
+            proxy: opts.test_proxy.then(|| Box::new(ProxyTest::new())),
+            stress: opts.test_stress.then(|| Box::new(stress::StressTest::new())),
+            grow: opts.test_grow.then_some((0, 0, 0)),
+            scrub_t0: None,
+            seek_t0: None,
+            rc_t0: None,
+            grow_t0: None,
+            plugin: opts.test_plugin.then_some((0, 0, 0)),
+            shader: opts.test_shader.then_some((0, 0, 0)),
+            cost: opts.test_cost.then_some((0, 0, 0)),
+            genai: opts.test_genai.then(Default::default),
+            corridor: opts.test_corridor.then(Default::default),
+            seedvr: opts.test_seedvr.then(Default::default),
+            depth: opts.test_depth.then(Default::default),
+            ltxhdr: opts.test_ltxhdr.then(Default::default),
+            upscale: opts.test_upscale.then(Default::default),
+            hdrcnn: opts.test_hdrcnn.then(Default::default),
+            flow: opts.test_flow.then(Default::default),
+            stab: opts.test_stabilize.then(Default::default),
+            stab_lock: 0.0,
+            camtrack: opts.test_camtrack.then(Default::default),
+            sammie: opts.test_sammie.then(Default::default),
+            blender: opts.test_blender.then(|| TestBlender {
+                stage: 0,
+                t0: Instant::now(),
+                since: Instant::now(),
+                node: 0,
+                fake: None,
+                render: 0,
+            }),
+            focus: opts.test_focus.then_some((0, 0, 0)),
+            focus_t: None,
+            viewswitch: opts.test_viewswitch.then_some((0, 0)),
+            keymap: opts.test_keymap.then_some((0, 0)),
+            region: opts.test_region.then_some((0, 0)),
+            harp: opts.test_harp.then(|| (0, Instant::now(), [0; 8])),
+            layer: opts.test_layer.then_some((0, 0, 0)),
+            layerpick: opts.test_layerpick.then_some((0, 0, [0, 0])),
+            roto: opts.test_roto.then_some((0, 0, 0)),
+            roto_drag: (egui::Pos2::ZERO, egui::Pos2::ZERO),
+            roto_clock: None,
+            eyedrop: opts.test_eyedrop.then_some((0, 0, 0)),
+            text: opts.test_text.then(Default::default),
+            viewlock: opts.test_viewlock.then_some((0, 0, [0, 0], [0.0; 4])),
+            dual: opts.test_dual.then_some((0, 0, 0)),
+            record: opts.test_record.then(|| (0, web_time::Instant::now())),
+            compose: opts.test_compose.then_some((0, 0)),
+            compose_at: (egui::Pos2::ZERO, egui::Pos2::ZERO, egui::Rect::NOTHING),
+            compose_ids: [0; 4],
+            subwob: opts.test_subwob.then(|| (0, 0, web_time::Instant::now())),
+            subwob_at: (web_time::Instant::now(), [0.0; 3], [0; 4]),
+            pivot_aff: [0.0; 6],
+            rc: opts.test_rendercache.then_some((0, 0, 0)),
+        },
         track_move: None,
         track_free: None,
         timeline_pie: None,
@@ -8358,8 +8183,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         pin_grab: None,
         pin_marquee: None,
         pin_knob: None,
-        test_spline_press: None,
-        test_spline_aux: Vec::new(),
         spline_sel_node: None,
         spline_sel_n: 0,
         spline_sel_shape: 0,
@@ -8514,176 +8337,20 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         uploaded_fill: Default::default(),
         dump_after: opts.dump_after.clone(),
         node_rects: Vec::new(),
-        test_click: opts.test_click.then_some(0),
-        test_target: None,
-        test_seek: opts.test_seek.then_some((0, 0, 0)),
-        test_play: opts.test_play.then_some((0, 0, Instant::now())),
-        test_browser: opts.test_browser.then_some((0, false)),
-        test_setup: opts.test_setup.then_some((0, 0, 0, 0)),
-        test_slice: opts.test_slice.then_some((0, 0, 0)),
-        test_box: opts.test_box.then_some((0, 0)),
-        test_curves: opts.test_curves.then_some((0, 0)),
-        test_scale_from: None,
-        test_inout: opts.test_inout.then_some((0, 0)),
-        test_frames: opts.test_frames.then_some((0, 0)),
         last_path_points: 0,
         path_drag: None,
-        test_gizmokey_key6: 0.0,
-        test_gizmokey_y8: 0.0,
-        test_gizmokey_before: [0.0; 2],
-        test_bake: opts.test_bake.then_some((0, 0)),
-        test_range: opts.test_range.then_some((0, 0)),
-        test_range_t0: None,
-        test_range_last: None,
-        test_range_seen: Vec::new(),
-        test_bake_live: Vec::new(),
-        test_bake_seen: Vec::new(),
-        test_bake_last: None,
-        test_bake_pass: 0,
-        test_bake_ref: Vec::new(),
-        test_bake_t0: None,
-        test_frames_seen: Vec::new(),
-        test_frames_t0: None,
-        test_shot: opts.test_shot.then_some((0, 0, 0)),
-        test_paint: opts.test_paint.then_some((0, 0, 0)),
-        test_paint_bake: None,
-        test_tab: opts.test_tab.then_some((0, 0)),
-        test_zones: opts.test_zones.then_some((0, 0, 0)),
-        test_zones_at: egui::Pos2::ZERO,
-        test_zones_t0: None,
-        test_zones_since: Instant::now(),
-        test_zones_px: None,
-        test_picker: opts.test_picker.then_some((0, 0)),
-        test_prev_rect: egui::Rect::NOTHING,
-        test_stable: 0,
-        test_pos: None,
-        test_proxy_drag: (0.0, 0, None),
-        test_rect: egui::Rect::NOTHING,
-        test_anim: opts.test_anim.then_some((0, 0, u64::MAX, 0, false)),
-        test_patchlive: opts.test_patchlive.then_some((0, 0)),
-        test_gizmokey: opts.test_gizmokey.then_some((0, 0)),
-        test_magnet: opts.test_magnet.then_some((0, 0, 0)),
-        test_nodeux: opts.test_nodeux.then_some((0, 0, 0, 0)),
-        test_blendnav: opts.test_blendnav.then_some((0, 0, 0, 0)),
-        test_tv: opts.test_tv.then_some((0, 0, 0)),
-        test_mswipe: opts.test_mswipe.then_some((0, 0, egui::Pos2::ZERO, egui::Pos2::ZERO)),
         group_panel_shown: false,
-        test_spline: opts.test_spline.then_some((0, 0, 0, [0.0; 2])),
-        test_cornerpin_knob: egui::Pos2::ZERO,
-        test_gridwarp_snap: Vec::new(),
-        test_warp: opts.test_warp.then(|| (0, 0, egui::Pos2::ZERO, Instant::now() + std::time::Duration::from_secs(40))),
-        test_gridwarp_pivot: egui::Pos2::ZERO,
-        test_gridwarp: opts.test_gridwarp.then(|| (0, 0, egui::Pos2::ZERO, Instant::now() + std::time::Duration::from_secs(40))),
-        test_cornerpin: opts.test_cornerpin.then_some((0, 0, 0, egui::Pos2::ZERO, [[0.0; 2]; 4])),
-        test_keyer: opts.test_keyer.then_some((0, 0, 0)),
-        test_colourkey: opts.test_colourkey.then_some((0, 0, 0)),
-        test_colourkey_m: 0.0,
-        test_rgb: opts.test_rgb.then_some((0, 0, 0)),
-        test_rgb_before: [1.0; 3],
-        test_rgb_anchor: (egui::Pos2::ZERO, 1.0),
-        test_cpick: opts.test_cpick.then_some((0, 0, 0)),
-        test_propspie: opts.test_propspie.then_some((0, 0, 0)),
-        test_propspie_at: (egui::Rect::NOTHING, 0),
-        test_viewpie: opts.test_viewpie.then(|| (0, 0, web_time::Instant::now())),
-        test_cpick_before: [0.0; 4],
-        test_cpick_at: (egui::Rect::NOTHING, 0),
-        test_cpick_t0: web_time::Instant::now(),
-        test_cpick_scale: egui::Vec2::ZERO,
-        test_cpick_zoom: (0.0, 0.0),
-        test_nodepack: opts.test_nodepack.then_some((0, 0, 0)),
-        test_track: opts.test_track.then_some((0, 0, 0)),
-        test_planar: opts.test_planar.then_some((0, 0, 0)),
-        test_planar_t0: web_time::Instant::now(),
-        test_planar_stab: 0.0,
-        test_planar_press: egui::Pos2::ZERO,
-        test_channels: opts.test_channels.then_some((0, 0, 0)),
-        test_crypto: opts.test_crypto.then_some((0, 0, 0)),
-        test_crypto_since: None,
-        test_crypto_t0: None,
-        test_curveedit: opts.test_curveedit.then_some((0, 0, 0)),
-        test_noise: opts.test_noise.then_some((0, 0, 0)),
-        test_geo: opts.test_geo.then_some((0, 0, 0)),
-        test_geotools: opts.test_geotools.then(|| (0, 0, web_time::Instant::now())),
-        test_geotools_ids: Default::default(),
-        test_geotools_mark: None,
-        test_sdf: opts.test_sdf.then_some((0, 0, 0)),
-        test_sdf_last: None,
-        test_sdf_base: None,
         geo_mean: 0.0,
         geo_phys_node: 0,
         geo_phys_seen: 0,
         geo_click_tries: 0,
-        test_mblur: opts.test_mblur.then_some((0, 0, 0)),
         mblur_peak: 0,
         curve_rect: None,
         curve_screen: Vec::new(),
         curve_before: Vec::new(),
         curve_grab: egui::Pos2::ZERO,
-        test_write: opts.test_write.then_some((0, 0, 0)),
-        test_track_progress: 0,
-        test_track_clock: web_time::Instant::now(),
-        test_track_worst: 0.0,
-        test_track_points_worst: 0.0,
-        test_track_drag: (egui::Pos2::ZERO, egui::Pos2::ZERO),
-        test_track_move_from: [0.0; 2],
-        test_track_ref: Vec::new(),
-        test_track_seed: [0.5, 0.5],
-        test_zoom: opts.test_zoom.then_some((0, 0, 0.0)),
-        test_panelw: None,
         prop_panel_rects: Vec::new(),
-        test_cachemeter: opts.test_cachemeter.then_some((0, 0)),
-        test_precache: opts.test_precache.then(|| (0, Instant::now())),
-        test_bin: opts.test_bin.then_some((0, 0, 0)),
-        test_edit_browse: opts.edit_browse.as_ref().map(|_| (0, 0, 0)),
-        test_edit_blank: opts.edit_blank.then(|| (0, 0, Instant::now())),
-        test_edit_undo: opts.edit_undo.then(|| (0, 0, Instant::now())),
-        test_edit_undo_shot: None,
-        test_source_insert: None,
-        test_churn: opts.edit_churn.map(|n| (n.max(1), 0, 0)),
-        test_source_before: Vec::new(),
         edit_browse_dir: opts.edit_browse.clone(),
-        test_thumbs: opts.test_thumbs.then_some((0, 0)),
-        test_dpx: opts.test_dpx.then_some((0, 0, 0)),
-        test_still: opts.test_still.then_some((0, 0, 0)),
-        test_scrub: opts.test_scrub.then_some((0, 0, 0)),
-        test_scrubperf: opts.test_scrubperf.then_some((0, 0, 0)),
-        test_scrubfid: opts.test_scrubfid.then(|| Box::new(ScrubFid::new())),
-        test_proxy: opts.test_proxy.then(|| Box::new(ProxyTest::new())),
-        test_stress: opts.test_stress.then(|| Box::new(stress::StressTest::new())),
-        test_grow: opts.test_grow.then_some((0, 0, 0)),
-        test_scrub_t0: None,
-        test_seek_t0: None,
-        test_rc_t0: None,
-        test_grow_t0: None,
-        test_plugin: opts.test_plugin.then_some((0, 0, 0)),
-        test_shader: opts.test_shader.then_some((0, 0, 0)),
-        test_cost: opts.test_cost.then_some((0, 0, 0)),
-        test_genai: opts.test_genai.then(Default::default),
-        test_corridor: opts.test_corridor.then(Default::default),
-        test_seedvr: opts.test_seedvr.then(Default::default),
-        test_depth: opts.test_depth.then(Default::default),
-        test_ltxhdr: opts.test_ltxhdr.then(Default::default),
-        test_upscale: opts.test_upscale.then(Default::default),
-        test_hdrcnn: opts.test_hdrcnn.then(Default::default),
-        test_flow: opts.test_flow.then(Default::default),
-        test_stab: opts.test_stabilize.then(Default::default),
-        test_stab_lock: 0.0,
-        test_camtrack: opts.test_camtrack.then(Default::default),
-        test_sammie: opts.test_sammie.then(Default::default),
-        test_blender: opts.test_blender.then(|| TestBlender {
-            stage: 0,
-            t0: Instant::now(),
-            since: Instant::now(),
-            node: 0,
-            fake: None,
-            render: 0,
-        }),
-        test_focus: opts.test_focus.then_some((0, 0, 0)),
-        test_focus_t: None,
-        test_viewswitch: opts.test_viewswitch.then_some((0, 0)),
-        test_keymap: opts.test_keymap.then_some((0, 0)),
-        test_region: opts.test_region.then_some((0, 0)),
-        test_harp: opts.test_harp.then(|| (0, Instant::now(), [0; 8])),
         rig_builds: 0,
         want_windows: HashMap::new(),
         rig_windows: HashMap::new(),
@@ -8694,21 +8361,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         bake_mask: Vec::new(),
         precache: None,
         inactive_slots: Default::default(),
-        test_layer: opts.test_layer.then_some((0, 0, 0)),
-        test_layerpick: opts.test_layerpick.then_some((0, 0, [0, 0])),
-        test_roto: opts.test_roto.then_some((0, 0, 0)),
-        test_roto_drag: (egui::Pos2::ZERO, egui::Pos2::ZERO),
-        test_roto_clock: None,
-        test_eyedrop: opts.test_eyedrop.then_some((0, 0, 0)),
-        test_text: opts.test_text.then(Default::default),
-        test_viewlock: opts.test_viewlock.then_some((0, 0, [0, 0], [0.0; 4])),
-        test_dual: opts.test_dual.then_some((0, 0, 0)),
-        test_record: opts.test_record.then(|| (0, web_time::Instant::now())),
-        test_compose: opts.test_compose.then_some((0, 0)),
-        test_compose_at: (egui::Pos2::ZERO, egui::Pos2::ZERO, egui::Rect::NOTHING),
-        test_compose_ids: [0; 4],
-        test_subwob: opts.test_subwob.then(|| (0, 0, web_time::Instant::now())),
-        test_subwob_at: (web_time::Instant::now(), [0.0; 3], [0; 4]),
         layer_grab: egui::Pos2::ZERO,
         layer_popout: None,
         layer_bars: Vec::new(),
@@ -8718,7 +8370,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         layer_slots: 0,
         last_layer_window: None,
         hud_off_tx0: 0.0,
-        test_pivot_aff: [0.0; 6],
         last_panel_w: 0.0,
         zoom_font_1x: 0.0,
         last_panel_x: 0.0,
@@ -8727,7 +8378,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         zoom_h_1x: 0.0,
         last_strip_h: 0.0,
         zoom_x_1x: 0.0,
-        test_rc: opts.test_rendercache.then_some((0, 0, 0)),
     };
     g.addons_reload();
 
@@ -8756,7 +8406,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
                 let first = e.project.bin.first().map(|c| c.uid);
                 e.source_request = Some(first);
             }
-            g.test_source_insert = Some((0, 0));
+            g.test.source_insert = Some((0, 0));
         }
         if opts.edit_play {
             g.playing = true;
@@ -13052,153 +12702,153 @@ impl Gfx {
         let egui_frame = run_ui.then(|| {
             let mut raw_input = self.egui_state.take_egui_input(&self.window);
             TEST_BEAT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if let Some(stage) = self.test_click {
+            if let Some(stage) = self.test.click {
                 self.drive_test_click(stage, &mut raw_input);
             }
-            if self.test_slice.is_some() {
+            if self.test.slice.is_some() {
                 self.drive_test_slice(&mut raw_input);
             }
-            if self.test_panelw.is_some() {
+            if self.test.panelw.is_some() {
                 self.drive_test_panelw(&mut raw_input);
             }
-            if self.test_planar.is_some() {
+            if self.test.planar.is_some() {
                 self.drive_test_planar(&mut raw_input);
             }
-            if self.test_box.is_some() {
+            if self.test.box_.is_some() {
                 self.drive_test_box(&mut raw_input);
             }
-            if self.test_curves.is_some() {
+            if self.test.curves.is_some() {
                 self.drive_test_curves(&mut raw_input);
             }
-            if self.test_inout.is_some() {
+            if self.test.inout.is_some() {
                 self.drive_test_inout(&mut raw_input);
             }
-            if self.test_frames.is_some() {
+            if self.test.frames.is_some() {
                 self.drive_test_frames(&mut raw_input);
             }
-            if self.test_bake.is_some() {
+            if self.test.bake.is_some() {
                 self.drive_test_bake();
             }
-            if self.test_range.is_some() {
+            if self.test.range.is_some() {
                 self.drive_test_range();
             }
-            if self.test_curveedit.is_some() {
+            if self.test.curveedit.is_some() {
                 self.drive_test_curveedit(&mut raw_input);
             }
-            if self.test_layer.is_some() {
+            if self.test.layer.is_some() {
                 self.drive_test_layer(&mut raw_input);
             }
-            if self.test_layerpick.is_some() {
+            if self.test.layerpick.is_some() {
                 self.drive_test_layerpick(&mut raw_input);
             }
-            if self.test_roto.is_some() {
+            if self.test.roto.is_some() {
                 self.drive_test_roto(&mut raw_input);
             }
-            if self.test_eyedrop.is_some() {
+            if self.test.eyedrop.is_some() {
                 self.drive_test_eyedrop(&mut raw_input);
             }
-            if self.test_text.is_some() {
+            if self.test.text.is_some() {
                 self.drive_test_text(&mut raw_input);
             }
-            if self.test_viewlock.is_some() {
+            if self.test.viewlock.is_some() {
                 self.drive_test_viewlock(&mut raw_input);
             }
-            if self.test_record.is_some() {
+            if self.test.record.is_some() {
                 self.drive_test_record(&mut raw_input);
             }
-            if self.test_dual.is_some() {
+            if self.test.dual.is_some() {
                 self.drive_test_dual();
             }
-            if self.test_compose.is_some() {
+            if self.test.compose.is_some() {
                 self.drive_test_compose(&mut raw_input);
             }
-            if self.test_subwob.is_some() {
+            if self.test.subwob.is_some() {
                 self.drive_test_subwob(&mut raw_input);
             }
-            if self.test_shot.is_some() {
+            if self.test.shot.is_some() {
                 self.drive_test_shot();
             }
             self.pump_auto_bake();
             self.pump_bake_queue();
-            if self.test_paint.is_some() {
+            if self.test.paint.is_some() {
                 self.drive_test_paint(&mut raw_input);
             }
-            if self.test_tab.is_some() {
+            if self.test.tab.is_some() {
                 self.drive_test_tab(&mut raw_input);
             }
-            if self.test_zones.is_some() {
+            if self.test.zones.is_some() {
                 self.drive_test_zones(&mut raw_input);
             }
-            if self.test_picker.is_some() {
+            if self.test.picker.is_some() {
                 self.drive_test_picker(&mut raw_input);
             }
-            if self.test_crypto.is_some() {
+            if self.test.crypto.is_some() {
                 self.drive_test_crypto(&mut raw_input);
             }
-            if self.test_gizmokey.is_some() {
+            if self.test.gizmokey.is_some() {
                 self.drive_test_gizmokey(&mut raw_input);
             }
-            if self.test_magnet.is_some() {
+            if self.test.magnet.is_some() {
                 self.drive_test_magnet(&mut raw_input);
             }
-            if self.test_nodeux.is_some() {
+            if self.test.nodeux.is_some() {
                 self.drive_test_nodeux(&mut raw_input);
             }
-            if self.test_track.is_some() {
+            if self.test.track.is_some() {
                 self.drive_test_track_ui(&mut raw_input);
             }
-            if self.test_blendnav.is_some() {
+            if self.test.blendnav.is_some() {
                 self.drive_test_blendnav(&mut raw_input);
             }
-            if self.test_tv.is_some() {
+            if self.test.tv.is_some() {
                 self.drive_test_tv(&mut raw_input);
             }
-            if self.test_mswipe.is_some() {
+            if self.test.mswipe.is_some() {
                 self.drive_test_mswipe(&mut raw_input);
             }
-            if self.test_cornerpin.is_some() {
+            if self.test.cornerpin.is_some() {
                 self.drive_test_cornerpin(&mut raw_input);
             }
-            if self.test_gridwarp.is_some() {
+            if self.test.gridwarp.is_some() {
                 self.drive_test_gridwarp(&mut raw_input);
             }
-            if self.test_warp.is_some() {
+            if self.test.warp.is_some() {
                 self.drive_test_warp(&mut raw_input);
             }
-            if self.test_spline.is_some() {
+            if self.test.spline.is_some() {
                 self.drive_test_spline(&mut raw_input);
             }
-            if self.test_sammie.is_some() {
+            if self.test.sammie.is_some() {
                 self.drive_test_sammie(&mut raw_input);
             }
-            if self.test_sdf.is_some() {
+            if self.test.sdf.is_some() {
                 self.drive_test_sdf(&mut raw_input);
             }
-            if self.test_geo.is_some() {
+            if self.test.geo.is_some() {
                 self.drive_test_geo(&mut raw_input);
             }
-            if self.test_geotools.is_some() {
+            if self.test.geotools.is_some() {
                 self.drive_test_geotools(&mut raw_input);
             }
-            if self.test_rgb.is_some() {
+            if self.test.rgb.is_some() {
                 self.drive_test_rgb(&mut raw_input);
             }
-            if self.test_cpick.is_some() {
+            if self.test.cpick.is_some() {
                 self.drive_test_cpick(&mut raw_input);
             }
-            if self.test_propspie.is_some() {
+            if self.test.propspie.is_some() {
                 self.drive_test_propspie(&mut raw_input);
             }
-            if self.test_viewpie.is_some() {
+            if self.test.viewpie.is_some() {
                 self.drive_test_viewpie(&mut raw_input);
             }
-            if self.test_keymap.is_some() {
+            if self.test.keymap.is_some() {
                 self.drive_test_keymap(&mut raw_input);
             }
-            if self.test_region.is_some() {
+            if self.test.region.is_some() {
                 self.drive_test_region(&mut raw_input);
             }
-            if self.test_harp.is_some() {
+            if self.test.harp.is_some() {
                 self.drive_test_harp(&mut raw_input);
             }
             // Steal Tab before egui's focus traversal sees it: egui would
@@ -13669,22 +13319,22 @@ impl Gfx {
         self.close_layer_gaps();
         self.drive_test_keyer();
         self.drive_test_colourkey();
-        if self.test_nodepack.is_some() {
+        if self.test.nodepack.is_some() {
             self.drive_test_nodepack();
         }
-        if self.test_track.is_some() {
+        if self.test.track.is_some() {
             self.drive_test_track();
         }
-        if self.test_channels.is_some() {
+        if self.test.channels.is_some() {
             self.drive_test_channels();
         }
-        if self.test_noise.is_some() {
+        if self.test.noise.is_some() {
             self.drive_test_noise();
         }
-        if self.test_mblur.is_some() {
+        if self.test.mblur.is_some() {
             self.drive_test_mblur();
         }
-        if self.test_write.is_some() {
+        if self.test.write.is_some() {
             self.drive_test_write();
         }
         self.drive_test_zoom();
@@ -15072,7 +14722,7 @@ impl Gfx {
     /// playing. Each flip rebuilds the playback rig; 60 flips without a
     /// validation error is the bar.
     fn drive_churn(&mut self) {
-        let Some((period, mut frames, mut flips)) = self.test_churn else { return };
+        let Some((period, mut frames, mut flips)) = self.test.churn else { return };
         frames += 1;
         if frames % period == 0 {
             let Some(e) = self.edit.as_mut() else { return };
@@ -15098,13 +14748,13 @@ impl Gfx {
                 std::process::exit(0);
             }
         }
-        self.test_churn = Some((period, frames, flips));
+        self.test.churn = Some((period, frames, flips));
     }
 
     /// `--edit-source`: marks set in the clip player are the range that
     /// lands on the timeline, and the shot belongs to the BIN clip.
     fn drive_source_insert(&mut self) {
-        let Some((stage, mut frames)) = self.test_source_insert else { return };
+        let Some((stage, mut frames)) = self.test.source_insert else { return };
         frames += 1;
         if frames > 2400 {
             println!("SOURCE INSERT FAIL: timeout at stage {stage}");
@@ -15147,14 +14797,14 @@ impl Gfx {
                 c.in_off = 5;
                 c.out_off = 14;
                 e.insert_request = Some(edit::Insert::AtPlayhead);
-                self.test_source_before = before;
-                self.test_source_insert = Some((1, frames));
+                self.test.source_before = before;
+                self.test.source_insert = Some((1, frames));
             }
             1 => {
                 let Some(e) = self.edit.as_ref() else { return };
-                let before = &self.test_source_before;
+                let before = &self.test.source_before;
                 let Some(c) = e.project.clips.iter().find(|c| !before.contains(&c.uid)) else {
-                    self.test_source_insert = Some((1, frames));
+                    self.test.source_insert = Some((1, frames));
                     return;
                 };
                 if (c.in_off, c.out_off) != (5, 14) {
@@ -15198,7 +14848,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_source_insert = Some((stage, frames)),
+            _ => self.test.source_insert = Some((stage, frames)),
         }
     }
 
@@ -15209,7 +14859,7 @@ impl Gfx {
     /// added there is what the comp renders; trimming the clip longer grows
     /// the range. Waits are wall-clock.
     fn drive_edit_blank(&mut self) {
-        let Some((stage, frames, at)) = self.test_edit_blank else { return };
+        let Some((stage, frames, at)) = self.test.edit_blank else { return };
         let fail = |m: String| -> ! {
             println!("EDIT BLANK FAIL: {m}");
             std::process::exit(1);
@@ -15217,7 +14867,7 @@ impl Gfx {
         if at.elapsed() > std::time::Duration::from_secs(20) {
             fail(format!("timeout at stage {stage}"));
         }
-        let next = |s: &mut Self, st: u8| s.test_edit_blank = Some((st, 0, Instant::now()));
+        let next = |s: &mut Self, st: u8| s.test.edit_blank = Some((st, 0, Instant::now()));
         let frames = frames + 1;
         match stage {
             0 if frames > 30 => {
@@ -15277,7 +14927,7 @@ impl Gfx {
             }
             _ => {}
         }
-        if let Some(t) = self.test_edit_blank.as_mut() {
+        if let Some(t) = self.test.edit_blank.as_mut() {
             t.1 = frames;
         }
     }
@@ -15288,7 +14938,7 @@ impl Gfx {
     /// clean after. Steps go through the same calls the UI makes, and each
     /// waits for the edit to settle (`track_history` records per frame).
     fn drive_edit_undo(&mut self) {
-        let Some((stage, frames, at)) = self.test_edit_undo else { return };
+        let Some((stage, frames, at)) = self.test.edit_undo else { return };
         let fail = |m: String| -> ! {
             println!("EDIT UNDO FAIL: {m}");
             std::process::exit(1);
@@ -15299,7 +14949,7 @@ impl Gfx {
         let frames = frames + 1;
         // Every stage gives the host a few frames to mint, seek and record.
         if frames < 8 || self.playback_dirty {
-            self.test_edit_undo = Some((stage, frames, at));
+            self.test.edit_undo = Some((stage, frames, at));
             return;
         }
         let mut next = stage + 1;
@@ -15347,11 +14997,11 @@ impl Gfx {
                 if e.project.clips.len() != 1 || shot.is_some_and(|s| e.project.shots.contains_key(&s)) {
                     fail("removing a bin clip left its clip or shot".into());
                 }
-                self.test_edit_undo_shot = shot;
+                self.test.edit_undo_shot = shot;
             }
             5 => {
                 e.undo();
-                let shot = self.test_edit_undo_shot;
+                let shot = self.test.edit_undo_shot;
                 if e.project.clips.len() != 2 || shot.is_none_or(|s| !e.project.shots.contains_key(&s)) {
                     fail(format!("undo of a removal: {} clips, shot {shot:?} present {}", e.project.clips.len(),
                         shot.is_some_and(|s| e.project.shots.contains_key(&s))));
@@ -15386,11 +15036,11 @@ impl Gfx {
             }
             _ => next = stage,
         }
-        self.test_edit_undo = Some((next, 0, Instant::now()));
+        self.test.edit_undo = Some((next, 0, Instant::now()));
     }
 
     fn drive_edit_browse(&mut self) {
-        let Some((stage, mut frames, before)) = self.test_edit_browse else { return };
+        let Some((stage, mut frames, before)) = self.test.edit_browse else { return };
         frames += 1;
         if frames > 2400 {
             println!("EDIT BROWSE FAIL: timeout at stage {stage}");
@@ -15407,7 +15057,7 @@ impl Gfx {
                     e.seq_manip_missing = true;
                     e.launch_seq_manip();
                 }
-                self.test_edit_browse = Some((1, frames, bin_before));
+                self.test.edit_browse = Some((1, frames, bin_before));
             }
             1 => {
                 if self.browser.is_none() {
@@ -15419,7 +15069,7 @@ impl Gfx {
                     *b = browser::SeqBrowser::new(None, dir, self.decoder.clone());
                     b.test_search(4);
                 }
-                self.test_edit_browse = Some((2, frames, before));
+                self.test.edit_browse = Some((2, frames, before));
             }
             2 => {
                 let ready = self
@@ -15458,9 +15108,9 @@ impl Gfx {
                     );
                     std::process::exit(0);
                 }
-                self.test_edit_browse = Some((2, frames, before));
+                self.test.edit_browse = Some((2, frames, before));
             }
-            _ => self.test_edit_browse = Some((stage, frames, before)),
+            _ => self.test.edit_browse = Some((stage, frames, before)),
         }
     }
 
@@ -15565,13 +15215,13 @@ impl Gfx {
     }
 
     fn layout_settled(&mut self) -> bool {
-        if self.image_rect == self.test_prev_rect {
-            self.test_stable += 1;
+        if self.image_rect == self.test.prev_rect {
+            self.test.stable += 1;
         } else {
-            self.test_prev_rect = self.image_rect;
-            self.test_stable = 0;
+            self.test.prev_rect = self.image_rect;
+            self.test.stable = 0;
         }
-        self.test_stable >= 3
+        self.test.stable >= 3
     }
 
     /// Render the comp through the SAME blit path the viewer uses — view

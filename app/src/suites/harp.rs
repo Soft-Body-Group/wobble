@@ -20,7 +20,7 @@ impl Gfx {
     ///      other slot is kept hot), and neither assignment rebuilt the rig.
     ///   D  flip to B: no rebuild, and the `N` picture is up.
     pub(crate) fn drive_test_harp(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, t0, mut m)) = self.test_harp else { return };
+        let Some((stage, t0, mut m)) = self.test.harp else { return };
         if t0.elapsed().as_secs_f32() > 45.0 {
             println!("HARP TEST FAIL: timed out at stage {stage}");
             std::process::exit(1);
@@ -99,11 +99,11 @@ impl Gfx {
                 self.egraph.view_out = 0;
                 self.egraph.view_active_b = false;
                 self.playback_dirty = true;
-                self.test_harp = Some((1, Instant::now(), m));
+                self.test.harp = Some((1, Instant::now(), m));
             }
             1 if el > settle => {
                 mark(&mut m, rb, shown);
-                self.test_harp = Some((2, Instant::now(), m));
+                self.test.harp = Some((2, Instant::now(), m));
             }
             2 if el > window => {
                 let Some(r) = ratio(&m, rb, shown) else {
@@ -129,18 +129,18 @@ impl Gfx {
                 self.egraph.view_out = idx("N").unwrap_or(0) as u32;
                 self.playback_dirty = true;
                 println!("HARP DIAG A: rig {rig}, {r:.2} delivered/shown, probe {p_sel:.4}");
-                self.test_harp = Some((3, Instant::now(), m));
+                self.test.harp = Some((3, Instant::now(), m));
             }
             // The N string first, just long enough to read its picture.
             3 if el > settle => {
                 let Some(p_n) = probe() else { return };
                 m[7] = p_n.to_bits() as u64;
                 self.egraph.view_out = idx("diffuse").unwrap_or(0) as u32;
-                self.test_harp = Some((4, Instant::now(), m));
+                self.test.harp = Some((4, Instant::now(), m));
             }
             4 if el > 0.8 => {
                 mark(&mut m, rb, shown);
-                self.test_harp = Some((5, Instant::now(), m));
+                self.test.harp = Some((5, Instant::now(), m));
             }
             5 if el > window => {
                 let Some(r) = ratio(&m, rb, shown) else {
@@ -171,11 +171,11 @@ impl Gfx {
                 self.egraph.view_active_b = false;
                 m[3] = rb;
                 m[4] = shown;
-                self.test_harp = Some((6, Instant::now(), m));
+                self.test.harp = Some((6, Instant::now(), m));
             }
             6 if el > settle => {
                 mark(&mut m, rb, shown);
-                self.test_harp = Some((7, Instant::now(), m));
+                self.test.harp = Some((7, Instant::now(), m));
             }
             7 if el > window => {
                 if rb != m[3] {
@@ -189,7 +189,7 @@ impl Gfx {
                 self.egraph.view_active_b = true;
                 m[3] = rb;
                 m[4] = shown;
-                self.test_harp = Some((8, Instant::now(), m));
+                self.test.harp = Some((8, Instant::now(), m));
             }
             8 if shown >= m[4] + 3 => {
                 if rb != m[3] {
@@ -205,7 +205,7 @@ impl Gfx {
                 // unless something re-shows that tick the view renders a
                 // stale texture forever.
                 self.playing = false;
-                self.test_harp = Some((9, Instant::now(), m));
+                self.test.harp = Some((9, Instant::now(), m));
             }
             9 if el > 0.6 => {
                 m[3] = rb;
@@ -214,7 +214,7 @@ impl Gfx {
                 self.egraph.view = Some(1);
                 self.egraph.view_out = 0;
                 self.egraph.view_active_b = false;
-                self.test_harp = Some((10, Instant::now(), m));
+                self.test.harp = Some((10, Instant::now(), m));
             }
             10 => {
                 if rb != m[3] {
@@ -282,7 +282,7 @@ impl Gfx {
                 m[6] = nodule.y.to_bits() as u64;
                 m[7] = ((away.x.to_bits() as u64) << 32) | away.y.to_bits() as u64;
                 raw.events.push(egui::Event::PointerMoved(nodule));
-                self.test_harp = Some((11, Instant::now(), m));
+                self.test.harp = Some((11, Instant::now(), m));
             }
             11 => {
                 let nodule = egui::pos2(
@@ -297,7 +297,7 @@ impl Gfx {
                         modifiers: Default::default(),
                     });
                 }
-                self.test_harp = Some((12, Instant::now(), m));
+                self.test.harp = Some((12, Instant::now(), m));
             }
             12 => {
                 // Away from every nodule and every node, then press 1.
@@ -306,7 +306,7 @@ impl Gfx {
                     f32::from_bits(m[7] as u32),
                 );
                 raw.events.push(egui::Event::PointerMoved(away));
-                self.test_harp = Some((13, Instant::now(), m));
+                self.test.harp = Some((13, Instant::now(), m));
             }
             13 => {
                 for pressed in [true, false] {
@@ -318,7 +318,7 @@ impl Gfx {
                         modifiers: Default::default(),
                     });
                 }
-                self.test_harp = Some((14, Instant::now(), m));
+                self.test.harp = Some((14, Instant::now(), m));
             }
             14 => {
                 let Some(bar) = breakout else { return };

@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_geo(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, gid)) = self.test_geo else { return };
+        let Some((stage, mut frames, gid)) = self.test.geo else { return };
         frames += 1;
         if frames > 1500 {
             println!("GEO TEST FAIL: timeout at stage {stage}");
@@ -37,7 +37,7 @@ impl Gfx {
             });
         };
         let spot = |s: &Self, k: usize| -> egui::Pos2 {
-            let r = s.test_rect;
+            let r = s.test.rect;
             let f = [(0.3, 0.3), (0.7, 0.35), (0.5, 0.7)][k];
             egui::pos2(r.min.x + r.width() * f.0, r.min.y + r.height() * f.1)
         };
@@ -61,7 +61,7 @@ impl Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                self.test_rect = self.image_rect;
+                self.test.rect = self.image_rect;
                 // A Noise whose field is the x coordinate: the drawing will
                 // read it, so its scatter should lean right.
                 let mut fg = engine::field::FieldGraph::default();
@@ -90,7 +90,7 @@ impl Gfx {
                     println!("GEO TEST FAIL: could not open the node: {e}");
                     std::process::exit(1);
                 }
-                self.test_geo = Some((1, 0, id));
+                self.test.geo = Some((1, 0, id));
                 return;
             }
             // Inside: Star -> Scatter (density from the Noise) -> Instance
@@ -364,7 +364,7 @@ impl Gfx {
                         println!("GEO TEST FAIL: the live bake never finished ({done} frames)");
                         std::process::exit(1);
                     }
-                    self.test_geo = Some((37, frames, gid));
+                    self.test.geo = Some((37, frames, gid));
                     return;
                 }
                 match self.physics_status(ph) {
@@ -409,7 +409,7 @@ impl Gfx {
                 if let Some(n) = std::env::var("WOBBLE_GEO_LINGER").ok().and_then(|v| v.parse::<u32>().ok()) {
                     if frames < n {
                         self.prefs.geo_viz = GeoViz { points: true, point_nums: true, prim_nums: true, normals: true, ticks: true, outlines: true, bbox: true, ..Default::default() };
-                        self.test_geo = Some((38, frames, gid));
+                        self.test.geo = Some((38, frames, gid));
                         return;
                     }
                     self.prefs.geo_viz = GeoViz::default();
@@ -520,6 +520,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_geo = Some((next, if next == stage { frames } else { 0 }, gid));
+        self.test.geo = Some((next, if next == stage { frames } else { 0 }, gid));
     }
 }

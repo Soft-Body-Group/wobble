@@ -7,7 +7,7 @@ impl Gfx {
     /// Read node, resolves its real dimensions, and reaches the compositor
     /// with the film curve linearized.
     pub(crate) fn drive_test_dpx(&mut self) {
-        let Some((stage, mut frames, node)) = self.test_dpx else { return };
+        let Some((stage, mut frames, node)) = self.test.dpx else { return };
         frames += 1;
         if frames > 2400 {
             println!("DPX TEST FAIL: timeout at stage {stage}");
@@ -44,7 +44,7 @@ impl Gfx {
                 );
                 self.next_read_slot += 1;
                 self.load_read(id, &dir.display().to_string());
-                self.test_dpx = Some((1, frames, id));
+                self.test.dpx = Some((1, frames, id));
             }
             1 if frames > 20 => {
                 let Some(l) = self.loaded.get(&node) else {
@@ -114,7 +114,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_dpx = Some((stage, frames, node)),
+            _ => self.test.dpx = Some((stage, frames, node)),
         }
     }
 }

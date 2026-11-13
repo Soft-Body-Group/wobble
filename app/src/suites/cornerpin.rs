@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_cornerpin(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, id, press, snap)) = self.test_cornerpin else { return };
+        let Some((stage, mut frames, id, press, snap)) = self.test.cornerpin else { return };
         frames += 1;
         let fail = |m: String| -> ! {
             println!("CORNERPIN TEST FAIL: {m}");
@@ -32,7 +32,7 @@ impl Gfx {
             });
         };
         let at = |s: &Self, f: [f32; 2]| {
-            let r = s.test_rect;
+            let r = s.test.rect;
             egui::pos2(r.min.x + r.width() * f[0], r.min.y + r.height() * f[1])
         };
         let cp = |s: &Self| match s.egraph.node(id).map(|n| n.kind_at(s.eval_tick())) {
@@ -46,7 +46,7 @@ impl Gfx {
                 if frames < 6 || !self.layout_settled() {
                     st.0 = 0;
                 } else {
-                    self.test_rect = self.image_rect;
+                    self.test.rect = self.image_rect;
                     let n = self.egraph.add(
                         NodeKind::CornerPin(engine::graph::CornerPinParams::pinned([
                             [0.25, 0.25],
@@ -181,18 +181,18 @@ impl Gfx {
                 }
                 st.3 = c;
                 st.4 = q;
-                self.test_cornerpin_knob = knob;
+                self.test.cornerpin_knob = knob;
                 click(raw, knob, true);
             }
             33..=38 => {
                 // Round the arc, a step a frame.
-                let r = (self.test_cornerpin_knob - press).length();
-                let a0 = (self.test_cornerpin_knob - press).angle();
+                let r = (self.test.cornerpin_knob - press).length();
+                let a0 = (self.test.cornerpin_knob - press).angle();
                 let a = a0 + std::f32::consts::FRAC_PI_2 * (stage - 32) as f32 / 6.0;
                 raw.events.push(egui::Event::PointerMoved(press + egui::vec2(a.cos(), a.sin()) * r));
             }
             39 => {
-                let v = self.test_cornerpin_knob - press;
+                let v = self.test.cornerpin_knob - press;
                 click(raw, press + egui::vec2(-v.y, v.x), false);
             }
             40 => {
@@ -214,6 +214,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_cornerpin = Some(st);
+        self.test.cornerpin = Some(st);
     }
 }

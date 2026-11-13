@@ -18,7 +18,7 @@ impl Gfx {
     /// on the viewer cache (RAM, warm) — the buffered cases are the ones
     /// that must be perfect.
     pub(crate) fn drive_test_scrubfid(&mut self) {
-        let Some(mut fid) = self.test_scrubfid.take() else { return };
+        let Some(mut fid) = self.test.scrubfid.take() else { return };
         fid.redraws += 1;
         if fid.t0.elapsed().as_secs_f32() > 150.0 {
             for f in &fid.fails {
@@ -326,6 +326,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_scrubfid = Some(fid);
+        self.test.scrubfid = Some(fid);
     }
 }

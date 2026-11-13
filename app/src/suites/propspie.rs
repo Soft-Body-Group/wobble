@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_propspie(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, id)) = self.test_propspie else { return };
+        let Some((stage, mut frames, id)) = self.test.propspie else { return };
         frames += 1;
         if frames > 900 {
             println!("PROPSPIE TEST FAIL: timeout at stage {stage}");
@@ -33,7 +33,7 @@ impl Gfx {
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.playing = false;
-                self.test_propspie = Some((1, 0, nid));
+                self.test.propspie = Some((1, 0, nid));
                 return;
             }
             // Wait for the row to hold still (panels animate in).
@@ -42,8 +42,8 @@ impl Gfx {
                     .into_iter()
                     .find(|r| r.node == id && r.label == "line");
                 if let Some(r) = row {
-                    let (was, still) = self.test_propspie_at;
-                    self.test_propspie_at = (r.rect, if was == r.rect { still + 1 } else { 0 });
+                    let (was, still) = self.test.propspie_at;
+                    self.test.propspie_at = (r.rect, if was == r.rect { still + 1 } else { 0 });
                     if still >= 5 {
                         raw.events.push(egui::Event::PointerMoved(r.rect.center()));
                         next = stage + 1;
@@ -60,7 +60,7 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 // Slice 0 sits at 12 o'clock, on the orbit.
-                let c = self.test_propspie_at.0.center();
+                let c = self.test.propspie_at.0.center();
                 raw.events.push(egui::Event::PointerMoved(c - egui::vec2(0.0, 62.0)));
                 next = stage + 1;
             }
@@ -86,6 +86,6 @@ impl Gfx {
             println!("PROPSPIE TEST FAIL: \"lock keyframes\" did not lock the row");
             std::process::exit(1);
         }
-        self.test_propspie = Some((next, if next == stage { frames } else { 0 }, id));
+        self.test.propspie = Some((next, if next == stage { frames } else { 0 }, id));
     }
 }

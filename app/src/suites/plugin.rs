@@ -9,7 +9,7 @@ impl Gfx {
     /// standard channel machinery, and an UNINSTALLED type still renders as
     /// a passthrough.
     pub(crate) fn drive_test_plugin(&mut self) {
-        let Some((stage, mut frames, node)) = self.test_plugin else { return };
+        let Some((stage, mut frames, node)) = self.test.plugin else { return };
         frames += 1;
         if frames > 2400 {
             println!("PLUGIN TEST FAIL: timeout at stage {stage}");
@@ -30,12 +30,12 @@ impl Gfx {
                 );
                 self.egraph.connect(id, 0, 3);
                 self.egraph.view = Some(id);
-                self.test_plugin = Some((1, frames, id));
+                self.test.plugin = Some((1, frames, id));
             }
             // The fused pipeline with the plugin in it must come up.
             1 if frames > 20 => {
                 if !self.last_pipeline_ready {
-                    self.test_plugin = Some((1, frames, node));
+                    self.test.plugin = Some((1, frames, node));
                     return;
                 }
                 // Key the param: frame 0 -> 0, frame 10 -> 1. The evaluated
@@ -76,11 +76,11 @@ impl Gfx {
                 );
                 self.egraph.connect(ghost, 0, node);
                 self.egraph.view = Some(ghost);
-                self.test_plugin = Some((2, frames, node));
+                self.test.plugin = Some((2, frames, node));
             }
             2 if frames > 12 => {
                 if !self.last_pipeline_ready {
-                    self.test_plugin = Some((2, frames, node));
+                    self.test.plugin = Some((2, frames, node));
                     return;
                 }
                 println!(
@@ -88,7 +88,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_plugin = Some((stage, frames, node)),
+            _ => self.test.plugin = Some((stage, frames, node)),
         }
     }
 }

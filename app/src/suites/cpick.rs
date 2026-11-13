@@ -4,10 +4,10 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_cpick(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, id)) = self.test_cpick else { return };
+        let Some((stage, mut frames, id)) = self.test.cpick else { return };
         // Stage 0 waits on real decodes, so it runs on the wall clock; every
         // later stage is UI-only and a frame budget is honest there.
-        if stage == 0 && self.test_cpick_t0.elapsed().as_secs() > 60 {
+        if stage == 0 && self.test.cpick_t0.elapsed().as_secs() > 60 {
             println!("CPICK TEST FAIL: no frames on screen after 60s");
             std::process::exit(1);
         }
@@ -94,24 +94,24 @@ impl Gfx {
                 self.bottom = BottomTab::Properties;
                 self.playing = false;
                 self.seek_to(0);
-                self.test_cpick = Some((1, 0, nid));
+                self.test.cpick = Some((1, 0, nid));
                 return;
             }
             // Panels animate in: click the swatch only once its rect has
             // held still for a few frames.
             1 => {
                 if let Some(g) = geom {
-                    let (r, still) = self.test_cpick_at;
-                    self.test_cpick_at = (g.swatch, if r == g.swatch { still + 1 } else { 0 });
+                    let (r, still) = self.test.cpick_at;
+                    self.test.cpick_at = (g.swatch, if r == g.swatch { still + 1 } else { 0 });
                     if still >= 5 {
-                        self.test_cpick_before = line(self);
+                        self.test.cpick_before = line(self);
                         button(raw, g.swatch.center(), true);
                         next = 2;
                     }
                 }
             }
             2 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 3;
             }
             3 if frames > 3 => {
@@ -136,12 +136,12 @@ impl Gfx {
                         colorpicker::scale_default()
                     ));
                 }
-                self.test_cpick_at = (g.tabs[3], 0);
+                self.test.cpick_at = (g.tabs[3], 0);
                 button(raw, g.tabs[3].center(), true);
                 next = 4;
             }
             4 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 5;
             }
             // Absolute: press the L lane 30% along, drag to 70%, release.
@@ -158,17 +158,17 @@ impl Gfx {
                         g.scale
                     ));
                 }
-                self.test_cpick_at = (g.lanes[0], 0);
+                self.test.cpick_at = (g.lanes[0], 0);
                 button(raw, along(g.lanes[0], 0.3), true);
                 next = 6;
             }
             6..=8 => {
                 let t = 0.3 + 0.4 * (stage - 5) as f32 / 3.0;
-                raw.events.push(egui::Event::PointerMoved(along(self.test_cpick_at.0, t)));
+                raw.events.push(egui::Event::PointerMoved(along(self.test.cpick_at.0, t)));
                 next = stage + 1;
             }
             9 => {
-                button(raw, along(self.test_cpick_at.0, 0.7), false);
+                button(raw, along(self.test.cpick_at.0, 0.7), false);
                 next = 10;
             }
             10 if frames > 2 => {
@@ -183,7 +183,7 @@ impl Gfx {
                          not under the pointer, or the working-space round trip is off"
                     ));
                 }
-                if v[3] != self.test_cpick_before[3] {
+                if v[3] != self.test.cpick_before[3] {
                     fail("an L drag moved alpha".into());
                 }
                 key(raw, egui::Key::V, true);
@@ -195,16 +195,16 @@ impl Gfx {
             // the props-bar toggle — if the popup did not claim it, the panel
             // the popup lives in vanishes right here.
             11 if frames > 2 => {
-                button(raw, along(self.test_cpick_at.0, 0.2), true);
+                button(raw, along(self.test.cpick_at.0, 0.2), true);
                 next = 12;
             }
             12 | 13 => {
                 let t = 0.2 + 0.01 * (stage - 11) as f32;
-                raw.events.push(egui::Event::PointerMoved(along(self.test_cpick_at.0, t)));
+                raw.events.push(egui::Event::PointerMoved(along(self.test.cpick_at.0, t)));
                 next = stage + 1;
             }
             14 => {
-                button(raw, along(self.test_cpick_at.0, 0.22), false);
+                button(raw, along(self.test.cpick_at.0, 0.22), false);
                 key(raw, egui::Key::V, false);
                 next = 15;
             }
@@ -230,13 +230,13 @@ impl Gfx {
                     fail("the picker closed during the V drag".into())
                 };
                 if !hold {
-                    self.test_cpick_at = (g.old_chip, 0);
+                    self.test.cpick_at = (g.old_chip, 0);
                     button(raw, g.old_chip.center(), true);
                     next = 16;
                 }
             }
             16 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 17;
             }
             // Then the right-edge grip, dragged 172pt in — about a unit of
@@ -244,29 +244,29 @@ impl Gfx {
             // pointer while the swatch-side edges stay where they are.
             17 if frames > 2 => {
                 let v = line(self);
-                if v != self.test_cpick_before {
+                if v != self.test.cpick_before {
                     fail(format!(
                         "the old chip did not restore: {v:?}, want {:?}",
-                        self.test_cpick_before
+                        self.test.cpick_before
                     ));
                 }
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("the old chip closed the picker".into())
                 };
-                self.test_cpick_scale = g.scale;
-                self.test_cpick_at = (g.popup, 0);
+                self.test.cpick_scale = g.scale;
+                self.test.cpick_at = (g.popup, 0);
                 // Inside the frame margin, where the grip has no widget above it.
                 button(raw, egui::pos2(g.popup.right() - 3.0, g.popup.center().y), true);
                 next = 18;
             }
             18..=20 => {
-                let r = self.test_cpick_at.0;
+                let r = self.test.cpick_at.0;
                 let x = r.right() - 3.0 - 172.0 * (stage - 17) as f32 / 3.0;
                 raw.events.push(egui::Event::PointerMoved(egui::pos2(x, r.center().y)));
                 next = stage + 1;
             }
             21 => {
-                let r = self.test_cpick_at.0;
+                let r = self.test.cpick_at.0;
                 button(raw, egui::pos2(r.right() - 175.0, r.center().y), false);
                 next = 22;
             }
@@ -274,7 +274,7 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("the picker closed during a resize".into())
                 };
-                let (was, s0) = (self.test_cpick_at.0, self.test_cpick_scale);
+                let (was, s0) = (self.test.cpick_at.0, self.test.cpick_scale);
                 if !(s0.x - 1.2..s0.x - 0.8).contains(&g.scale.x) {
                     fail(format!(
                         "dragging the right edge 172pt in took the width scale {} to {}",
@@ -305,18 +305,18 @@ impl Gfx {
                 if (g.popup.left() - was.left()).abs() > 0.5 || facing > 0.5 {
                     fail(format!("a resize moved the swatch-side edges: {was:?} -> {:?}", g.popup));
                 }
-                self.test_cpick_scale = g.scale;
+                self.test.cpick_scale = g.scale;
                 // The OTHER axis, then a move, before the prefs wait. The
                 // free edge is the one AWAY from the swatch, so which one
                 // that is travels with the rect.
-                self.test_cpick_at = (g.popup, u32::from(above));
+                self.test.cpick_at = (g.popup, u32::from(above));
                 next = 70;
             }
             // The free horizontal edge, 60pt IN: the height, and nothing
             // else. Inward, because shrinking always fits — outward stops
             // wherever the room on that side of the swatch runs out.
             70..=74 => {
-                let (r, above) = (self.test_cpick_at.0, self.test_cpick_at.1 == 1);
+                let (r, above) = (self.test.cpick_at.0, self.test.cpick_at.1 == 1);
                 let (y0, dir) =
                     if above { (r.top() + 3.0, 1.0) } else { (r.bottom() - 3.0, -1.0) };
                 // Full travel by the frame BEFORE the release: a drag
@@ -334,7 +334,7 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("the picker closed during the height resize".into())
                 };
-                let (was, s0) = (self.test_cpick_at.0, self.test_cpick_scale);
+                let (was, s0) = (self.test.cpick_at.0, self.test.cpick_scale);
                 if g.scale.y >= s0.y - 0.2 {
                     fail(format!(
                         "dragging the free edge 60pt in left the height scale at {} (was {})",
@@ -366,7 +366,7 @@ impl Gfx {
                     ));
                 }
                 // ...and the edge the swatch faces stayed put.
-                let facing = if self.test_cpick_at.1 == 1 {
+                let facing = if self.test.cpick_at.1 == 1 {
                     (g.popup.bottom() - was.bottom()).abs()
                 } else {
                     (g.popup.top() - was.top()).abs()
@@ -376,19 +376,19 @@ impl Gfx {
                 }
                 // Now MOVE it: press the left frame margin, where no widget
                 // and no grip sits, and drag up and left.
-                self.test_cpick_at = (g.popup, 0);
+                self.test.cpick_at = (g.popup, 0);
                 button(raw, egui::pos2(g.popup.left() + 3.0, g.popup.center().y), true);
                 next = 76;
             }
             76..=78 => {
-                let r = self.test_cpick_at.0;
+                let r = self.test.cpick_at.0;
                 let k = (stage - 75) as f32 / 3.0;
                 let p = egui::pos2(r.left() + 3.0 - 40.0 * k, r.center().y - 30.0 * k);
                 raw.events.push(egui::Event::PointerMoved(p));
                 next = stage + 1;
             }
             79 => {
-                let r = self.test_cpick_at.0;
+                let r = self.test.cpick_at.0;
                 button(raw, egui::pos2(r.left() - 37.0, r.center().y - 30.0), false);
                 next = 80;
             }
@@ -396,7 +396,7 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("dragging the picker's chrome closed it".into())
                 };
-                let was = self.test_cpick_at.0;
+                let was = self.test.cpick_at.0;
                 let moved = g.popup.min - was.min;
                 if (moved - egui::vec2(-40.0, -30.0)).length() > 4.0 {
                     fail(format!(
@@ -411,8 +411,8 @@ impl Gfx {
                 if !screen.contains_rect(g.popup) {
                     fail(format!("the moved popup left the screen: {:?}", g.popup));
                 }
-                self.test_cpick_scale = g.scale;
-                self.test_cpick_t0 = web_time::Instant::now();
+                self.test.cpick_scale = g.scale;
+                self.test.cpick_t0 = web_time::Instant::now();
                 next = 23;
             }
             // The size reaches prefs once the gesture settles (wall clock).
@@ -423,7 +423,7 @@ impl Gfx {
                 if landed {
                     key(raw, egui::Key::Escape, true);
                     next = 24;
-                } else if self.test_cpick_t0.elapsed().as_secs_f32() > 3.0 {
+                } else if self.test.cpick_t0.elapsed().as_secs_f32() > 3.0 {
                     fail(format!(
                         "the resize never reached prefs: {:?}/{:?} with the picker at {s:?}",
                         self.prefs.picker_scale, self.prefs.picker_scale_y
@@ -438,12 +438,12 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| !g.open) else {
                     fail("Escape did not close the picker".into())
                 };
-                self.test_cpick_at = (g.swatch, 0);
+                self.test.cpick_at = (g.swatch, 0);
                 button(raw, g.swatch.center(), true);
                 next = 26;
             }
             26 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 27;
             }
             // Reopened at the size it was left at; then a pinch over it.
@@ -451,13 +451,13 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("the swatch did not reopen the picker".into())
                 };
-                if (g.scale - self.test_cpick_scale).length() > 1e-3 {
+                if (g.scale - self.test.cpick_scale).length() > 1e-3 {
                     fail(format!(
                         "reopened at scale {:?}, not the {:?} it was resized to",
-                        g.scale, self.test_cpick_scale
+                        g.scale, self.test.cpick_scale
                     ));
                 }
-                self.test_cpick_zoom = (self.view_zoom, self.node_editor.zoom);
+                self.test.cpick_zoom = (self.view_zoom, self.node_editor.zoom);
                 raw.events.push(egui::Event::PointerMoved(g.popup.center()));
                 raw.events.push(egui::Event::Zoom(1.25));
                 next = 28;
@@ -466,7 +466,7 @@ impl Gfx {
                 let Some(g) = geom.filter(|g| g.open) else {
                     fail("a pinch closed the picker".into())
                 };
-                let want = self.test_cpick_scale * 1.25;
+                let want = self.test.cpick_scale * 1.25;
                 if (colorpicker::scale() - want).length() > 0.02
                     || (g.scale - want).length() > 0.02
                 {
@@ -476,17 +476,17 @@ impl Gfx {
                         colorpicker::scale()
                     ));
                 }
-                if (self.view_zoom, self.node_editor.zoom) != self.test_cpick_zoom {
+                if (self.view_zoom, self.node_editor.zoom) != self.test.cpick_zoom {
                     fail("pinching over the picker also zoomed the viewer or graph under it".into());
                 }
                 let at = corner_in(&g);
-                self.test_cpick_at = (egui::Rect::from_center_size(at, egui::Vec2::ZERO), 0);
+                self.test.cpick_at = (egui::Rect::from_center_size(at, egui::Vec2::ZERO), 0);
                 button(raw, at, true);
                 next = 29;
             }
             // Double-click the corner grip: the default size.
             29..=31 => {
-                button(raw, self.test_cpick_at.0.center(), stage == 30);
+                button(raw, self.test.cpick_at.0.center(), stage == 30);
                 next = stage + 1;
             }
             32 if frames > 2 => {
@@ -507,13 +507,13 @@ impl Gfx {
                 if !colorpicker::swatches().is_empty() || g.swatch_count != 0 {
                     fail(format!("the palette did not start empty: {:?}", colorpicker::swatches()));
                 }
-                self.test_cpick_at = (g.swatch_rect(0), 0);
+                self.test.cpick_at = (g.swatch_rect(0), 0);
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 33;
             }
             // Every palette click is press, release, then a look.
             33 | 35 | 37 | 39 | 45 | 49 | 51 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = stage + 1;
             }
             34 if frames > 2 => {
@@ -528,9 +528,9 @@ impl Gfx {
                     fail(format!("the swatch never reached prefs: {:?}", self.prefs.picker_swatches));
                 }
                 // Move away from it: a click on the L lane jumps there.
-                self.test_cpick_before = line(self);
-                self.test_cpick_at = (egui::Rect::from_center_size(along(g.lanes[0], 0.3), egui::Vec2::ZERO), 0);
-                button(raw, self.test_cpick_at.0.center(), true);
+                self.test.cpick_before = line(self);
+                self.test.cpick_at = (egui::Rect::from_center_size(along(g.lanes[0], 0.3), egui::Vec2::ZERO), 0);
+                button(raw, self.test.cpick_at.0.center(), true);
                 next = 35;
             }
             36 if frames > 2 => {
@@ -538,33 +538,33 @@ impl Gfx {
                 if (lightness(line(self)) - 0.3).abs() > 0.01 {
                     fail(format!("a click on the L lane left L at {:.3}", lightness(line(self))));
                 }
-                self.test_cpick_at = (g.swatch_rect(0), 0);
+                self.test.cpick_at = (g.swatch_rect(0), 0);
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 37;
             }
             // Using the swatch: its colour, the value's own alpha.
             38 if frames > 2 => {
                 let Some(g) = geom.filter(|g| g.open) else { fail("using a swatch closed the picker".into()) };
-                let (v, b) = (line(self), self.test_cpick_before);
+                let (v, b) = (line(self), self.test.cpick_before);
                 if !near([v[0], v[1], v[2]], [b[0], b[1], b[2]]) || v[3] != b[3] {
                     fail(format!("using the swatch gave {v:?}, want the kept colour {b:?}"));
                 }
-                self.test_cpick_at = (egui::Rect::from_center_size(along(g.lanes[0], 0.5), egui::Vec2::ZERO), 0);
-                button(raw, self.test_cpick_at.0.center(), true);
+                self.test.cpick_at = (egui::Rect::from_center_size(along(g.lanes[0], 0.5), egui::Vec2::ZERO), 0);
+                button(raw, self.test.cpick_at.0.center(), true);
                 next = 39;
             }
             // Shift-click replaces the swatch with the current colour.
             40 if frames > 2 => {
                 let Some(g) = geom.filter(|g| g.open) else { fail("the picker closed".into()) };
-                self.test_cpick_before = line(self);
-                self.test_cpick_at = (g.swatch_rect(0), 0);
+                self.test.cpick_before = line(self);
+                self.test.cpick_at = (g.swatch_rect(0), 0);
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 41;
             }
             41 => {
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 42;
             }
             42 if frames > 2 => {
@@ -573,10 +573,10 @@ impl Gfx {
                 if sw.len() != 1 || !near(sw[0], as709(v)) {
                     fail(format!("shift-click left the palette at {sw:?}, want the current {:?}", as709(v)));
                 }
-                if v != self.test_cpick_before {
+                if v != self.test.cpick_before {
                     fail(format!("shift-click on a swatch changed the value: {v:?}"));
                 }
-                self.test_cpick_at = (g.swatch_rect(0), 0);
+                self.test.cpick_at = (g.swatch_rect(0), 0);
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::ALT));
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 43;
@@ -584,7 +584,7 @@ impl Gfx {
             // Alt-click removes it.
             43 => {
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::ALT));
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 44;
             }
             44 if frames > 2 => {
@@ -597,7 +597,7 @@ impl Gfx {
                     ));
                 }
                 // Keep one more, for the app-wide check on another swatch.
-                self.test_cpick_at = (g.swatch_rect(0), 0);
+                self.test.cpick_at = (g.swatch_rect(0), 0);
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 45;
             }
@@ -618,8 +618,8 @@ impl Gfx {
                     fail("Escape did not close the picker".into());
                 }
                 let Some(gb) = geom_back else { fail("the Grid's back swatch is not drawn".into()) };
-                self.test_cpick_before = back(self);
-                self.test_cpick_at = (gb.swatch, 0);
+                self.test.cpick_before = back(self);
+                self.test.cpick_at = (gb.swatch, 0);
                 button(raw, gb.swatch.center(), true);
                 next = 49;
             }
@@ -630,12 +630,12 @@ impl Gfx {
                 if gb.swatch_count != 1 {
                     fail(format!("the back picker offers {} swatches, not the app's 1", gb.swatch_count));
                 }
-                self.test_cpick_at = (gb.swatch_rect(0), 0);
+                self.test.cpick_at = (gb.swatch_rect(0), 0);
                 button(raw, gb.swatch_rect(0).center(), true);
                 next = 51;
             }
             52 if frames > 2 => {
-                let (b, l, was) = (back(self), line(self), self.test_cpick_before);
+                let (b, l, was) = (back(self), line(self), self.test.cpick_before);
                 if !near([b[0], b[1], b[2]], [l[0], l[1], l[2]]) || b[3] != was[3] {
                     fail(format!(
                         "the swatch put {b:?} on the back colour, want the line's colour {l:?} with alpha {}",
@@ -663,12 +663,12 @@ impl Gfx {
             55 if frames > 3 => {
                 let Some(c) = chip else { return };
                 let at = egui::pos2(c.swatch.right() + 12.0, c.swatch.center().y);
-                self.test_cpick_at = (c.swatch, 0);
+                self.test.cpick_at = (c.swatch, 0);
                 button(raw, at, true);
                 next = 56;
             }
             56 if frames > 2 => {
-                button(raw, self.test_cpick_at.0.right_center() + egui::vec2(12.0, 0.0), false);
+                button(raw, self.test.cpick_at.0.right_center() + egui::vec2(12.0, 0.0), false);
                 next = 57;
             }
             57 if frames > 3 => {
@@ -678,12 +678,12 @@ impl Gfx {
                 if c.swatch_count != 1 {
                     fail(format!("the chip's picker offers {} swatches, not the app's 1", c.swatch_count));
                 }
-                self.test_cpick_at = (c.swatch_rect(0), 0);
+                self.test.cpick_at = (c.swatch_rect(0), 0);
                 button(raw, c.swatch_rect(0).center(), true);
                 next = 58;
             }
             58 => {
-                button(raw, self.test_cpick_at.0.center(), false);
+                button(raw, self.test.cpick_at.0.center(), false);
                 next = 59;
             }
             59 if frames > 2 => {
@@ -751,6 +751,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_cpick = Some((next, if next == stage { frames } else { 0 }, id));
+        self.test.cpick = Some((next, if next == stage { frames } else { 0 }, id));
     }
 }

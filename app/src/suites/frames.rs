@@ -10,9 +10,9 @@ impl Gfx {
     /// playhead at `comp_range.0 + tick % media_len` — off the left edge of
     /// a 1011-based track — and footage playback ignored in/out entirely.
     pub(crate) fn drive_test_frames(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_frames else { return };
+        let Some((stage, mut frames)) = self.test.frames else { return };
         frames += 1;
-        let elapsed = self.test_frames_t0.get_or_insert_with(Instant::now).elapsed();
+        let elapsed = self.test.frames_t0.get_or_insert_with(Instant::now).elapsed();
         if elapsed > web_time::Duration::from_secs(60) {
             println!(
                 "FRAMES TEST FAIL: timeout at stage {stage} (playhead {} shown {} chasing {} \
@@ -23,7 +23,7 @@ impl Gfx {
                 self.playing,
                 self.play_span(),
                 self.playback.as_ref().and_then(|pb| pb.player.loop_span()),
-                self.test_frames_seen,
+                self.test.frames_seen,
                 self.playback.as_ref().map(|pb| pb.player.debug_state()),
                 self.playback.as_ref().map(|pb| pb.player.debug_pressure()),
             );
@@ -113,13 +113,13 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 let at = self.timeline_pos;
-                self.test_frames_seen = vec![at];
+                self.test.frames_seen = vec![at];
                 tap(raw, egui::Key::ArrowLeft);
                 frames = 0;
                 next = 11;
             }
             11 if frames >= 3 => {
-                let was = self.test_frames_seen[0];
+                let was = self.test.frames_seen[0];
                 if self.timeline_pos + 1 != was {
                     println!(
                         "FRAMES TEST FAIL: ← went from {was} to {}, wanted {}",
@@ -133,7 +133,7 @@ impl Gfx {
                 next = 12;
             }
             12 if frames >= 3 => {
-                let was = self.test_frames_seen[0];
+                let was = self.test.frames_seen[0];
                 if self.timeline_pos != was {
                     println!("FRAMES TEST FAIL: → went to {}, wanted {was}", self.timeline_pos);
                     std::process::exit(1);
@@ -163,7 +163,7 @@ impl Gfx {
                 self.loop_span = LoopSpan::InOut;
                 self.seek_to(PLACE + 3);
                 self.playing = true;
-                self.test_frames_seen.clear();
+                self.test.frames_seen.clear();
                 next = 3;
             }
             3 => {
@@ -172,14 +172,14 @@ impl Gfx {
                 // has, and the playhead follows the picture — that is the
                 // scrub rule, not a playback frame.
                 if self.force_display {
-                    self.test_frames = Some((stage, frames));
+                    self.test.frames = Some((stage, frames));
                     return;
                 }
                 let t = self.timeline_pos;
-                if self.test_frames_seen.last() != Some(&t) {
-                    self.test_frames_seen.push(t);
+                if self.test.frames_seen.last() != Some(&t) {
+                    self.test.frames_seen.push(t);
                 }
-                let seen = &self.test_frames_seen;
+                let seen = &self.test.frames_seen;
                 if seen.len() >= 10 {
                     let (lo, hi) = (PLACE + 3, PLACE + 6);
                     if let Some(bad) = seen.iter().find(|f| **f < lo || **f > hi) {
@@ -217,6 +217,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_frames = Some((next, frames));
+        self.test.frames = Some((next, frames));
     }
 }

@@ -9,7 +9,7 @@ impl Gfx {
     /// that helpfully linearised sRGB would still look like a picture, so
     /// the assertion is a specific number, not "looks plausible".
     pub(crate) fn drive_test_still(&mut self) {
-        let Some((stage, mut frames, node)) = self.test_still else { return };
+        let Some((stage, mut frames, node)) = self.test.still else { return };
         frames += 1;
         if frames > 2400 {
             println!("STILL TEST FAIL: timeout at stage {stage}");
@@ -69,7 +69,7 @@ impl Gfx {
                 );
                 self.next_read_slot += 1;
                 self.load_read(id, &dir.display().to_string());
-                self.test_still = Some((1, frames, id));
+                self.test.still = Some((1, frames, id));
             }
             1 if frames > 20 => {
                 let Some(l) = self.loaded.get(&node) else {
@@ -175,7 +175,7 @@ impl Gfx {
                     }
                 }
                 let _ = std::fs::remove_dir_all(&dir);
-                self.test_still = Some((2, frames, node));
+                self.test.still = Some((2, frames, node));
             }
             2 => {
                 let home = engine::paths::home().expect("HOME is set");
@@ -207,7 +207,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_still = Some((stage, frames, node)),
+            _ => self.test.still = Some((stage, frames, node)),
         }
     }
 }

@@ -6,7 +6,7 @@ impl Gfx {
     /// --test-inout: ctrl-click and alt-click the timeline track and check
     /// they set the playback in and out points at the frames clicked.
     pub(crate) fn drive_test_inout(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_inout else { return };
+        let Some((stage, mut frames)) = self.test.inout else { return };
         frames += 1;
         // When the current stage began, for the waits that need real time.
         static SINCE: std::sync::Mutex<Option<(u32, web_time::Instant)>> = std::sync::Mutex::new(None);
@@ -212,11 +212,11 @@ impl Gfx {
                 let half = self.track_rect.width() / (self.track_span.1 - self.track_span.0 + 1).max(1) as f32 * 0.5;
                 let y = self.track_rect.center().y;
                 click(raw, egui::pos2(x_of(self, pa) - half + 1.0, y), egui::Modifiers::NONE, true);
-                self.test_inout_mark = Some(pa);
+                self.test.inout_mark = Some(pa);
                 next = 13;
             }
             13 if frames >= 3 => {
-                let pa = self.test_inout_mark.unwrap_or(0);
+                let pa = self.test.inout_mark.unwrap_or(0);
                 let half = self.track_rect.width() / (self.track_span.1 - self.track_span.0 + 1).max(1) as f32 * 0.5;
                 raw.events.push(egui::Event::PointerMoved(egui::pos2(
                     x_of(self, pa + 3) - half + 1.0,
@@ -225,14 +225,14 @@ impl Gfx {
                 next = 14;
             }
             14 if frames >= 3 => {
-                let pa = self.test_inout_mark.unwrap_or(0);
+                let pa = self.test.inout_mark.unwrap_or(0);
                 let half = self.track_rect.width() / (self.track_span.1 - self.track_span.0 + 1).max(1) as f32 * 0.5;
                 let y = self.track_rect.center().y;
                 click(raw, egui::pos2(x_of(self, pa + 3) - half + 1.0, y), egui::Modifiers::NONE, false);
                 next = 15;
             }
             15 if frames >= 4 => {
-                let pa = self.test_inout_mark.unwrap_or(0);
+                let pa = self.test.inout_mark.unwrap_or(0);
                 if self.play_range.map(|r| r.0) != Some(pa + 3) {
                     println!(
                         "IN/OUT TEST FAIL: dragging the in mark from {pa} gave in/out {:?}, not in {}",
@@ -294,6 +294,6 @@ impl Gfx {
         if next != stage {
             frames = 0;
         }
-        self.test_inout = Some((next, frames));
+        self.test.inout = Some((next, frames));
     }
 }

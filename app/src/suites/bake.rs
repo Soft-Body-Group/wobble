@@ -13,11 +13,11 @@ impl Gfx {
     /// not match it says WHICH live frame the bake is showing, because "off
     /// by one" and "stale picture" look identical in a single value.
     pub(crate) fn drive_test_bake(&mut self) {
-        let Some((stage, mut frames)) = self.test_bake else { return };
+        let Some((stage, mut frames)) = self.test.bake else { return };
         frames += 1;
         // Real decodes and a real bake: time out on a CLOCK, never on a
         // redraw budget (CLAUDE.md, "Rules for suites").
-        let elapsed = self.test_bake_t0.get_or_insert_with(Instant::now).elapsed();
+        let elapsed = self.test.bake_t0.get_or_insert_with(Instant::now).elapsed();
         if elapsed > web_time::Duration::from_secs(180) {
             println!(
                 "BAKE TEST FAIL: timeout at stage {stage} (frame {}, chasing {}, baking {}, \
@@ -25,7 +25,7 @@ impl Gfx {
                 self.timeline_pos,
                 self.force_display,
                 self.graph_bake.is_some(),
-                self.test_bake_live,
+                self.test.bake_live,
                 self.render_status,
                 self.comp.output_size(),
             );
@@ -47,12 +47,12 @@ impl Gfx {
         // value in this plate is far from zero.
         let stable = |s: &mut Self| -> Option<f32> {
             if !settled(s) {
-                s.test_bake_last = None;
+                s.test.bake_last = None;
                 return None;
             }
             let v = probe(s)?;
-            let same = s.test_bake_last.is_some_and(|p| (p - v).abs() < 1e-4);
-            s.test_bake_last = Some(v);
+            let same = s.test.bake_last.is_some_and(|p| (p - v).abs() < 1e-4);
+            s.test.bake_last = Some(v);
             (same && v > 1e-4).then_some(v)
         };
         let bake_node = |s: &Self| {
@@ -74,15 +74,15 @@ impl Gfx {
             }
             1 => {
                 let Some(v) = stable(self) else {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 };
-                let i = self.test_bake_live.len();
-                self.test_bake_live.push((probes[i], v));
+                let i = self.test.bake_live.len();
+                self.test.bake_live.push((probes[i], v));
                 match probes.get(i + 1) {
                     Some(f) => {
                         self.seek_to(*f);
-                        self.test_bake_last = None;
+                        self.test.bake_last = None;
                         frames = 0;
                     }
                     None => next = 2,
@@ -91,12 +91,12 @@ impl Gfx {
             2 => {
                 // Placing a plate renames its frames; it must not change
                 // what any of them SHOW.
-                if !self.test_bake_ref.is_empty() {
+                if !self.test.bake_ref.is_empty() {
                     let off = |t: &Vec<(u64, f32)>| -> Vec<(u64, f32)> {
                         let b = t.first().map(|(f, _)| *f).unwrap_or(0);
                         t.iter().map(|(f, v)| (f - b, *v)).collect()
                     };
-                    let (a, b) = (off(&self.test_bake_ref), off(&self.test_bake_live));
+                    let (a, b) = (off(&self.test.bake_ref), off(&self.test.bake_live));
                     if let Some(((o, va), (_, vb))) =
                         a.iter().zip(&b).find(|((_, va), (_, vb))| (va - vb).abs() > 1e-2)
                     {
@@ -104,21 +104,21 @@ impl Gfx {
                             "BAKE TEST FAIL: placing the plate changed the PICTURE — \
                              offset {o} reads {vb:.4} placed, {va:.4} unplaced \
                              (unplaced {:?}, placed {:?})",
-                            self.test_bake_ref, self.test_bake_live
+                            self.test.bake_ref, self.test.bake_live
                         );
                         std::process::exit(1);
                     }
                 }
                 // Every probed frame must be distinguishable, or a bake
                 // showing the wrong one would pass.
-                for (i, (fa, va)) in self.test_bake_live.iter().enumerate() {
-                    for (fb, vb) in self.test_bake_live.iter().skip(i + 1) {
+                for (i, (fa, va)) in self.test.bake_live.iter().enumerate() {
+                    for (fb, vb) in self.test.bake_live.iter().skip(i + 1) {
                         if (va - vb).abs() < 5e-3 {
                             println!(
                                 "BAKE TEST FAIL: frames {fa} and {fb} look the same live \
                                  ({va:.4} / {vb:.4}) — pass {}, table {:?}",
-                                self.test_bake_pass,
-                                self.test_bake_live
+                                self.test.bake_pass,
+                                self.test.bake_live
                             );
                             std::process::exit(1);
                         }
@@ -164,32 +164,32 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 self.seek_to(probes[0]);
-                self.test_bake_last = None;
+                self.test.bake_last = None;
                 frames = 0;
                 next = 5;
             }
             // BAKED pass: scrub the same frames on the baked node.
             5 => {
                 let Some(v) = stable(self) else {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 };
-                let i = self.test_bake_seen.len();
-                let (want_f, _) = self.test_bake_live[i];
-                self.test_bake_seen.push((want_f, v));
+                let i = self.test.bake_seen.len();
+                let (want_f, _) = self.test.bake_live[i];
+                self.test.bake_seen.push((want_f, v));
                 if let Some(f) = probes.get(i + 1) {
                     self.seek_to(*f);
-                    self.test_bake_last = None;
+                    self.test.bake_last = None;
                     frames = 0;
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
                 // Every frame probed: compare the two passes as a table, so
                 // a frame shift and a value shift cannot look alike.
                 let bad: Vec<String> = self
-                    .test_bake_live
+                    .test.bake_live
                     .iter()
-                    .zip(&self.test_bake_seen)
+                    .zip(&self.test.bake_seen)
                     .filter(|((_, a), (_, b))| (a - b).abs() > 1e-2)
                     .map(|((f, a), (_, b))| format!("{f}: live {a:.4} baked {b:.4}"))
                     .collect();
@@ -205,7 +205,7 @@ impl Gfx {
                 // and demand that the picture ends up on the frame the hand
                 // stopped on rather than wherever the decoder got to.
                 self.seek_to(probes[0]);
-                self.test_bake_last = None;
+                self.test.bake_last = None;
                 frames = 0;
                 next = 6;
             }
@@ -216,8 +216,8 @@ impl Gfx {
                 let last = *probes.last().unwrap();
                 if step <= last {
                     self.seek_to(step);
-                    self.test_bake_last = None;
-                    self.test_bake = Some((next, frames));
+                    self.test.bake_last = None;
+                    self.test.bake = Some((next, frames));
                     return;
                 }
                 frames = 0;
@@ -225,13 +225,13 @@ impl Gfx {
             }
             7 => {
                 let Some(v) = stable(self) else {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 };
-                let (f, want) = *self.test_bake_live.last().unwrap();
+                let (f, want) = *self.test.bake_live.last().unwrap();
                 if (v - want).abs() > 1e-2 {
                     let shows = self
-                        .test_bake_live
+                        .test.bake_live
                         .iter()
                         .find(|(_, lv)| (lv - v).abs() < 1e-2)
                         .map(|(lf, _)| format!("frame {lf}"))
@@ -242,7 +242,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                if self.test_bake_pass == 0 {
+                if self.test.bake_pass == 0 {
                     // Round two: PLACE the plate at 1011 and do it all
                     // again. A bake of a placed shot must be baked, named
                     // and played back at the comp's own frames.
@@ -253,12 +253,12 @@ impl Gfx {
                     }
                     self.egraph.view = Some(3);
                     self.playback_dirty = true;
-                    self.test_bake_pass = 1;
-                    self.test_bake_ref = self.test_bake_live.clone();
-                    self.test_bake_live.clear();
-                    self.test_bake_seen.clear();
-                    self.test_bake_last = None;
-                    self.test_bake = Some((0, 0));
+                    self.test.bake_pass = 1;
+                    self.test.bake_ref = self.test.bake_live.clone();
+                    self.test.bake_live.clear();
+                    self.test.bake_seen.clear();
+                    self.test.bake_last = None;
+                    self.test.bake = Some((0, 0));
                     return;
                 }
                 // Round three: PROXY. Switch it on exactly as the toolbar
@@ -271,7 +271,7 @@ impl Gfx {
                 self.proxy = 0.5;
                 self.playback_dirty = true;
                 self.last_engine_graph = None;
-                self.test_bake_last = None;
+                self.test.bake_last = None;
                 frames = 0;
                 next = 8;
             }
@@ -280,7 +280,7 @@ impl Gfx {
             8 if frames > 5 => {
                 let half = self.key_canvas().map(|(w, h)| (w.div_ceil(2), h.div_ceil(2)));
                 if self.comp.output_size() != half || self.desired_output() != half {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
                 let Some(bk) = bake_node(self) else {
@@ -334,12 +334,12 @@ impl Gfx {
                 // (A quarter canvas would wait here until the wall-clock
                 // timeout, which prints the stage.)
                 if self.comp.output_size() != half {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
-                let (f, _) = *self.test_bake_live.last().unwrap();
+                let (f, _) = *self.test.bake_live.last().unwrap();
                 self.seek_to(f);
-                self.test_bake_last = None;
+                self.test.bake_last = None;
                 frames = 0;
                 next = 11;
             }
@@ -352,17 +352,17 @@ impl Gfx {
                     None
                 };
                 let Some(v) = v else {
-                    self.test_bake_last = None;
-                    self.test_bake = Some((next, frames));
+                    self.test.bake_last = None;
+                    self.test.bake = Some((next, frames));
                     return;
                 };
-                let same = self.test_bake_last.is_some_and(|p| (p - v).abs() < 1e-4);
-                self.test_bake_last = Some(v);
+                let same = self.test.bake_last.is_some_and(|p| (p - v).abs() < 1e-4);
+                self.test.bake_last = Some(v);
                 if !(same && v > 1e-4) {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
-                let (f, want) = *self.test_bake_live.last().unwrap();
+                let (f, want) = *self.test.bake_live.last().unwrap();
                 if (v - want).abs() > 2e-2 {
                     println!(
                         "BAKE TEST FAIL: the proxy bake at {f} reads {v:.4}, live read {want:.4}"
@@ -388,7 +388,7 @@ impl Gfx {
             12 if frames > 5 => {
                 let full = self.key_canvas();
                 if self.comp.output_size() != full {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
                 let Some(bk) = bake_node(self) else { std::process::exit(1) };
@@ -415,8 +415,8 @@ impl Gfx {
                 self.egraph.connect(crop, 0, 3);
                 self.egraph.view = Some(crop);
                 self.playback_dirty = true;
-                self.test_bake_ref.clear();
-                self.test_bake_last = None;
+                self.test.bake_ref.clear();
+                self.test.bake_last = None;
                 frames = 0;
                 next = 13;
             }
@@ -434,19 +434,19 @@ impl Gfx {
                     std::process::exit(1);
                 };
                 let Some((w, h)) = self.comp.output_size() else {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 };
                 let inside = self.probe_output_box(w / 2 - 8, h / 2 - 8, 16, 16, 1);
                 let outside = self.probe_output_box(16, 16, 16, 16, 1);
                 let (Some(inside), Some(outside)) = (inside, outside) else {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 };
-                let same = self.test_bake_last.is_some_and(|p| (p - inside).abs() < 1e-4);
-                self.test_bake_last = Some(inside);
+                let same = self.test.bake_last.is_some_and(|p| (p - inside).abs() < 1e-4);
+                self.test.bake_last = Some(inside);
                 if !(same && inside > 1e-4) {
-                    self.test_bake = Some((next, frames));
+                    self.test.bake = Some((next, frames));
                     return;
                 }
                 if outside.abs() > 1e-3 {
@@ -457,20 +457,20 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 if stage == 13 {
-                    self.test_bake_ref.push((self.timeline_pos, inside));
+                    self.test.bake_ref.push((self.timeline_pos, inside));
                     let bakes = self
                         .egraph
                         .nodes
                         .values()
                         .filter(|n| matches!(n.kind, NodeKind::GraphBake { .. }))
                         .count();
-                    self.test_bake_ref.push((1, bakes as f32));
+                    self.test.bake_ref.push((1, bakes as f32));
                     // The bake tab's button.
                     self.press_bake(crop);
                     frames = 0;
                     next = 14;
                 } else {
-                    let want = self.test_bake_ref[0].1;
+                    let want = self.test.bake_ref[0].1;
                     if (inside - want).abs() > 1e-2 {
                         println!(
                             "BAKE TEST FAIL: the Crop's bake reads {inside:.4} in its box, live read {want:.4}"
@@ -512,7 +512,7 @@ impl Gfx {
                     .values()
                     .filter(|n| matches!(n.kind, NodeKind::GraphBake { .. }))
                     .count();
-                if bakes as f32 != self.test_bake_ref[1].1 {
+                if bakes as f32 != self.test.bake_ref[1].1 {
                     println!("BAKE TEST FAIL: the Crop's bake added a Bake node");
                     std::process::exit(1);
                 }
@@ -546,13 +546,13 @@ impl Gfx {
                 }
                 // A bake walks the playhead to its end: back to the frame
                 // the live crop was read at.
-                self.seek_to(self.test_bake_ref[0].0);
-                self.test_bake_last = None;
+                self.seek_to(self.test.bake_ref[0].0);
+                self.test.bake_last = None;
                 frames = 0;
                 next = 15;
             }
             _ => {}
         }
-        self.test_bake = Some((next, frames));
+        self.test.bake = Some((next, frames));
     }
 }

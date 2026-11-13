@@ -717,7 +717,7 @@ impl Gfx {
     /// the three a new directory. The node is tagged Restricted. A new seed
     /// is a new recipe: STALE until re-run. Waits are wall-clock.
     pub(crate) fn drive_test_ltxhdr(&mut self) {
-        let Some(mut t) = self.test_ltxhdr.take() else { return };
+        let Some(mut t) = self.test.ltxhdr.take() else { return };
         let fail = |m: String| -> ! {
             println!("LTXHDR TEST FAIL: {m}");
             std::process::exit(1);
@@ -863,6 +863,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_ltxhdr = Some(t);
+        self.test.ltxhdr = Some(t);
     }
 }

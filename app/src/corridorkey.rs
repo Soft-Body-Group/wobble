@@ -800,7 +800,7 @@ impl Gfx {
     /// right — with the premultiplied picture following it. Waits are
     /// wall-clock.
     pub(crate) fn drive_test_corridor(&mut self) {
-        let Some(mut t) = self.test_corridor.take() else { return };
+        let Some(mut t) = self.test.corridor.take() else { return };
         let fail = |m: String| -> ! {
             println!("CORRIDOR TEST FAIL: {m}");
             std::process::exit(1);
@@ -962,7 +962,7 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_corridor = Some(t);
+        self.test.corridor = Some(t);
     }
 
     fn corridor_state_words(&self) -> String {

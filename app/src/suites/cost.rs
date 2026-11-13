@@ -11,7 +11,7 @@ impl Gfx {
     /// noodles are coloured from the same answer the Write warning reads.
     /// A stale `cost_flow` would look perfectly fine in a screenshot.
     pub(crate) fn drive_test_cost(&mut self) {
-        let Some((stage, mut frames, slow)) = self.test_cost else { return };
+        let Some((stage, mut frames, slow)) = self.test.cost else { return };
         frames += 1;
         // Stages 3+ wait on the wall clock (their own budgets).
         if stage < 3 && frames > 2400 {
@@ -35,7 +35,7 @@ impl Gfx {
                 self.egraph.connect(b, 0, 0);
                 self.egraph.connect(g, 0, b);
                 self.egraph.view = Some(g);
-                self.test_cost = Some((1, frames, b));
+                self.test.cost = Some((1, frames, b));
             }
             1 if frames > 10 => {
                 let f = self.cost_flow.clone();
@@ -56,7 +56,7 @@ impl Gfx {
                 }
                 // Bypass the Blur: no work, so no red.
                 self.egraph.nodes.get_mut(&slow).unwrap().disabled = true;
-                self.test_cost = Some((2, frames, slow));
+                self.test.cost = Some((2, frames, slow));
             }
             2 if frames > 4 => {
                 if self.cost_flow.is_slow(self.egraph.view.unwrap())
@@ -73,7 +73,7 @@ impl Gfx {
                     *nvme_cache = false;
                 }
                 self.playback_dirty = true;
-                self.test_cost = Some((3, 0, slow));
+                self.test.cost = Some((3, 0, slow));
             }
             // Wall-clock waits: the answer is refreshed twice a second.
             3 if frames > 4 => {
@@ -83,7 +83,7 @@ impl Gfx {
                     if t0.elapsed().as_secs() > 5 {
                         fail("a Load with no cache tier is not red".into());
                     }
-                    self.test_cost = Some((3, frames, slow));
+                    self.test.cost = Some((3, frames, slow));
                     return;
                 }
                 if !self.cost_flow.is_slow(self.egraph.view.unwrap()) {
@@ -94,7 +94,7 @@ impl Gfx {
                 }
                 // Precache it: every frame resident, the red clears.
                 self.precache_start(vec![0]);
-                self.test_cost = Some((4, 0, slow));
+                self.test.cost = Some((4, 0, slow));
             }
             4 => {
                 static T0: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
@@ -109,7 +109,7 @@ impl Gfx {
                             self.cost_flow.served.get(&0)
                         ));
                     }
-                    self.test_cost = Some((4, frames, slow));
+                    self.test.cost = Some((4, frames, slow));
                     return;
                 }
                 println!(
@@ -120,7 +120,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_cost = Some((stage, frames, slow)),
+            _ => self.test.cost = Some((stage, frames, slow)),
         }
     }
 }

@@ -12,9 +12,9 @@ impl Gfx {
     /// corner to follow. Waits are WALL CLOCK: a bake is real work.
     pub(crate) fn drive_test_planar(&mut self, raw: &mut egui::RawInput) {
         use engine::planar::{h_apply, h_inv, h_mul, synth};
-        let Some((stage, mut frames, mut node)) = self.test_planar else { return };
+        let Some((stage, mut frames, mut node)) = self.test.planar else { return };
         frames += 1;
-        if self.test_planar_t0.elapsed().as_secs_f32() > 900.0 {
+        if self.test.planar_t0.elapsed().as_secs_f32() > 900.0 {
             println!("PLANAR TEST FAIL: timeout at stage {stage}");
             std::process::exit(1);
         }
@@ -95,7 +95,7 @@ impl Gfx {
                 }
                 println!(
                     "planar: {N} frames tracked in {:.1}s through the app",
-                    self.test_planar_t0.elapsed().as_secs_f32()
+                    self.test.planar_t0.elapsed().as_secs_f32()
                 );
                 let q = synth::region(W, HT);
                 let mut worst = 0.0f64;
@@ -112,7 +112,7 @@ impl Gfx {
                     fail(format!("planar: worst corner error {worst:.3}px against the truth"));
                 }
                 log::info!("planar: {N} frames, worst corner error {worst:.3}px");
-                self.test_planar_t0 = web_time::Instant::now();
+                self.test.planar_t0 = web_time::Instant::now();
                 // Back to the reference frame for the mesh pass (a track is
                 // seeded from the frame on screen).
                 self.seek_to(0);
@@ -153,7 +153,7 @@ impl Gfx {
                 }
                 println!(
                     "planar: mesh pass of {N} frames ({nv} verts) in {:.1}s through the app",
-                    self.test_planar_t0.elapsed().as_secs_f32()
+                    self.test.planar_t0.elapsed().as_secs_f32()
                 );
                 log::info!("planar: mesh of {nv} verts, worst vertex error {worst:.3}px");
                 // Drive a Transform: a new one appears, cabled on its eight
@@ -242,7 +242,7 @@ impl Gfx {
                 if worst > 0.75 && timing.is_none() {
                     fail(format!("stabilised region wanders {worst:.2}px off its reference corners"));
                 }
-                self.test_planar_stab = worst;
+                self.test.planar_stab = worst;
                 log::info!("planar: stabilised region within {worst:.3}px of the reference");
                 // Similarity channels: the reference frame is at rest.
                 let Some(NodeKind::PlanarTrack(p0)) = self.live_kind(node, 0) else { fail("no live planar".into()) };
@@ -262,7 +262,7 @@ impl Gfx {
                 };
                 let c = p.corners[0];
                 let pos = self.node_point_on_screen(node, (c[0] * W as f32, c[1] * HT as f32));
-                self.test_planar_press = pos;
+                self.test.planar_press = pos;
                 raw.events.push(egui::Event::PointerMoved(pos));
                 raw.events.push(egui::Event::PointerButton {
                     pos,
@@ -273,15 +273,15 @@ impl Gfx {
                 next = 6;
             }
             6 if frames > 2 => {
-                raw.events.push(egui::Event::PointerMoved(self.test_planar_press + egui::vec2(30.0, 10.0)));
+                raw.events.push(egui::Event::PointerMoved(self.test.planar_press + egui::vec2(30.0, 10.0)));
                 next = 7;
             }
             7 if frames > 2 => {
-                raw.events.push(egui::Event::PointerMoved(self.test_planar_press + egui::vec2(60.0, 25.0)));
+                raw.events.push(egui::Event::PointerMoved(self.test.planar_press + egui::vec2(60.0, 25.0)));
                 next = 8;
             }
             8 if frames > 2 => {
-                let pos = self.test_planar_press + egui::vec2(60.0, 25.0);
+                let pos = self.test.planar_press + egui::vec2(60.0, 25.0);
                 raw.events.push(egui::Event::PointerMoved(pos));
                 raw.events.push(egui::Event::PointerButton {
                     pos,
@@ -320,13 +320,13 @@ impl Gfx {
                      truth, a stabilise CornerPin holds the region within {:.3}px of its reference \
                      corners, and a corner drag of 60x25 screen px moved corner 0 by {d:?} \
                      (wanted {want:?}) leaving the other three",
-                    self.test_planar_stab
+                    self.test.planar_stab
                 );
                 std::process::exit(0);
             }
             _ => {}
         }
         let frames = if next == stage { frames } else { 0 };
-        self.test_planar = Some((next, frames, node));
+        self.test.planar = Some((next, frames, node));
     }
 }

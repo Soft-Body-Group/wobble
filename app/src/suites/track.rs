@@ -8,11 +8,11 @@ impl Gfx {
     /// that actually FOLLOWS the disc (a tracker that sticks still would key
     /// exactly the same count).
     pub(crate) fn drive_test_track(&mut self) {
-        let Some((stage, mut frames, tid)) = self.test_track else { return };
+        let Some((stage, mut frames, tid)) = self.test.track else { return };
         // Per-stage frame count, for short settles only; the timeout is
         // the wall clock since the last stage change or bake progress.
         frames += 1;
-        if self.test_track_clock.elapsed().as_secs_f32() > 60.0 {
+        if self.test.track_clock.elapsed().as_secs_f32() > 60.0 {
             println!("TRACK TEST FAIL: timeout at stage {stage}");
             std::process::exit(1);
         }
@@ -83,17 +83,17 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                self.test_track_clock = web_time::Instant::now();
-                self.test_track = Some((3, 0, tk));
+                self.test.track_clock = web_time::Instant::now();
+                self.test.track = Some((3, 0, tk));
                 return;
             }
             // Waiting on the bake: any progress rearms the clock, so only a
             // track that has genuinely stalled can time this out.
             3 if self.track_job.is_some() => {
                 if let Some((_, j)) = &self.track_job {
-                    if j.done > self.test_track_progress {
-                        self.test_track_progress = j.done;
-                        self.test_track_clock = web_time::Instant::now();
+                    if j.done > self.test.track_progress {
+                        self.test.track_progress = j.done;
+                        self.test.track_clock = web_time::Instant::now();
                     }
                 }
             }
@@ -147,7 +147,7 @@ impl Gfx {
                 // playhead parked mid-sequence: it must key that frame
                 // onward (never frame 0 again) and, seeded on the same
                 // point the reference reached there, retrace it exactly.
-                self.test_track_ref = cx
+                self.test.track_ref = cx
                     .keys
                     .iter()
                     .zip(cy.keys.iter())
@@ -155,34 +155,34 @@ impl Gfx {
                     .collect();
                 let from = want / 3;
                 let Some(&(_, sx, sy)) =
-                    self.test_track_ref.iter().find(|(f, _, _)| *f == from)
+                    self.test.track_ref.iter().find(|(f, _, _)| *f == from)
                 else {
                     println!("TRACK TEST FAIL: reference track has no key at {from}");
                     std::process::exit(1);
                 };
-                self.test_track_seed = [sx, sy];
+                self.test.track_seed = [sx, sy];
                 self.seek_to(from);
                 next = 4;
             }
-            4 if self.eval_tick() == self.test_track_ref.len() as u64 / 3 => {
+            4 if self.eval_tick() == self.test.track_ref.len() as u64 / 3 => {
                 let Some(NodeKind::Tracker(mut p)) =
                     self.egraph.node(tid).map(|n| n.kind.clone())
                 else {
                     return;
                 };
-                p.center = self.test_track_seed;
-                p.track = self.test_track_seed;
-                self.test_track_progress = 0;
+                p.center = self.test.track_seed;
+                p.track = self.test.track_seed;
+                self.test.track_progress = 0;
                 self.start_track(tid, p);
-                self.test_track_clock = web_time::Instant::now();
-                self.test_track = Some((5, 0, tid));
+                self.test.track_clock = web_time::Instant::now();
+                self.test.track = Some((5, 0, tid));
                 return;
             }
             5 if self.track_job.is_some() => {
                 if let Some((_, j)) = &self.track_job {
-                    if j.done > self.test_track_progress {
-                        self.test_track_progress = j.done;
-                        self.test_track_clock = web_time::Instant::now();
+                    if j.done > self.test.track_progress {
+                        self.test.track_progress = j.done;
+                        self.test.track_clock = web_time::Instant::now();
                     }
                 }
             }
@@ -218,7 +218,7 @@ impl Gfx {
                     .iter()
                     .zip(cy.keys.iter())
                     .filter_map(|(a, b)| {
-                        self.test_track_ref
+                        self.test.track_ref
                             .iter()
                             .find(|(f, _, _)| *f as f64 == a.frame)
                             .map(|(_, rx, ry)| (a.value - rx).abs().max((b.value - ry).abs()))
@@ -275,7 +275,7 @@ impl Gfx {
                 p.size = [20.0 / PW as f32, 20.0 / PH as f32];
                 p.search = 0.05;
                 p.track = p.center;
-                self.test_track_progress = 0;
+                self.test.track_progress = 0;
                 self.start_track(tid, p);
                 if self.track_job.is_none() {
                     println!("TRACK TEST FAIL: the pattern track did not start");
@@ -285,9 +285,9 @@ impl Gfx {
             }
             13 if self.track_job.is_some() => {
                 if let Some((_, j)) = &self.track_job {
-                    if j.done > self.test_track_progress {
-                        self.test_track_progress = j.done;
-                        self.test_track_clock = web_time::Instant::now();
+                    if j.done > self.test.track_progress {
+                        self.test.track_progress = j.done;
+                        self.test.track_clock = web_time::Instant::now();
                     }
                     if j.lost > 0 {
                         println!("TRACK TEST FAIL: the pattern track lost {} frames of a clean plate", j.lost);
@@ -344,7 +344,7 @@ impl Gfx {
                     "track: pattern tracks {PN} frames of a turning, growing plane placed at {PLACE} to {:.3} px worst",
                     worst.0
                 );
-                self.test_track_worst = worst.0;
+                self.test.track_worst = worst.0;
                 // The multi-point pass drives the graph: see
                 // `drive_test_track_ui`.
                 next = 20;
@@ -354,9 +354,9 @@ impl Gfx {
         let frames = if next == stage {
             frames
         } else {
-            self.test_track_clock = web_time::Instant::now();
+            self.test.track_clock = web_time::Instant::now();
             0
         };
-        self.test_track = Some((next, frames, tid));
+        self.test.track = Some((next, frames, tid));
     }
 }

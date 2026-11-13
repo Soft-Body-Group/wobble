@@ -10,7 +10,7 @@ impl Gfx {
     /// destination by the travel, and a D-click removes a point (the curve
     /// keeps the other two). Wall-clock deadline.
     pub(crate) fn drive_test_warp(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, id, press, deadline)) = self.test_warp else { return };
+        let Some((stage, id, press, deadline)) = self.test.warp else { return };
         let fail = |m: String| -> ! {
             println!("WARP TEST FAIL: {m}");
             std::process::exit(1);
@@ -31,14 +31,14 @@ impl Gfx {
             raw.events.push(egui::Event::Key { key, physical_key: None, pressed: down, repeat: false, modifiers: Default::default() });
         };
         let at = |s: &Self, f: [f32; 2]| {
-            let r = s.test_rect;
+            let r = s.test.rect;
             egui::pos2(r.min.x + r.width() * f[0], r.min.y + r.height() * f[1])
         };
         let wp = |s: &Self| match s.egraph.node(id).map(|n| n.kind_at(s.eval_tick())) {
             Some(NodeKind::Warp(w)) => w,
             _ => Default::default(),
         };
-        let per = |s: &Self, d: egui::Vec2| [d.x / s.test_rect.width(), d.y / s.test_rect.height()];
+        let per = |s: &Self, d: egui::Vec2| [d.x / s.test.rect.width(), d.y / s.test.rect.height()];
         let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 2e-3 && (a[1] - b[1]).abs() < 2e-3;
         let ctx = self.egui_ctx.clone();
         const XS: [f32; 3] = [0.3, 0.5, 0.7];
@@ -49,7 +49,7 @@ impl Gfx {
                 if !self.layout_settled() || self.playback.is_none() {
                     st.0 = 0;
                 } else {
-                    self.test_rect = self.image_rect;
+                    self.test.rect = self.image_rect;
                     let n = self.egraph.add(NodeKind::Warp(Default::default()), egui::Pos2::new(240.0, 0.0));
                     self.selected = vec![n];
                     self.playing = false;
@@ -144,6 +144,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_warp = Some(st);
+        self.test.warp = Some(st);
     }
 }

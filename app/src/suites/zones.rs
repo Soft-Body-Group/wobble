@@ -12,9 +12,9 @@ impl Gfx {
     /// kills the process before the PASS line, and each step says on stderr
     /// what it is about to press, so a crash names the step.
     pub(crate) fn drive_test_zones(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, frames, gid)) = self.test_zones else { return };
+        let Some((stage, frames, gid)) = self.test.zones else { return };
         let frames = frames + 1;
-        let t0 = *self.test_zones_t0.get_or_insert_with(Instant::now);
+        let t0 = *self.test.zones_t0.get_or_insert_with(Instant::now);
         if t0.elapsed() > web_time::Duration::from_secs(90) {
             println!("ZONES TEST FAIL: timeout at stage {stage}");
             std::process::exit(1);
@@ -101,7 +101,7 @@ impl Gfx {
                 self.egraph.connect(g, 0, 0);
                 self.egraph.view = Some(g);
                 self.prop_order = vec![g];
-                self.test_zones = Some((1, 0, g));
+                self.test.zones = Some((1, 0, g));
                 return;
             }
             s if (1..=3 * n).contains(&s) => {
@@ -111,7 +111,7 @@ impl Gfx {
                     // renders on the WALL clock, so a step also waits a beat.
                     0 if frames > 24
                         && self.layout_settled()
-                        && self.test_zones_since.elapsed().as_secs_f32() > 0.4 =>
+                        && self.test.zones_since.elapsed().as_secs_f32() > 0.4 =>
                     {
                         if k > 0 {
                             if let Err(e) = check(self, k - 1) {
@@ -121,7 +121,7 @@ impl Gfx {
                         // The graded picture, before any preview replaces
                         // it: what the zones map is judged against.
                         if k == 8 {
-                            self.test_zones_px = self.output_mean_rgb();
+                            self.test.zones_px = self.output_mean_rgb();
                         }
                         // The BLENDED map is on screen: plainly not the graded
                         // picture it replaced (not matched to the palette —
@@ -131,7 +131,7 @@ impl Gfx {
                         // shows far more colours than it has zones.
                         if k == 10 {
                             let (Some(graded), Some(map), Some(census)) =
-                                (self.test_zones_px, self.output_mean_rgb(), self.output_census())
+                                (self.test.zones_px, self.output_mean_rgb(), self.output_census())
                             else {
                                 fail("could not read the output back".into());
                             };
@@ -156,7 +156,7 @@ impl Gfx {
                             if frames > 600 {
                                 fail(format!("`{}` was never drawn", plan[k].1));
                             }
-                            self.test_zones = Some((stage, frames, gid));
+                            self.test.zones = Some((stage, frames, gid));
                             return;
                         };
                         // A control drawn past its tile's edge has a rect
@@ -169,12 +169,12 @@ impl Gfx {
                             ));
                         }
                         eprintln!("ZONES step {k}: pressing {}", plan[k].1);
-                        self.test_zones_at = r.center();
+                        self.test.zones_at = r.center();
                         press(raw, r.center(), true);
                         next = s + 1;
                     }
                     1 => {
-                        press(raw, self.test_zones_at, false);
+                        press(raw, self.test.zones_at, false);
                         next = s + 1;
                     }
                     2 => next = s + 1,
@@ -183,7 +183,7 @@ impl Gfx {
             }
             // A second on the wall clock: the uniform lands at once, but the
             // pixels only once a render has run with it.
-            s if s == 3 * n + 1 && self.test_zones_since.elapsed().as_secs_f32() > 1.0 => {
+            s if s == 3 * n + 1 && self.test.zones_since.elapsed().as_secs_f32() > 1.0 => {
                 if let Err(e) = check(self, plan.len() - 1) {
                     fail(e);
                 }
@@ -217,11 +217,11 @@ impl Gfx {
             _ => {}
         }
         let frames = if next != stage {
-            self.test_zones_since = Instant::now();
+            self.test.zones_since = Instant::now();
             0
         } else {
             frames
         };
-        self.test_zones = Some((next, frames, gid));
+        self.test.zones = Some((next, frames, gid));
     }
 }

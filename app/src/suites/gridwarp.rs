@@ -17,7 +17,7 @@ impl Gfx {
     /// deadline.
     pub(crate) fn drive_test_gridwarp(&mut self, raw: &mut egui::RawInput) {
         use nodes::gridwarp::Edit;
-        let Some((stage, id, press, deadline)) = self.test_gridwarp else { return };
+        let Some((stage, id, press, deadline)) = self.test.gridwarp else { return };
         let fail = |m: String| -> ! {
             println!("GRIDWARP TEST FAIL: {m}");
             std::process::exit(1);
@@ -35,14 +35,14 @@ impl Gfx {
             });
         };
         let at = |s: &Self, f: [f32; 2]| {
-            let r = s.test_rect;
+            let r = s.test.rect;
             egui::pos2(r.min.x + r.width() * f[0], r.min.y + r.height() * f[1])
         };
         let gw = |s: &Self| match s.egraph.node(id).map(|n| n.kind_at(s.eval_tick())) {
             Some(NodeKind::GridWarp(g)) => g,
             _ => Default::default(),
         };
-        let per = |s: &Self, d: egui::Vec2| [d.x / s.test_rect.width(), d.y / s.test_rect.height()];
+        let per = |s: &Self, d: egui::Vec2| [d.x / s.test.rect.width(), d.y / s.test.rect.height()];
         let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 2e-3 && (a[1] - b[1]).abs() < 2e-3;
         let ctx = self.egui_ctx.clone();
         // The default lattice is 4 x 4 cells: point (i, j) is 5 j + i.
@@ -54,7 +54,7 @@ impl Gfx {
                 if !self.layout_settled() || self.playback.is_none() {
                     st.0 = 0;
                 } else {
-                    self.test_rect = self.image_rect;
+                    self.test.rect = self.image_rect;
                     let n = self.egraph.add(NodeKind::GridWarp(Default::default()), egui::Pos2::new(240.0, 0.0));
                     self.selected = vec![n];
                     self.playing = false;
@@ -142,7 +142,7 @@ impl Gfx {
             30 => {
                 let Some(hot) = nodes::gridwarp::box_hot(&ctx, id) else { fail("four picked points drew no box".into()) };
                 st.2 = hot.scale[4];
-                self.test_gridwarp_snap = gw(self).dst.clone();
+                self.test.gridwarp_snap = gw(self).dst.clone();
                 click(raw, st.2, true);
             }
             31 | 32 => raw.events.push(egui::Event::PointerMoved(press + egui::vec2(40.0, 20.0) * (stage - 30) as f32 * 0.5)),
@@ -150,7 +150,7 @@ impl Gfx {
             34 => {}
             35 => {
                 let g = gw(self);
-                let s0 = &self.test_gridwarp_snap;
+                let s0 = &self.test.gridwarp_snap;
                 let sc = |q: [f32; 2]| at(self, q);
                 // In screen points the map is the same affine (the image
                 // fills the viewer, no downstream chain): pivot = point 11.
@@ -171,7 +171,7 @@ impl Gfx {
             36 => {
                 let Some(hot) = nodes::gridwarp::box_hot(&ctx, id) else { fail("the box went away".into()) };
                 st.2 = hot.scale[1];
-                self.test_gridwarp_snap = gw(self).dst.clone();
+                self.test.gridwarp_snap = gw(self).dst.clone();
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
                 click(raw, st.2, true);
             }
@@ -186,7 +186,7 @@ impl Gfx {
             40 => raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE)),
             41 => {
                 let g = gw(self);
-                let s0 = &self.test_gridwarp_snap;
+                let s0 = &self.test.gridwarp_snap;
                 let sc = |q: [f32; 2]| at(self, q);
                 let bottom = sc(s0[16]).y.max(sc(s0[18]).y);
                 let k = 30.0 / (press.y - bottom);
@@ -217,27 +217,27 @@ impl Gfx {
                     fail(format!("the pivot drag left it at {:?}", hot.pivot));
                 }
                 st.2 = hot.knob;
-                self.test_gridwarp_snap = gw(self).dst.clone();
-                self.test_gridwarp_pivot = hot.pivot;
+                self.test.gridwarp_snap = gw(self).dst.clone();
+                self.test.gridwarp_pivot = hot.pivot;
                 click(raw, st.2, true);
             }
             48..=53 => {
-                let pv = self.test_gridwarp_pivot;
+                let pv = self.test.gridwarp_pivot;
                 let r = press - pv;
                 let a = r.angle() + std::f32::consts::FRAC_PI_2 * (stage - 47) as f32 / 6.0;
                 raw.events.push(egui::Event::PointerMoved(pv + egui::vec2(a.cos(), a.sin()) * r.length()));
             }
             54 => {
-                let pv = self.test_gridwarp_pivot;
+                let pv = self.test.gridwarp_pivot;
                 let r = press - pv;
                 click(raw, pv + egui::vec2(-r.y, r.x), false);
             }
             55 => {}
             56 => {
                 let g = gw(self);
-                let s0 = &self.test_gridwarp_snap;
+                let s0 = &self.test.gridwarp_snap;
                 let sc = |q: [f32; 2]| at(self, q);
-                let pv = self.test_gridwarp_pivot;
+                let pv = self.test.gridwarp_pivot;
                 for i in [11, 13, 16, 18] {
                     let v = sc(s0[i]) - pv;
                     let want = pv + egui::vec2(-v.y, v.x);
@@ -298,6 +298,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_gridwarp = Some(st);
+        self.test.gridwarp = Some(st);
     }
 }

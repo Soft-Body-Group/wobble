@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_anim(&mut self) {
-        let Some((stage, mut frames, last_t, mut good, mut interp)) = self.test_anim else {
+        let Some((stage, mut frames, last_t, mut good, mut interp)) = self.test.anim else {
             return;
         };
         frames += 1;
@@ -21,7 +21,7 @@ impl Gfx {
                 }
                 self.playing = true;
                 self.fps = 60.0;
-                self.test_anim = Some((1, frames, u64::MAX, 0, false));
+                self.test.anim = Some((1, frames, u64::MAX, 0, false));
                 return;
             }
             1 => {
@@ -72,12 +72,12 @@ impl Gfx {
                         );
                         std::process::exit(0);
                     }
-                    self.test_anim = Some((1, frames, t, good, interp));
+                    self.test.anim = Some((1, frames, t, good, interp));
                     return;
                 }
             }
             _ => {}
         }
-        self.test_anim = Some((stage, frames, last_t, good, interp));
+        self.test.anim = Some((stage, frames, last_t, good, interp));
     }
 }

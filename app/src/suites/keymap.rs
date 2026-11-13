@@ -12,7 +12,7 @@ impl Gfx {
     /// while the ordinary hotkeys stand down for the press.
     pub(crate) fn drive_test_keymap(&mut self, raw: &mut egui::RawInput) {
         use keymap::Act;
-        let Some((stage, mut frames)) = self.test_keymap else { return };
+        let Some((stage, mut frames)) = self.test.keymap else { return };
         frames += 1;
         if frames > 2400 {
             println!("KEYMAP TEST FAIL: timeout at stage {stage}");
@@ -313,6 +313,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_keymap = Some((next, frames));
+        self.test.keymap = Some((next, frames));
     }
 }

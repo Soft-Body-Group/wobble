@@ -5,7 +5,7 @@ use crate::*;
 impl Gfx {
     /// --test-tv driver. See `Options::test_tv`.
     pub(crate) fn drive_test_tv(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, mut wait)) = self.test_tv else { return };
+        let Some((stage, mut frames, mut wait)) = self.test.tv else { return };
         frames += 1;
         if frames > 2400 {
             println!("TV TEST FAIL: timeout at stage {stage} (tv {:?})", self.node_editor.test_tv(0));
@@ -151,6 +151,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_tv = Some((next, frames, wait));
+        self.test.tv = Some((next, frames, wait));
     }
 }

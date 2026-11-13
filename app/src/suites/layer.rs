@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_layer(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, lid)) = self.test_layer else { return };
+        let Some((stage, mut frames, lid)) = self.test.layer else { return };
         frames += 1;
         if frames > 900 {
             println!("LAYER TEST FAIL: timeout at stage {stage}");
@@ -51,7 +51,7 @@ impl Gfx {
                 self.prop_order = vec![id];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
-                self.test_layer = Some((1, 0, id));
+                self.test.layer = Some((1, 0, id));
                 return;
             }
             // Slide layer 2's bar to the right: its START moves with it, and
@@ -441,6 +441,6 @@ impl Gfx {
         if stage == 5 {
             self.layer_wire1 = self.egraph.input_of(lid, 1).unwrap_or(0);
         }
-        self.test_layer = Some((next, if next == stage { frames } else { 0 }, lid));
+        self.test.layer = Some((next, if next == stage { frames } else { 0 }, lid));
     }
 }

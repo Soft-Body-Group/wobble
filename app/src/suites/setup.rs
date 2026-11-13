@@ -6,7 +6,7 @@ impl Gfx {
     /// --test-setup driver: save -> wipe -> load -> verify graph + sequences
     /// come back.
     pub(crate) fn drive_test_setup(&mut self) {
-        let Some((stage, mut frames, nodes, loads)) = self.test_setup else { return };
+        let Some((stage, mut frames, nodes, loads)) = self.test.setup else { return };
         frames += 1;
         if frames > 1800 {
             println!("SETUP TEST FAIL: timeout at stage {stage}");
@@ -26,7 +26,7 @@ impl Gfx {
                 self.loaded.clear();
                 self.playback_dirty = true;
                 self.fps = 99.0;
-                self.test_setup = Some((1, frames, nodes, loads));
+                self.test.setup = Some((1, frames, nodes, loads));
                 return;
             }
             1 => {
@@ -39,7 +39,7 @@ impl Gfx {
                     println!("SETUP TEST FAIL: roundtrip nodes {n}/{nodes} fps {}", self.fps);
                     std::process::exit(1);
                 }
-                self.test_setup = Some((2, frames, nodes, loads));
+                self.test.setup = Some((2, frames, nodes, loads));
                 return;
             }
             2 => {
@@ -51,7 +51,7 @@ impl Gfx {
                     self.loaded.clear();
                     self.load_errors.clear();
                     self.apply_history(g);
-                    self.test_setup = Some((3, frames, nodes, loads));
+                    self.test.setup = Some((3, frames, nodes, loads));
                     return;
                 }
             }
@@ -70,6 +70,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_setup = Some((stage, frames, nodes, loads));
+        self.test.setup = Some((stage, frames, nodes, loads));
     }
 }

@@ -7,12 +7,12 @@ impl Gfx {
     /// (storage = NVMe so playback streams from disk, RAM untouched), play
     /// 48 frames from the cache, then edit a param and expect invalidation.
     pub(crate) fn drive_test_rc(&mut self) {
-        let Some((stage, mut frames, mark)) = self.test_rc else { return };
+        let Some((stage, mut frames, mark)) = self.test.rc else { return };
         frames += 1;
         // Wall clock, not iterations: this suite bakes 24 frames and then
         // plays 48 at 60fps — nearly a second of REAL time — while the
         // test-mode loop spins with no vsync to pace it.
-        let t0 = *self.test_rc_t0.get_or_insert_with(web_time::Instant::now);
+        let t0 = *self.test.rc_t0.get_or_insert_with(web_time::Instant::now);
         if t0.elapsed().as_secs_f32() > 90.0 {
             println!(
                 "RENDERCACHE TEST FAIL: timeout at stage {stage} (status {:?})",
@@ -31,7 +31,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                self.test_rc = Some((1, frames, 0));
+                self.test.rc = Some((1, frames, 0));
                 return;
             }
             1 => {
@@ -40,7 +40,7 @@ impl Gfx {
                     self.fps = 60.0;
                     self.skipped = 0;
                     self.cached_frames_shown = 0;
-                    self.test_rc = Some((2, frames, self.displayed_total));
+                    self.test.rc = Some((2, frames, self.displayed_total));
                     return;
                 }
                 if self.render_bake.is_none() {
@@ -91,7 +91,7 @@ impl Gfx {
                         std::process::exit(1);
                     }
                 }
-                self.test_rc = Some((3, frames, 0));
+                self.test.rc = Some((3, frames, 0));
                 return;
             }
             3 => {
@@ -103,7 +103,7 @@ impl Gfx {
                     // the viewer cache holds the RAM, and refill on release.
                     self.render_ram = true;
                     self.start_render_bake();
-                    self.test_rc = Some((4, frames, 0));
+                    self.test.rc = Some((4, frames, 0));
                     return;
                 }
                 if frames > 7000 {
@@ -146,6 +146,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_rc = Some((stage, frames, mark));
+        self.test.rc = Some((stage, frames, mark));
     }
 }

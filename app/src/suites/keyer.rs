@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_keyer(&mut self) {
-        let Some((stage, mut frames, id)) = self.test_keyer else { return };
+        let Some((stage, mut frames, id)) = self.test.keyer else { return };
         frames += 1;
         if frames > 1200 {
             println!("KEYER TEST FAIL: timeout at stage {stage}");
@@ -32,13 +32,13 @@ impl Gfx {
                 );
                 self.egraph.connect(id, 0, 0); // LumaKey <- Read A
                 self.egraph.connect(3, 1, id); // Grade.mask <- LumaKey
-                self.test_keyer = Some((1, frames, id));
+                self.test.keyer = Some((1, frames, id));
                 return;
             }
             1 => {
                 // Let the compile land and a few frames render through it.
                 if frames > 40 {
-                    self.test_keyer = Some((2, frames, id));
+                    self.test.keyer = Some((2, frames, id));
                     return;
                 }
             }
@@ -76,6 +76,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_keyer = Some((stage, frames, id));
+        self.test.keyer = Some((stage, frames, id));
     }
 }

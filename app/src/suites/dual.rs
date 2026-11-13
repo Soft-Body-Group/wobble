@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_dual(&mut self) {
-        let Some((stage, mut frames, grade)) = self.test_dual else { return };
+        let Some((stage, mut frames, grade)) = self.test.dual else { return };
         // No synthetic input here, so nothing else keeps frames coming.
         self.egui_ctx.request_repaint();
         frames += 1;
@@ -67,7 +67,7 @@ impl Gfx {
             }
             1 if frames > 60 => {
                 let Some((a, b)) = sample(self) else {
-                    self.test_dual = Some((stage, frames, grade));
+                    self.test.dual = Some((stage, frames, grade));
                     return;
                 };
                 if a[..3].iter().all(|v| v.abs() < 0.02) {
@@ -89,7 +89,7 @@ impl Gfx {
             }
             2 if frames > 60 => {
                 let Some((a, b)) = sample(self) else {
-                    self.test_dual = Some((stage, frames, grade));
+                    self.test.dual = Some((stage, frames, grade));
                     return;
                 };
                 if !ratio_ok(a, b, 0.25) {
@@ -105,6 +105,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_dual = Some((next, if next == stage { frames } else { 0 }, grade));
+        self.test.dual = Some((next, if next == stage { frames } else { 0 }, grade));
     }
 }

@@ -708,7 +708,7 @@ impl Gfx {
     /// takes the wire. Then a model change is a new
     /// recipe: STALE until re-run. Waits are wall-clock.
     pub(crate) fn drive_test_depth(&mut self) {
-        let Some(mut t) = self.test_depth.take() else { return };
+        let Some(mut t) = self.test.depth.take() else { return };
         let fail = |m: String| -> ! {
             println!("DEPTH TEST FAIL: {m}");
             std::process::exit(1);
@@ -896,6 +896,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_depth = Some(t);
+        self.test.depth = Some(t);
     }
 }

@@ -12,7 +12,7 @@ impl Gfx {
     /// far port, ⌘G backdrop, the A-swipe align, and T tidy. State asserts
     /// only — no pixels — so it runs the same on any machine.
     pub(crate) fn drive_test_nodeux(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, bid, aux)) = self.test_nodeux else { return };
+        let Some((stage, mut frames, bid, aux)) = self.test.nodeux else { return };
         frames += 1;
         // Generous: the late stages wait on eased animations that run on
         // wall time, and a suite's frames are faster than a person's.
@@ -116,7 +116,7 @@ impl Gfx {
                     let b = self
                         .egraph
                         .add(NodeKind::blend(), pos + egui::vec2(0.0, 77.0));
-                    self.test_nodeux = Some((1, frames, b, aux));
+                    self.test.nodeux = Some((1, frames, b, aux));
                     return;
                 }
             }
@@ -175,7 +175,7 @@ impl Gfx {
                 let Some(m) = wire_mid(self) else { return };
                 mv(raw, m);
                 key(raw, egui::Key::Period, Default::default());
-                self.test_nodeux = Some((60, frames, hash, aux));
+                self.test.nodeux = Some((60, frames, hash, aux));
                 return;
             }
             60 => {
@@ -204,7 +204,7 @@ impl Gfx {
                     fail("a press that has not moved must not pull".into());
                 }
                 spliced(self, dot);
-                self.test_rect = egui::Rect::from_min_max(
+                self.test.rect = egui::Rect::from_min_max(
                     egui::pos2(r, 0.0),
                     self.egraph.node(dot).unwrap().pos,
                 );
@@ -215,7 +215,7 @@ impl Gfx {
             63 | 64 => {
                 let (dot, m) = (the_dot(self).unwrap(), wire_mid(self).unwrap());
                 let reach = if stage == 63 { 40.0 } else { 90.0 };
-                let want = pull_want(self, dot, m + egui::vec2(reach, 0.0), self.test_rect.min.x);
+                let want = pull_want(self, dot, m + egui::vec2(reach, 0.0), self.test.rect.min.x);
                 let got = self.egraph.node(dot).unwrap().tension;
                 if (got - want).abs() > 1e-3 {
                     fail(format!(
@@ -235,7 +235,7 @@ impl Gfx {
                 if self.node_editor.dot_pull().is_some() {
                     fail("the pull outlived the release".into());
                 }
-                let want = pull_want(self, dot, m + egui::vec2(90.0, 0.0), self.test_rect.min.x);
+                let want = pull_want(self, dot, m + egui::vec2(90.0, 0.0), self.test.rect.min.x);
                 let got = self.egraph.node(dot).unwrap().tension;
                 if (got - want).abs() > 1e-3 || got == 1.0 {
                     fail(format!("tension after release {got:.4}, wanted {want:.4}"));
@@ -246,7 +246,7 @@ impl Gfx {
                         self.selected
                     ));
                 }
-                if self.egraph.node(dot).unwrap().pos.distance(self.test_rect.max) > 1e-3 {
+                if self.egraph.node(dot).unwrap().pos.distance(self.test.rect.max) > 1e-3 {
                     fail("the pull moved the dot — the press became a node drag".into());
                 }
                 spliced(self, dot);
@@ -279,7 +279,7 @@ impl Gfx {
                 let dot = the_dot(self).unwrap();
                 let Some(bead) = rect_of(self, dot).map(|r| r.center()) else { return };
                 btn(raw, bead, true);
-                self.test_rect = egui::Rect::from_min_max(bead, bead);
+                self.test.rect = egui::Rect::from_min_max(bead, bead);
                 next = 70;
             }
             70 => {
@@ -291,22 +291,22 @@ impl Gfx {
                     fail(format!("the re-pull holds {pulled}, not the dot {dot}"));
                 }
                 // Bead in min (from 69), this pull's reference in max.x.
-                self.test_rect.max.x = r;
+                self.test.rect.max.x = r;
                 let n = self.egraph.nodes.values().filter(|n| matches!(n.kind, NodeKind::Dot { .. })).count();
                 if n != 1 {
                     fail(format!("pressing a dot with `.` held left {n} dots — it cut another"));
                 }
-                mv(raw, self.test_rect.min + egui::vec2(70.0, 0.0));
+                mv(raw, self.test.rect.min + egui::vec2(70.0, 0.0));
                 next = 71;
             }
             71 => {
                 let dot = the_dot(self).unwrap();
-                let want = pull_want(self, dot, self.test_rect.min + egui::vec2(70.0, 0.0), self.test_rect.max.x);
+                let want = pull_want(self, dot, self.test.rect.min + egui::vec2(70.0, 0.0), self.test.rect.max.x);
                 let got = self.egraph.node(dot).unwrap().tension;
                 if (got - want).abs() > 1e-3 {
                     fail(format!("re-pulled tension {got:.4}, wanted {want:.4}"));
                 }
-                btn(raw, self.test_rect.min + egui::vec2(70.0, 0.0), false);
+                btn(raw, self.test.rect.min + egui::vec2(70.0, 0.0), false);
                 next = 72;
             }
             72 => {
@@ -362,7 +362,7 @@ impl Gfx {
                 let g2 = self
                     .egraph
                     .add(NodeKind::Grade(Default::default()), egui::pos2(140.0, 60.0));
-                self.test_nodeux = Some((20, frames, bid, g2));
+                self.test.nodeux = Some((20, frames, bid, g2));
                 return;
             }
             // --- G-grab: select Read B's output, grab, land on the Grade ---
@@ -439,7 +439,7 @@ impl Gfx {
                 };
                 btn(raw, gp, true);
                 let packed = ((gp.x.to_bits() as u64) << 32) | gp.y.to_bits() as u64;
-                self.test_nodeux = Some((41, frames, packed, aux));
+                self.test.nodeux = Some((41, frames, packed, aux));
                 return;
             }
             41 => {
@@ -505,7 +505,7 @@ impl Gfx {
                 // Baselines ride the shared test_rect scratch: member
                 // distance, tf's size, and grade's input wiring.
                 let (a, b) = (self.egraph.node(tf).unwrap(), self.egraph.node(gr).unwrap());
-                self.test_rect = egui::Rect::from_min_max(
+                self.test.rect = egui::Rect::from_min_max(
                     egui::pos2(a.pos.distance(b.pos), a.size),
                     egui::pos2(0.0, 0.0),
                 );
@@ -519,7 +519,7 @@ impl Gfx {
                 });
                 let h = c + egui::vec2(40.0, 30.0);
                 btn(raw, h, true);
-                self.test_nodeux = Some((
+                self.test.nodeux = Some((
                     46,
                     frames,
                     ((c.x.to_bits() as u64) << 32) | c.y.to_bits() as u64,
@@ -551,7 +551,7 @@ impl Gfx {
                 next = 48;
             }
             48 => {
-                let (before, size0) = (self.test_rect.min.x, self.test_rect.min.y);
+                let (before, size0) = (self.test.rect.min.x, self.test.rect.min.y);
                 let (a, b) = (self.egraph.node(tf).unwrap(), self.egraph.node(gr).unwrap());
                 let after = a.pos.distance(b.pos);
                 if after < before * 1.5 {
@@ -587,9 +587,9 @@ impl Gfx {
                     return;
                 };
                 let p = self.egraph.node(dot).unwrap().pos;
-                self.test_rect = egui::Rect::from_min_max(p, p);
+                self.test.rect = egui::Rect::from_min_max(p, p);
                 btn(raw, r.center(), true);
-                self.test_nodeux = Some((50, frames, dot, aux));
+                self.test.nodeux = Some((50, frames, dot, aux));
                 return;
             }
             50 => {
@@ -606,7 +606,7 @@ impl Gfx {
             }
             52 => {
                 let dot = bid;
-                let moved = self.egraph.node(dot).unwrap().pos.distance(self.test_rect.min);
+                let moved = self.egraph.node(dot).unwrap().pos.distance(self.test.rect.min);
                 if moved < 20.0 {
                     fail(format!(
                         "dragging a dot's body moved it {moved:.1} units — the bead \
@@ -621,12 +621,12 @@ impl Gfx {
                 // Let the stalk springs settle before aiming at a wire: the
                 // scale stages just yanked their nodes, and the click's
                 // target is computed from REST positions.
-                self.test_rect.max.x = 0.0;
+                self.test.rect.max.x = 0.0;
                 next = 56;
             }
             56 => {
-                self.test_rect.max.x += 1.0;
-                if self.test_rect.max.x > 20.0 {
+                self.test.rect.max.x += 1.0;
+                if self.test.rect.max.x > 20.0 {
                     next = 53;
                 }
             }
@@ -658,7 +658,7 @@ impl Gfx {
                     pressed: true,
                     modifiers: egui::Modifiers::SHIFT,
                 });
-                self.test_nodeux = Some((
+                self.test.nodeux = Some((
                     54,
                     frames,
                     ((mid.x.to_bits() as u64) << 32) | mid.y.to_bits() as u64,
@@ -887,16 +887,16 @@ impl Gfx {
                     fail("the legend's words should be away until hovered".into());
                 }
                 mv(raw, row.center());
-                self.test_rect.max.x = 0.0;
+                self.test.rect.max.x = 0.0;
                 next = 244;
             }
             244 => {
                 let Some(row) = self.node_editor.test_legend_row() else { return };
                 mv(raw, row.center());
-                self.test_rect.max.x += 1.0;
+                self.test.rect.max.x += 1.0;
                 if self.node_editor.test_legend_reveal() > 0.97 {
                     next = 245;
-                } else if self.test_rect.max.x > 900.0 {
+                } else if self.test.rect.max.x > 900.0 {
                     fail(format!(
                         "hovering the dots should bring the words out (reveal {:.2})",
                         self.node_editor.test_legend_reveal()
@@ -905,17 +905,17 @@ impl Gfx {
             }
             245 => {
                 mv(raw, self.graph_panel_rect.center());
-                self.test_rect.max.x = 0.0;
+                self.test.rect.max.x = 0.0;
                 next = 246;
             }
             246 => {
                 mv(raw, self.graph_panel_rect.center());
-                self.test_rect.max.x += 1.0;
+                self.test.rect.max.x += 1.0;
                 if self.node_editor.test_legend_reveal() < 0.01
                     && self.node_editor.test_keys_reveal() < 0.01
                 {
                     next = 248;
-                } else if self.test_rect.max.x > 900.0 {
+                } else if self.test.rect.max.x > 900.0 {
                     fail(format!(
                         "leaving the dots should put the words away (reveal {:.2})",
                         self.node_editor.test_legend_reveal()
@@ -950,7 +950,7 @@ impl Gfx {
                     });
                 }
                 btn(raw, r.center(), true);
-                self.test_nodeux = Some((900, frames, bid, id));
+                self.test.nodeux = Some((900, frames, bid, id));
                 return;
             }
             900 => {
@@ -996,19 +996,19 @@ impl Gfx {
                     ));
                 }
                 mv(raw, row.left_center() + egui::vec2(8.0, 0.0));
-                self.test_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO);
+                self.test.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO);
                 next = 951;
             }
             951 => {
                 let Some(row) = self.node_editor.test_keys_row() else { return };
                 mv(raw, row.left_center() + egui::vec2(8.0, 0.0));
-                self.test_rect.max.x += 1.0;
+                self.test.rect.max.x += 1.0;
                 // The reveal eases on WALL time (1 − e^(−12·dt) a frame), and
                 // a suite's frames come fast enough to sit on dt's 1 ms
                 // floor — so the budget is in frames enough for ~0.6 s.
                 if self.node_editor.test_keys_reveal() > 0.97 {
                     next = 952;
-                } else if self.test_rect.max.x > 900.0 {
+                } else if self.test.rect.max.x > 900.0 {
                     fail(format!(
                         "hovering the caps should bring the words out (reveal {:.2})",
                         self.node_editor.test_keys_reveal()
@@ -1017,15 +1017,15 @@ impl Gfx {
             }
             952 => {
                 mv(raw, self.graph_panel_rect.center());
-                self.test_rect.max.x = 0.0;
+                self.test.rect.max.x = 0.0;
                 next = 953;
             }
             953 => {
                 mv(raw, self.graph_panel_rect.center());
-                self.test_rect.max.x += 1.0;
+                self.test.rect.max.x += 1.0;
                 if self.node_editor.test_keys_reveal() < 0.03 {
                     next = 954;
-                } else if self.test_rect.max.x > 900.0 {
+                } else if self.test.rect.max.x > 900.0 {
                     fail(format!(
                         "leaving the caps should put the words away (reveal {:.2})",
                         self.node_editor.test_keys_reveal()
@@ -1072,6 +1072,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_nodeux = Some((next, frames, bid, aux));
+        self.test.nodeux = Some((next, frames, bid, aux));
     }
 }

@@ -7,7 +7,7 @@ impl Gfx {
     /// while the type does not — so a panel at 2x is twice as wide but its
     /// labels are still 1x.
     pub(crate) fn drive_test_zoom(&mut self) {
-        let Some((stage, mut frames, w1)) = self.test_zoom else { return };
+        let Some((stage, mut frames, w1)) = self.test.zoom else { return };
         frames += 1;
         if frames > 1200 {
             println!("ZOOM TEST FAIL: timeout at stage {stage} (w1 {w1})");
@@ -26,7 +26,7 @@ impl Gfx {
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
                 self.set_prop_zoom(1.0);
-                self.test_zoom = Some((1, frames, font_px(self)));
+                self.test.zoom = Some((1, frames, font_px(self)));
             }
             // Settle, then bank the 1x width (stashing the 1x font size in
             // the slot until the width replaces it).
@@ -42,7 +42,7 @@ impl Gfx {
                     self.prop_origin.x + 300.0,
                     self.last_panel_rect_y,
                 ));
-                self.test_zoom = Some((2, frames, w));
+                self.test.zoom = Some((2, frames, w));
                 self.zoom_font_1x = f1;
             }
             2 if frames > 24 => {
@@ -94,10 +94,10 @@ impl Gfx {
                 );
                 // On to per-panel width, back at 1x.
                 self.set_prop_zoom(1.0);
-                self.test_zoom = None;
-                self.test_panelw = Some(PanelWTest { start: Some(web_time::Instant::now()), ..Default::default() });
+                self.test.zoom = None;
+                self.test.panelw = Some(PanelWTest { start: Some(web_time::Instant::now()), ..Default::default() });
             }
-            _ => self.test_zoom = Some((stage, frames, w1)),
+            _ => self.test.zoom = Some((stage, frames, w1)),
         }
     }
 }

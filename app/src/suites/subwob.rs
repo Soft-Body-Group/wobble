@@ -11,7 +11,7 @@ impl Gfx {
     /// the subwob; Enter opens it and inside, the input is a PORTAL node (no
     /// input socket, an image output) feeding the Grade.
     pub(crate) fn drive_test_subwob(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, since)) = self.test_subwob else { return };
+        let Some((stage, mut frames, since)) = self.test.subwob else { return };
         frames += 1;
         // WALL CLOCK: the unpaced test loop spins thousands of frames a
         // second, and two stages wait on a render.
@@ -32,7 +32,7 @@ impl Gfx {
                 modifiers: egui::Modifiers::NONE,
             });
         };
-        let (at, mean0, [read, grade, blur, inst]) = self.test_subwob_at;
+        let (at, mean0, [read, grade, blur, inst]) = self.test.subwob_at;
         let settled = at.elapsed() > std::time::Duration::from_millis(900);
         let mut next = stage;
         match stage {
@@ -64,13 +64,13 @@ impl Gfx {
                 self.playing = false;
                 self.playback_dirty = true;
                 self.selected = vec![grade, blur];
-                self.test_subwob_at = (web_time::Instant::now(), [0.0; 3], [read, grade, blur, 0]);
+                self.test.subwob_at = (web_time::Instant::now(), [0.0; 3], [read, grade, blur, 0]);
                 next = 1;
             }
             // The picture before, once the new chain has rendered.
             1 if settled => {
                 let Some(m) = self.output_mean_rgb() else { return };
-                self.test_subwob_at.1 = m;
+                self.test.subwob_at.1 = m;
                 next = 2;
             }
             // Hover the graph (graph keys and the pie need it under the
@@ -126,8 +126,8 @@ impl Gfx {
                 if self.egraph.subwobs.len() != 1 {
                     fail(format!("{} definitions in the comp, want 1", self.egraph.subwobs.len()));
                 }
-                self.test_subwob_at.0 = web_time::Instant::now();
-                self.test_subwob_at.2[3] = inst;
+                self.test.subwob_at.0 = web_time::Instant::now();
+                self.test.subwob_at.2[3] = inst;
                 next = 9;
             }
             // The same picture: a collapse reorganises, it never edits.
@@ -190,9 +190,9 @@ impl Gfx {
             _ => {}
         }
         if next != stage {
-            self.test_subwob = Some((next, 0, web_time::Instant::now()));
+            self.test.subwob = Some((next, 0, web_time::Instant::now()));
         } else {
-            self.test_subwob = Some((stage, frames, since));
+            self.test.subwob = Some((stage, frames, since));
         }
     }
 }

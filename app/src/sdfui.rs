@@ -491,7 +491,7 @@ impl crate::Gfx {
         use crate::{DiveKind, NodeKind};
         static T0: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
         let t0 = *T0.get_or_init(web_time::Instant::now);
-        let Some((stage, mut frames, sid)) = self.test_sdf else { return };
+        let Some((stage, mut frames, sid)) = self.test.sdf else { return };
         frames += 1;
         let fail = |why: String| -> ! {
             println!("SDF TEST FAIL: {why}");
@@ -500,8 +500,8 @@ impl crate::Gfx {
         if t0.elapsed().as_secs() > 90 {
             fail(format!(
                 "timeout at stage {stage} (last reading {:?}, waiting to leave {:?})",
-                self.test_sdf_last.map(|(_, v)| v),
-                self.test_sdf_base
+                self.test.sdf_last.map(|(_, v)| v),
+                self.test.sdf_base
             ));
         }
         // S held lays a point down (a plain click is a selection): S goes
@@ -532,7 +532,7 @@ impl crate::Gfx {
         // The triangle's centroid, where the fill is probed.
         const MID: (f32, f32) = (0.5, 0.45);
         let spot = |s: &Self, k: usize| -> egui::Pos2 {
-            let r = s.test_rect;
+            let r = s.test.rect;
             let f = SPOTS[k];
             egui::pos2(r.min.x + r.width() * f.0, r.min.y + r.height() * f.1)
         };
@@ -553,11 +553,11 @@ impl crate::Gfx {
         // the loop is unpaced, so a frame count is not a duration.
         let settled = |s: &mut Self, from: Option<[f32; 3]>| -> Option<[f32; 3]> {
             let now_t = web_time::Instant::now();
-            if s.test_sdf_last.is_some_and(|(t, _)| now_t.duration_since(t).as_millis() < 400) {
+            if s.test.sdf_last.is_some_and(|(t, _)| now_t.duration_since(t).as_millis() < 400) {
                 return None;
             }
             let now = s.sdf_probe(MID.0, MID.1)?;
-            let prev = s.test_sdf_last.replace((now_t, now)).map(|(_, v)| v);
+            let prev = s.test.sdf_last.replace((now_t, now)).map(|(_, v)| v);
             let same = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
             match prev {
                 Some(p) if same(p, now) && !from.is_some_and(|f| same(f, now)) => Some(now),
@@ -570,7 +570,7 @@ impl crate::Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                self.test_rect = self.image_rect;
+                self.test.rect = self.image_rect;
                 let Some(plate) = self.egraph.active_view() else {
                     fail("nothing is viewed to draw over".into());
                 };
@@ -586,7 +586,7 @@ impl crate::Gfx {
                 if let Err(e) = self.dive_into(id) {
                     fail(format!("could not open the node: {e}"));
                 }
-                self.test_sdf = Some((1, 0, id));
+                self.test.sdf = Some((1, 0, id));
                 return;
             }
             1 if frames > 2 => {
@@ -612,8 +612,8 @@ impl crate::Gfx {
                 // The plate, before anything is drawn: what the fill must
                 // move away from.
                 if let Some(c) = settled(self, None) {
-                    self.test_sdf_base = Some(c);
-                    self.test_sdf_last = None;
+                    self.test.sdf_base = Some(c);
+                    self.test.sdf_last = None;
                     next = 2;
                 }
             }
@@ -650,25 +650,25 @@ impl crate::Gfx {
                         fail(format!("a point landed at x {:.3}, wanted {w:.2}", q.p[0]));
                     }
                 }
-                self.test_sdf_last = None;
+                self.test.sdf_last = None;
                 next = 9;
             }
             // The preview: the triangle, filled white over the plate.
             9 => {
-                let from = self.test_sdf_base;
+                let from = self.test.sdf_base;
                 if let Some(c) = settled(self, from) {
                     if c.iter().any(|v| (v - 1.0).abs() > 0.02) {
                         fail(format!("inside the drawn triangle reads {c:?}, wanted white"));
                     }
                     // Now LOOK at the Spline: its distance, as a map.
                     self.egraph.view = Some(1);
-                    self.test_sdf_base = Some(c);
-                    self.test_sdf_last = None;
+                    self.test.sdf_base = Some(c);
+                    self.test.sdf_last = None;
                     next = 10;
                 }
             }
             10 => {
-                let from = self.test_sdf_base;
+                let from = self.test.sdf_base;
                 if let Some(c) = settled(self, from) {
                     if !(c[2] > c[0] + 0.1 && c[0] < 0.8) {
                         fail(format!("viewing the Spline should show its inside violet: {c:?}"));
@@ -679,8 +679,8 @@ impl crate::Gfx {
                     }
                     self.egraph.view = Some(sid);
                     self.playback_dirty = true;
-                    self.test_sdf_base = Some(c);
-                    self.test_sdf_last = None;
+                    self.test.sdf_base = Some(c);
+                    self.test.sdf_last = None;
                     next = 11;
                 }
             }
@@ -701,7 +701,7 @@ impl crate::Gfx {
                         p.graph.edges.len()
                     ));
                 }
-                let from = self.test_sdf_base;
+                let from = self.test.sdf_base;
                 if let Some(c) = settled(self, from) {
                     if c.iter().any(|v| (v - 1.0).abs() > 0.02) {
                         fail(format!("out of the dive the comp reads {c:?} inside, wanted white"));
@@ -716,6 +716,6 @@ impl crate::Gfx {
             }
             _ => {}
         }
-        self.test_sdf = Some((next, if next == stage { frames } else { 0 }, sid));
+        self.test.sdf = Some((next, if next == stage { frames } else { 0 }, sid));
     }
 }

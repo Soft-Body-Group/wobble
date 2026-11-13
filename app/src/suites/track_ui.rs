@@ -5,7 +5,7 @@ use crate::*;
 impl Gfx {
     pub(crate) fn drive_test_track_ui(&mut self, raw: &mut egui::RawInput) {
         use engine::planar::{h_apply, h_inv, h_mul, synth};
-        let Some((stage, frames, tid)) = self.test_track else { return };
+        let Some((stage, frames, tid)) = self.test.track else { return };
         if stage < 20 {
             return;
         }
@@ -105,7 +105,7 @@ impl Gfx {
                     let (a, b) = match stage {
                         30 => {
                             let Some(a) = at(innards::Hit::Node(1)) else { fail("no node for point 2".into()) };
-                            self.test_track_move_from = self.tracker_node_at(tid, 1);
+                            self.test.track_move_from = self.tracker_node_at(tid, 1);
                             (a, a + egui::vec2(40.0, 20.0))
                         }
                         // Point 4's wire dragged off Solve onto nothing.
@@ -121,19 +121,19 @@ impl Gfx {
                             (a, b)
                         }
                     };
-                    self.test_track_drag = (a, b);
+                    self.test.track_drag = (a, b);
                     click(raw, a, true);
                 } else if frames <= 4 {
-                    let (a, b) = self.test_track_drag;
+                    let (a, b) = self.test.track_drag;
                     raw.events.push(egui::Event::PointerMoved(a + (b - a) * (frames as f32 - 1.0) / 3.0));
                 } else if frames == 5 {
-                    click(raw, self.test_track_drag.1, false);
+                    click(raw, self.test.track_drag.1, false);
                 } else if frames > 8 {
                     next = stage + 1;
                 }
             }
             31 => {
-                let (was, now) = (self.test_track_move_from, self.tracker_node_at(tid, 1));
+                let (was, now) = (self.test.track_move_from, self.tracker_node_at(tid, 1));
                 let frame_w = self
                     .node_editor
                     .innard_hits
@@ -166,7 +166,7 @@ impl Gfx {
             // WOBBLE_TEST_HOLD=1 parks here (the inner graph on screen) for
             // a look.
             36 if std::env::var_os("WOBBLE_TEST_HOLD").is_some() && frames < 400_000 => {
-                self.test_track_clock = web_time::Instant::now();
+                self.test.track_clock = web_time::Instant::now();
             }
             36 => {
                 // Place the points (the viewer drag is the click suite's
@@ -187,7 +187,7 @@ impl Gfx {
             }
             26 if self.eval_tick() == PLACE && !self.force_display => {
                 let Some(NodeKind::Tracker(p)) = self.egraph.node(tid).map(|n| n.kind.clone()) else { return };
-                self.test_track_progress = 0;
+                self.test.track_progress = 0;
                 self.start_track(tid, p);
                 if self.track_job.is_none() {
                     fail("the four-point track did not start".into());
@@ -196,9 +196,9 @@ impl Gfx {
             }
             27 if self.track_job.is_some() => {
                 if let Some((_, j)) = &self.track_job {
-                    if j.done > self.test_track_progress {
-                        self.test_track_progress = j.done;
-                        self.test_track_clock = web_time::Instant::now();
+                    if j.done > self.test.track_progress {
+                        self.test.track_progress = j.done;
+                        self.test.track_clock = web_time::Instant::now();
                     }
                 }
             }
@@ -226,7 +226,7 @@ impl Gfx {
                 if worst > 0.5 {
                     fail(format!("a point of four sits {worst:.3} px off the truth"));
                 }
-                self.test_track_points_worst = worst;
+                self.test.track_points_worst = worst;
                 // Cable the solve into a new CornerPin.
                 self.selected = vec![tid];
                 self.drive_pins(tid, planarui::DriveTarget::CornerPin, &tracker::PIN_CHANNELS, "tracked points");
@@ -291,15 +291,15 @@ impl Gfx {
                      {PN} frames placed at {PLACE} to {:.3} px; zoomed in, + added three points, a click \
                      picked one, a node drag moved one, point 4's wire unplugged and re-plugged; four points track to {:.3} px and the driven CornerPin carries them \
                      {worst:.3} px from the truth, and a stabilise CornerPin holds them within {stab:.3} px",
-                    self.test_track_worst, self.test_track_points_worst
+                    self.test.track_worst, self.test.track_points_worst
                 );
                 std::process::exit(0);
             }
             _ => {}
         }
         if next != stage {
-            self.test_track_clock = web_time::Instant::now();
-            self.test_track = Some((next, 0, tid));
+            self.test.track_clock = web_time::Instant::now();
+            self.test.track = Some((next, 0, tid));
         }
     }
 }

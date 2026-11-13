@@ -335,7 +335,7 @@ impl Gfx {
     /// ITS format although the canvas is the larger loaded result. Waits are
     /// wall-clock.
     pub(crate) fn drive_test_upscale(&mut self) {
-        let Some(mut t) = self.test_upscale.take() else { return };
+        let Some(mut t) = self.test.upscale.take() else { return };
         let fail = |m: String| -> ! {
             println!("UPSCALE TEST FAIL: {m}");
             std::process::exit(1);
@@ -491,6 +491,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_upscale = Some(t);
+        self.test.upscale = Some(t);
     }
 }

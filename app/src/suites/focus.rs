@@ -11,7 +11,7 @@ impl Gfx {
     /// output at that pixel — and the focal-plane view must then show that
     /// pixel green (in focus) while the Defocus is viewed.
     pub(crate) fn drive_test_focus(&mut self) {
-        let Some((stage, mut frames, dn)) = self.test_focus else { return };
+        let Some((stage, mut frames, dn)) = self.test.focus else { return };
         frames += 1;
         if frames > 20000 {
             println!("FOCUS TEST FAIL: timeout at stage {stage}");
@@ -61,12 +61,12 @@ impl Gfx {
                 self.playing = false;
                 self.seek_to(5);
                 self.focus_pick.toggle(d);
-                self.test_focus = Some((1, frames, d));
+                self.test.focus = Some((1, frames, d));
             }
             1 if frames > 10 => {
                 // The press, held: the viewer gesture sets exactly this.
                 self.focus_pick.cursor = Some(AT);
-                self.test_focus = Some((2, 0, dn));
+                self.test.focus = Some((2, 0, dn));
             }
             2 => {
                 if (focus(self) - 10.0).abs() > 1e-6 {
@@ -75,16 +75,16 @@ impl Gfx {
                     self.focus_pick.armed = None;
                     let z = self.egraph.input_of(dn, 2).unwrap();
                     self.egraph.view = Some(z);
-                    self.test_focus = Some((3, 0, dn));
+                    self.test.focus = Some((3, 0, dn));
                 } else {
-                    self.test_focus = Some((2, frames, dn));
+                    self.test.focus = Some((2, frames, dn));
                 }
             }
             3 if frames > 20
-                && self.test_focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
+                && self.test.focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
                     > web_time::Duration::from_millis(1500) =>
             {
-                self.test_focus_t = None;
+                self.test.focus_t = None;
                 let Some(p) = px_at(self) else { fail("no output to read".into()) };
                 let (got, want) = (focus(self), p[0]);
                 if (got - want).abs() > want.abs() * 2e-3 + 1e-4 {
@@ -96,10 +96,10 @@ impl Gfx {
                     d.focal_view = true;
                 }
                 self.egraph.view = Some(dn);
-                self.test_focus = Some((4, 0, dn));
+                self.test.focus = Some((4, 0, dn));
             }
             4 if frames > 20
-                && self.test_focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
+                && self.test.focus_t.get_or_insert_with(web_time::Instant::now).elapsed()
                     > web_time::Duration::from_millis(1500) =>
             {
                 let Some(p) = px_at(self) else { fail("no output to read".into()) };
@@ -113,7 +113,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_focus = Some((stage, frames, dn)),
+            _ => self.test.focus = Some((stage, frames, dn)),
         }
     }
 }

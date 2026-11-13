@@ -14,7 +14,7 @@ impl Gfx {
     /// the cache, redraws, and the next request is a real draw again.
     /// Every wait is wall-clock.
     pub(crate) fn drive_test_blender(&mut self) {
-        let Some(mut t) = self.test_blender.take() else { return };
+        let Some(mut t) = self.test.blender.take() else { return };
         let fail = |m: String| -> ! {
             println!("BLENDER TEST FAIL: {m}");
             std::process::exit(1);
@@ -182,6 +182,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_blender = Some(t);
+        self.test.blender = Some(t);
     }
 }

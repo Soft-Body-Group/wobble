@@ -6,7 +6,7 @@ impl Gfx {
     /// --test-browser driver: open at data/mix, select the first sequence
     /// row, and wait for its thumbnail to decode into a texture.
     pub(crate) fn drive_test_browser(&mut self) {
-        let Some((mut frames, mut selected)) = self.test_browser else { return };
+        let Some((mut frames, mut selected)) = self.test.browser else { return };
         frames += 1;
         if frames > 1800 {
             println!("BROWSER TEST FAIL: timeout (selected={selected})");
@@ -59,6 +59,6 @@ impl Gfx {
             println!("BROWSER TEST FAIL: browser closed unexpectedly");
             std::process::exit(1);
         }
-        self.test_browser = Some((frames, selected));
+        self.test.browser = Some((frames, selected));
     }
 }

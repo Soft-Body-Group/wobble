@@ -275,7 +275,7 @@ impl Gfx {
     /// the clipped picture, and not the plate; the new clip was a new
     /// recipe, STALE until re-run. Waits are wall-clock.
     pub(crate) fn drive_test_hdrcnn(&mut self) {
-        let Some(mut t) = self.test_hdrcnn.take() else { return };
+        let Some(mut t) = self.test.hdrcnn.take() else { return };
         let fail = |m: String| -> ! {
             println!("HDRCNN TEST FAIL: {m}");
             std::process::exit(1);
@@ -429,6 +429,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_hdrcnn = Some(t);
+        self.test.hdrcnn = Some(t);
     }
 }

@@ -8,7 +8,7 @@ impl Gfx {
     /// resolutions differ), and after a few frames the output must NOT be
     /// black — with no UI interaction at all.
     pub(crate) fn drive_test_viewswitch(&mut self) {
-        let Some((stage, mut frames)) = self.test_viewswitch else { return };
+        let Some((stage, mut frames)) = self.test.viewswitch else { return };
         frames += 1;
         if frames > 2400 {
             println!("VIEWSWITCH TEST FAIL: timeout at stage {stage}");
@@ -21,7 +21,7 @@ impl Gfx {
                 if let Some(n) = self.egraph.node_mut(4) {
                     n.blend_res = Some((640, 360));
                 }
-                self.test_viewswitch = Some((1, frames));
+                self.test.viewswitch = Some((1, frames));
             }
             1 if frames > 20 => {
                 let base = self.output_mean_luma().unwrap_or(0.0);
@@ -43,7 +43,7 @@ impl Gfx {
                 // The switch, exactly as the 1 key does it — no other input.
                 self.egraph.view = Some(2);
                 self.egraph.view_active_b = false;
-                self.test_viewswitch = Some((2, frames));
+                self.test.viewswitch = Some((2, frames));
             }
             2 if frames > 40 => {
                 let l = self.output_mean_luma().unwrap_or(0.0);
@@ -56,7 +56,7 @@ impl Gfx {
                 }
                 // And back to the merge.
                 self.egraph.view = Some(4);
-                self.test_viewswitch = Some((3, frames));
+                self.test.viewswitch = Some((3, frames));
             }
             3 if frames > 60 => {
                 let l = self.output_mean_luma().unwrap_or(0.0);
@@ -69,7 +69,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_viewswitch = Some((stage, frames)),
+            _ => self.test.viewswitch = Some((stage, frames)),
         }
     }
 }

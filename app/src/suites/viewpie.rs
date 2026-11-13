@@ -25,7 +25,7 @@ impl Gfx {
     /// the image again. Picks are found by slice position, so this also
     /// proves the orbit the pie draws is the one it picks from.
     pub(crate) fn drive_test_viewpie(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, t0)) = self.test_viewpie else { return };
+        let Some((stage, mut frames, t0)) = self.test.viewpie else { return };
         frames += 1;
         let fail = |why: String| -> ! {
             println!("VIEWPIE TEST FAIL: {why}");
@@ -112,6 +112,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_viewpie = Some((next, if next == stage { frames } else { 0 }, t0));
+        self.test.viewpie = Some((next, if next == stage { frames } else { 0 }, t0));
     }
 }

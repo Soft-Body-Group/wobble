@@ -8,7 +8,7 @@ impl Gfx {
     /// point and confirm the EVALUATED outline follows the playhead while
     /// the authored point stays put.
     pub(crate) fn drive_test_spline(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, sid, stash)) = self.test_spline else { return };
+        let Some((stage, mut frames, sid, stash)) = self.test.spline else { return };
         frames += 1;
         if frames > 1200 {
             println!("SPLINE TEST FAIL: timeout at stage {stage}");
@@ -61,7 +61,7 @@ impl Gfx {
         let spot = |s: &Self, k: usize| -> egui::Pos2 {
             // Anchored at capture time: a press and its release must land on
             // the same spot even while panels are still animating.
-            let r = s.test_rect;
+            let r = s.test.rect;
             let f = [(0.3, 0.3), (0.7, 0.35), (0.5, 0.7)][k];
             egui::pos2(r.min.x + r.width() * f.0, r.min.y + r.height() * f.1)
         };
@@ -76,7 +76,7 @@ impl Gfx {
         let bounds = |s: &Self| -> Option<(egui::Pos2, egui::Pos2, egui::Pos2)> {
             let n = s.egraph.node(sid)?;
             let NodeKind::Spline(sp) = n.kind_at(s.eval_tick()) else { return None };
-            let r = s.test_rect;
+            let r = s.test.rect;
             let (mut lo, mut hi) =
                 (egui::pos2(f32::MAX, f32::MAX), egui::pos2(f32::MIN, f32::MIN));
             for q in &sp.points {
@@ -100,7 +100,7 @@ impl Gfx {
                 .node_res_f32(sid)
                 .or_else(|| s.comp.output_size().map(|(w, h)| (w as f32, h as f32)))
                 .map(|(w, h)| [w, h])?;
-            let r = s.test_rect;
+            let r = s.test.rect;
             Some(q.map(|v| {
                 egui::pos2(r.min.x + v.x / w * r.width(), r.min.y + v.y / h * r.height())
             }))
@@ -133,7 +133,7 @@ impl Gfx {
         // A corner of the viewer well clear of every point: the marquee has
         // to start on empty canvas or a point handle eats the drag.
         let band = |s: &Self, f: f32| -> egui::Pos2 {
-            let r = s.test_rect;
+            let r = s.test.rect;
             egui::pos2(r.min.x + r.width() * f, r.min.y + r.height() * f)
         };
         // Where a control point actually is now (the group scale moved
@@ -143,7 +143,7 @@ impl Gfx {
                 return None;
             };
             let q = sp.points.get(i)?.p;
-            let r = s.test_rect;
+            let r = s.test.rect;
             Some(egui::pos2(r.min.x + q[0] * r.width(), r.min.y + q[1] * r.height()))
         };
         // Where a control point is DRAWN once the shape transform is on it:
@@ -164,7 +164,7 @@ impl Gfx {
             };
             let sz = canvas(s)?;
             let q = sp.xf.point(sp.points.get(i)?.p, sz);
-            let r = s.test_rect;
+            let r = s.test.rect;
             Some(egui::pos2(r.min.x + q[0] * r.width(), r.min.y + q[1] * r.height()))
         };
         // ...and where it is in normalized space after the transform.
@@ -191,7 +191,7 @@ impl Gfx {
         let radii = |s: &Self| -> [f32; 2] {
             match (bounds(s), s.egraph.node(sid).map(|n| n.kind_at(s.eval_tick()))) {
                 (Some((_, _, c)), Some(NodeKind::Spline(sp))) => {
-                    let r = s.test_rect;
+                    let r = s.test.rect;
                     let d = |i: usize| {
                         sp.points
                             .get(i)
@@ -216,14 +216,14 @@ impl Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                self.test_rect = self.image_rect;
+                self.test.rect = self.image_rect;
                 let id = self.egraph.add(
                     NodeKind::Spline(Default::default()),
                     egui::Pos2::new(240.0, 0.0),
                 );
                 self.selected = vec![id];
                 self.playing = false;
-                self.test_spline = Some((1, frames, id, stash));
+                self.test.spline = Some((1, frames, id, stash));
                 return;
             }
             1 => {
@@ -249,7 +249,7 @@ impl Gfx {
                 let p = pts(self);
                 if p.len() < 3 {
                     // The click lands during the egui pass; give it a frame.
-                    self.test_spline = Some((7, frames, sid, stash));
+                    self.test.spline = Some((7, frames, sid, stash));
                     return;
                 }
                 if p.len() != 3 {
@@ -511,19 +511,19 @@ impl Gfx {
             // leaves the points alone (the Transform gizmo's gesture).
             200 => {
                 let Some((_, _, c)) = bounds(self) else { return };
-                self.test_spline_press = Some(c);
+                self.test.spline_press = Some(c);
                 next_stash = [c.x, c.y];
                 key_click(raw, c, true, egui::Key::D);
                 next = 201;
             }
             201 | 202 => {
-                let Some(c) = self.test_spline_press else { return };
+                let Some(c) = self.test.spline_press else { return };
                 let f = if stage == 201 { 0.5 } else { 1.0 };
                 raw.events.push(egui::Event::PointerMoved(c + egui::vec2(30.0, 20.0) * f));
                 next = stage + 1;
             }
             203 => {
-                let Some(c) = self.test_spline_press else { return };
+                let Some(c) = self.test.spline_press else { return };
                 key_click(raw, c + egui::vec2(30.0, 20.0), false, egui::Key::D);
                 next = 204;
             }
@@ -533,7 +533,7 @@ impl Gfx {
             }
             205 => {
                 let Some((_, _, c)) = bounds(self) else { return };
-                let r = self.test_rect;
+                let r = self.test.rect;
                 let pv = self.spline_pivot.as_ref().map(|(_, _, q)| {
                     egui::pos2(r.min.x + q[0] * r.width(), r.min.y + q[1] * r.height())
                 });
@@ -552,27 +552,27 @@ impl Gfx {
                 let (Some(a), Some(b), Some(p)) = (pt_scr(self, 0), pt_scr(self, 1), pv) else {
                     return;
                 };
-                self.test_spline_aux = vec![p];
+                self.test.spline_aux = vec![p];
                 next_stash = [(a - p).length(), (b - p).length()];
                 let Some(k) = rot_knob(self) else { return };
-                self.test_spline_press = Some(k);
+                self.test.spline_press = Some(k);
                 click(raw, k, true);
                 next = 206;
             }
             206 | 207 => {
-                let Some(k) = self.test_spline_press else { return };
+                let Some(k) = self.test.spline_press else { return };
                 let d = if stage == 206 { 20.0 } else { 40.0 };
                 raw.events.push(egui::Event::PointerMoved(k + egui::vec2(d, 0.0)));
                 next = stage + 1;
             }
             208 => {
-                let Some(k) = self.test_spline_press else { return };
+                let Some(k) = self.test.spline_press else { return };
                 click(raw, k + egui::vec2(40.0, 0.0), false);
                 next = 209;
             }
             209 => next = 210, // settle
             210 => {
-                let p = self.test_spline_aux[0];
+                let p = self.test.spline_aux[0];
                 let (Some(a), Some(b)) = (pt_scr(self, 0), pt_scr(self, 1)) else { return };
                 let [d0, d1] = stash;
                 let (e0, e1) = ((a - p).length(), (b - p).length());
@@ -603,28 +603,28 @@ impl Gfx {
                     .min_by(|i, j| (quad[*i] - a).length().total_cmp(&(quad[*j] - a).length()))
                     .unwrap_or(0);
                 let Some(h) = corner_at(self, ci) else { return };
-                self.test_spline_press = Some(h);
+                self.test.spline_press = Some(h);
                 // Both points, then the box corner and the one opposite it.
-                self.test_spline_aux = vec![a, b, quad[ci], quad[(ci + 2) % 4]];
+                self.test.spline_aux = vec![a, b, quad[ci], quad[(ci + 2) % 4]];
                 click_mod(raw, h, true, egui::Modifiers::CTRL);
                 next = 212;
             }
             212 | 213 => {
-                let Some(h) = self.test_spline_press else { return };
+                let Some(h) = self.test.spline_press else { return };
                 let f = if stage == 212 { 0.5 } else { 1.0 };
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::CTRL));
                 raw.events.push(egui::Event::PointerMoved(h + egui::vec2(-30.0, 25.0) * f));
                 next = stage + 1;
             }
             214 => {
-                let Some(h) = self.test_spline_press else { return };
+                let Some(h) = self.test.spline_press else { return };
                 click_mod(raw, h + egui::vec2(-30.0, 25.0), false, egui::Modifiers::CTRL);
                 next = 215;
             }
             215 => next = 216, // settle
             216 => {
                 let (Some(a), Some(b)) = (pt_scr(self, 0), pt_scr(self, 1)) else { return };
-                let (a0, b0) = (self.test_spline_aux[0], self.test_spline_aux[1]);
+                let (a0, b0) = (self.test.spline_aux[0], self.test.spline_aux[1]);
                 let want = a0 + egui::vec2(-30.0, 25.0);
                 if (a - want).length() > 1.5 || (b - b0).length() > 0.5 {
                     println!(
@@ -640,7 +640,7 @@ impl Gfx {
                 // The BOX bends with it: the dragged corner went with the
                 // pointer and the opposite one held — it did not snap back
                 // to the points' bounds (the user's complaint).
-                let (k0, o0) = (self.test_spline_aux[2], self.test_spline_aux[3]);
+                let (k0, o0) = (self.test.spline_aux[2], self.test.spline_aux[3]);
                 let want_k = k0 + egui::vec2(-30.0, 25.0);
                 let quad = quad_scr(self).unwrap_or([egui::Pos2::ZERO; 4]);
                 let ki = (0..4)
@@ -664,13 +664,13 @@ impl Gfx {
                     250 => (egui::Key::E, band(self, 0.12)),
                     _ => (egui::Key::R, band(self, 0.12)),
                 };
-                self.test_spline_press = Some(o);
-                self.test_spline_aux = vec![a, b];
+                self.test.spline_press = Some(o);
+                self.test.spline_aux = vec![a, b];
                 key_click(raw, o, true, k);
                 next = stage + 1;
             }
             241 | 242 | 251 | 252 | 261 | 262 => {
-                let Some(o) = self.test_spline_press else { return };
+                let Some(o) = self.test.spline_press else { return };
                 let f = if stage % 10 == 1 { 0.5 } else { 1.0 };
                 let d = match stage {
                     241 | 242 => egui::vec2(40.0, -20.0) * f,
@@ -684,7 +684,7 @@ impl Gfx {
                 next = stage + 1;
             }
             243 | 253 | 263 => {
-                let Some(o) = self.test_spline_press else { return };
+                let Some(o) = self.test.spline_press else { return };
                 let d = match stage / 10 {
                     24 => egui::vec2(40.0, -20.0),
                     25 => egui::vec2(104.0, 0.0),
@@ -701,11 +701,11 @@ impl Gfx {
             }
             245 | 255 | 265 => {
                 let (Some(a), Some(b), Some(o)) =
-                    (pt_scr(self, 0), pt_scr(self, 1), self.test_spline_press)
+                    (pt_scr(self, 0), pt_scr(self, 1), self.test.spline_press)
                 else {
                     return;
                 };
-                let (a0, b0) = (self.test_spline_aux[0], self.test_spline_aux[1]);
+                let (a0, b0) = (self.test.spline_aux[0], self.test.spline_aux[1]);
                 let want = |q: egui::Pos2| -> egui::Pos2 {
                     let v = q - o;
                     match stage {
@@ -758,18 +758,18 @@ impl Gfx {
                     return;
                 };
                 next_stash = [sp.points[0].feather, sp.points[0].bias];
-                self.test_spline_press = Some(p);
+                self.test.spline_press = Some(p);
                 key_click(raw, p, true, if stage == 270 { egui::Key::O } else { egui::Key::I });
                 next = stage + 1;
             }
             271 | 272 | 281 | 282 => {
-                let Some(o) = self.test_spline_press else { return };
+                let Some(o) = self.test.spline_press else { return };
                 let f = if stage % 10 == 1 { 0.5 } else { 1.0 };
                 raw.events.push(egui::Event::PointerMoved(o + egui::vec2(60.0 * f, 0.0)));
                 next = stage + 1;
             }
             273 | 283 => {
-                let Some(o) = self.test_spline_press else { return };
+                let Some(o) = self.test.spline_press else { return };
                 let k = if stage == 273 { egui::Key::O } else { egui::Key::I };
                 key_click(raw, o + egui::vec2(60.0, 0.0), false, k);
                 next = stage + 1;
@@ -785,7 +785,7 @@ impl Gfx {
                 let [f0, b0] = stash;
                 let q = sp.points[0];
                 let s = if stage == 275 { 0.5 } else { -0.5 };
-                let moved = (q.p[0] - 0.0).is_finite() && pt_scr(self, 0) == self.test_spline_press;
+                let moved = (q.p[0] - 0.0).is_finite() && pt_scr(self, 0) == self.test.spline_press;
                 if q.feather <= f0 + 1.0 || (q.bias - (b0 + s * (q.feather - f0))).abs() > 0.01 || !moved {
                     println!(
                         "SPLINE TEST FAIL: O/I drag on a point (stage {stage}): feather {f0}->{}, \
@@ -796,7 +796,7 @@ impl Gfx {
                         b0 + s * (q.feather - f0),
                         self.spline_sel,
                         sp.points.iter().map(|q| q.p).collect::<Vec<_>>(),
-                        self.test_spline_press
+                        self.test.spline_press
                     );
                     std::process::exit(1);
                 }
@@ -853,24 +853,24 @@ impl Gfx {
                 // lands on empty canvas and nothing moves.
                 let Some(p) = pt_xf_scr(self, 0) else { return };
                 next_stash = pt_xf(self, 0).unwrap_or([f32::NAN; 2]);
-                self.test_spline_press = Some(p);
+                self.test.spline_press = Some(p);
                 click(raw, p, true);
                 next = 36;
             }
             36 | 37 => {
-                let Some(p) = self.test_spline_press else { return };
+                let Some(p) = self.test.spline_press else { return };
                 let d = if stage == 36 { 20.0 } else { 40.0 };
                 raw.events.push(egui::Event::PointerMoved(p + egui::vec2(d, 0.0)));
                 next = stage + 1;
             }
             38 => {
-                let Some(p) = self.test_spline_press else { return };
+                let Some(p) = self.test.spline_press else { return };
                 click(raw, p + egui::vec2(40.0, 0.0), false);
                 next = 39;
             }
             39 => next = 40, // settle
             40 => {
-                let want_dx = 40.0 / self.test_rect.width();
+                let want_dx = 40.0 / self.test.rect.width();
                 let now = pt_xf(self, 0).unwrap_or([f32::NAN; 2]);
                 let (dx, dy) = (now[0] - stash[0], now[1] - stash[1]);
                 // The point followed the cursor: straight along +x by the
@@ -1021,6 +1021,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_spline = Some((next, frames, sid, next_stash));
+        self.test.spline = Some((next, frames, sid, next_stash));
     }
 }

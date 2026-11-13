@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_tab(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_tab else { return };
+        let Some((stage, mut frames)) = self.test.tab else { return };
         frames += 1;
         if frames > 600 {
             println!("TAB TEST FAIL: timeout at stage {stage}");
@@ -213,6 +213,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_tab = Some((next, frames));
+        self.test.tab = Some((next, frames));
     }
 }

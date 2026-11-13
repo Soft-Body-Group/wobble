@@ -177,7 +177,7 @@ impl Gfx {
     }
 
     pub(crate) fn drive_test_stress(&mut self) {
-        let Some(mut st) = self.test_stress.take() else { return };
+        let Some(mut st) = self.test.stress.take() else { return };
         if st.t0.elapsed().as_secs_f32() > 240.0 {
             println!("STRESS TEST FAIL: timeout at stage {}", st.stage);
             std::process::exit(1);
@@ -575,6 +575,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_stress = Some(st);
+        self.test.stress = Some(st);
     }
 }

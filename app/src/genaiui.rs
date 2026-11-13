@@ -1439,7 +1439,7 @@ impl Gfx {
     /// and a second run of the unchanged pipeline is a cache hit that sends
     /// nothing and adds no take. Waits are wall-clock.
     pub(crate) fn drive_test_genai(&mut self) {
-        let Some(mut t) = self.test_genai.take() else { return };
+        let Some(mut t) = self.test.genai.take() else { return };
         let fail = |m: String| -> ! {
             println!("GENAI TEST FAIL: {m}");
             std::process::exit(1);
@@ -1625,7 +1625,7 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_genai = Some(t);
+        self.test.genai = Some(t);
     }
 
     fn genai_state_words(&self) -> String {

@@ -319,7 +319,7 @@ impl crate::Gfx {
     /// properties, both both.
     pub(crate) fn drive_test_layerpick(&mut self, raw: &mut egui::RawInput) {
         use engine::graph::{BlendOp, GridParams, TransformParams};
-        let Some((stage, mut frames, [xf_fg, xf_bg])) = self.test_layerpick else { return };
+        let Some((stage, mut frames, [xf_fg, xf_bg])) = self.test.layerpick else { return };
         frames += 1;
         if frames > 900 {
             println!("LAYERPICK TEST FAIL: timeout at stage {stage}");
@@ -397,7 +397,7 @@ impl crate::Gfx {
                 self.selected = Vec::new();
                 self.prop_order.clear();
                 self.props_visible = false;
-                self.test_layerpick = Some((1, 0, [xf_fg, xf_bg]));
+                self.test.layerpick = Some((1, 0, [xf_fg, xf_bg]));
                 return;
             }
             // Odd stages press, even stages release, and the stage after a
@@ -462,7 +462,7 @@ impl crate::Gfx {
         if next != stage {
             frames = 0;
         }
-        self.test_layerpick = Some((next, frames, [xf_fg, xf_bg]));
+        self.test.layerpick = Some((next, frames, [xf_fg, xf_bg]));
     }
 }
 

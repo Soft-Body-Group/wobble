@@ -7,7 +7,7 @@ impl Gfx {
     /// alone widens by 100px, panel 1 keeps its width. Double-click the
     /// edge: back to the shared width. Real input throughout.
     pub(crate) fn drive_test_panelw(&mut self, raw: &mut egui::RawInput) {
-        let Some(mut t) = self.test_panelw.take() else { return };
+        let Some(mut t) = self.test.panelw.take() else { return };
         t.frames += 1;
         let fail = |m: String| -> ! {
             println!("PANEL WIDTH TEST FAIL: {m}");
@@ -101,6 +101,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_panelw = Some(t);
+        self.test.panelw = Some(t);
     }
 }

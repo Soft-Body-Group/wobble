@@ -42,7 +42,7 @@ fn centre(q: &[[f32; 2]; 4]) -> [f32; 2] {
 
 impl Gfx {
     pub(crate) fn drive_test_text(&mut self, raw: &mut egui::RawInput) {
-        let Some(mut t) = self.test_text.take() else { return };
+        let Some(mut t) = self.test.text.take() else { return };
         t.frames += 1;
         let fail = |m: String| -> ! {
             println!("TEXT TEST FAIL: {m}");
@@ -53,7 +53,7 @@ impl Gfx {
         }
         // Each gesture step gets passes of its own.
         if t.since.elapsed().as_millis() < 150 {
-            self.test_text = Some(t);
+            self.test.text = Some(t);
             return;
         }
         let next = |t: &mut TestText, s: u32| {
@@ -256,6 +256,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_text = Some(t);
+        self.test.text = Some(t);
     }
 }

@@ -5,7 +5,7 @@ use crate::*;
 impl Gfx {
     /// --test-play driver: warm the cache with two loops, then measure.
     pub(crate) fn drive_test_play(&mut self) {
-        let Some((stage, mark, started)) = self.test_play else { return };
+        let Some((stage, mark, started)) = self.test.play else { return };
         if started.elapsed().as_secs() > 120 {
             println!("PLAY TEST FAIL: timed out at stage {stage}");
             std::process::exit(1);
@@ -24,12 +24,12 @@ impl Gfx {
                     }
                 }
                 self.playback_dirty = true;
-                self.test_play = Some((10, self.displayed_total, Instant::now()));
+                self.test.play = Some((10, self.displayed_total, Instant::now()));
             }
             10 if self.displayed_total >= mark + 30 => {
                 self.fps = 120.0;
                 self.skipped = 0;
-                self.test_play = Some((1, self.displayed_total, Instant::now()));
+                self.test.play = Some((1, self.displayed_total, Instant::now()));
             }
             1 if self.displayed_total >= mark + 96 => {
                 let secs = started.elapsed().as_secs_f32();

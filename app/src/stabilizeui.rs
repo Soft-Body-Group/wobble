@@ -375,7 +375,7 @@ impl Gfx {
     /// Stabilize with `reverse` puts the plate back. Waits are wall-clock.
     pub(crate) fn drive_test_stab(&mut self) {
         use engine::planar::{h_apply, h_mul};
-        let Some(mut t) = self.test_stab.take() else { return };
+        let Some(mut t) = self.test.stab.take() else { return };
         let fail = |m: String| -> ! {
             println!("STABILIZE TEST FAIL: {m}");
             std::process::exit(1);
@@ -503,7 +503,7 @@ impl Gfx {
                     if lock > 0.5 {
                         fail(format!("lock-off leaves {lock:.3} px of motion"));
                     }
-                    self.test_stab_lock = lock;
+                    self.test.stab_lock = lock;
                     if self.cost_flow.is_slow(t.node) && !self.cost_flow.uncached.contains(&0) {
                         fail("an analysed Stabilize is not cyan".into());
                     }
@@ -586,7 +586,7 @@ impl Gfx {
                         "lock-off holds the true camera to {:.3} px at every frame, the stabilised picture \
                          moves {stab:.4} where the plate moves {raw:.4}, and reverse puts the plate back \
                          ({back:.4}; the pins compose to identity within {ident:.1e} px)",
-                        self.test_stab_lock
+                        self.test.stab_lock
                     );
                     // A matte over the right half: its pixels leave the
                     // vote, the run is a new recipe, and the camera (which
@@ -645,6 +645,6 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_stab = Some(t);
+        self.test.stab = Some(t);
     }
 }

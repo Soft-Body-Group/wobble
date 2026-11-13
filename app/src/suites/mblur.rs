@@ -19,7 +19,7 @@ impl Gfx {
     /// is exactly as bright as the unblurred one, because the Grade is now
     /// downstream and runs once, at the frame.
     pub(crate) fn drive_test_mblur(&mut self) {
-        let Some((stage, mut frames, bits)) = self.test_mblur else { return };
+        let Some((stage, mut frames, bits)) = self.test.mblur else { return };
         frames += 1;
         if frames > 900 {
             println!("MBLUR TEST FAIL: timeout at stage {stage}");
@@ -39,7 +39,7 @@ impl Gfx {
                     && self.comp.motion_blur_stages().iter().any(|s| s.0 == *id)
             });
         if stage >= 2 && !live {
-            self.test_mblur = Some((stage, 0, bits));
+            self.test.mblur = Some((stage, 0, bits));
             return;
         }
         let mut next = stage;
@@ -99,7 +99,7 @@ impl Gfx {
                 }
                 self.egraph.connect(mb, 0, GRADE);
                 self.playback_dirty = true;
-                self.test_mblur = Some((2, 0, m.to_bits() as u64));
+                self.test.mblur = Some((2, 0, m.to_bits() as u64));
                 return;
             }
             // Below: the Grade is upstream, so it smears. Then move the node
@@ -161,6 +161,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_mblur = Some((next, if next == stage { frames } else { 0 }, bits));
+        self.test.mblur = Some((next, if next == stage { frames } else { 0 }, bits));
     }
 }

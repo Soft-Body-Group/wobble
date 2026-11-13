@@ -7,7 +7,7 @@ impl Gfx {
     /// decodable sequences by default, "all files" reveals the rest, and the
     /// grid decodes a thumbnail per sequence (not just the selected one).
     pub(crate) fn drive_test_thumbs(&mut self) {
-        let Some((stage, mut frames)) = self.test_thumbs else { return };
+        let Some((stage, mut frames)) = self.test.thumbs else { return };
         frames += 1;
         if frames > 2400 {
             println!("THUMBS TEST FAIL: timeout at stage {stage}");
@@ -64,7 +64,7 @@ impl Gfx {
                     b.test_set_grid(true);
                     b.test_set_tile(220.0);
                 }
-                self.test_thumbs = Some((1, frames));
+                self.test.thumbs = Some((1, frames));
             }
             // Default filter: the exr sequences and the png, none of the
             // junk.
@@ -81,7 +81,7 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 self.browser.as_mut().unwrap().test_set_filter(browser::TypeFilter::All);
-                self.test_thumbs = Some((2, frames));
+                self.test.thumbs = Some((2, frames));
             }
             // "all files" reveals the two undecodable ones.
             2 if frames > 30 => {
@@ -96,7 +96,7 @@ impl Gfx {
                     .as_mut()
                     .unwrap()
                     .test_set_filter(browser::TypeFilter::Supported);
-                self.test_thumbs = Some((3, frames));
+                self.test.thumbs = Some((3, frames));
             }
             // The grid decodes a thumbnail per sequence, not one at a time.
             3 => {
@@ -106,11 +106,11 @@ impl Gfx {
                     let b = self.browser.as_mut().unwrap();
                     let tile = b.test_tile();
                     b.test_set_tile(9999.0);
-                    self.test_thumbs = Some((4, frames));
+                    self.test.thumbs = Some((4, frames));
                     log::info!("thumbs: {thumbs} decoded at tile {tile}");
                     return;
                 }
-                self.test_thumbs = Some((3, frames));
+                self.test.thumbs = Some((3, frames));
             }
             4 if frames > 10 => {
                 let b = self.browser.as_ref().unwrap();
@@ -126,7 +126,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_thumbs = Some((stage, frames)),
+            _ => self.test.thumbs = Some((stage, frames)),
         }
     }
 }

@@ -8,7 +8,7 @@ impl Gfx {
     /// subwob, halve the Grade's gain inside: the viewer still shows the
     /// TAIL, and its pixels halve. Step out: the lock is still there.
     pub(crate) fn drive_test_viewlock(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, ids, before)) = self.test_viewlock else { return };
+        let Some((stage, mut frames, ids, before)) = self.test.viewlock else { return };
         let [inst, tail] = ids;
         frames += 1;
         if frames > 1200 {
@@ -116,6 +116,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_viewlock = Some((next, if next == stage { frames } else { 0 }, ids, before));
+        self.test.viewlock = Some((next, if next == stage { frames } else { 0 }, ids, before));
     }
 }

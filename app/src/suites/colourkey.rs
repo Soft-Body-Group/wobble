@@ -11,7 +11,7 @@ impl Gfx {
     /// source image while the node is viewed but a downstream consumer still
     /// gets a matte.
     pub(crate) fn drive_test_colourkey(&mut self) {
-        let Some((stage, mut frames, id)) = self.test_colourkey else { return };
+        let Some((stage, mut frames, id)) = self.test.colourkey else { return };
         frames += 1;
         if frames > 2000 {
             println!("COLOURKEY TEST FAIL: timeout at stage {stage}");
@@ -42,7 +42,7 @@ impl Gfx {
                 // nonsense — it read 1.000 here and 0.000 twenty frames on.
                 self.playing = false;
                 self.seek_to(0);
-                self.test_colourkey = Some((1, frames, id));
+                self.test.colourkey = Some((1, frames, id));
                 return;
             }
             // Let the compile land, then drag a sample across the middle.
@@ -109,11 +109,11 @@ impl Gfx {
                 {
                     k.invert = true;
                 }
-                self.test_colourkey_m = m;
+                self.test.colourkey_m = m;
                 next = 5;
             }
             5 if frames > 20 => {
-                let m = self.test_colourkey_m;
+                let m = self.test.colourkey_m;
                 let inv = self
                     .probe_output_mean()
                     .unwrap_or_else(|| fail("no output to probe".into()));
@@ -143,6 +143,6 @@ impl Gfx {
         // Stages count their OWN frames: the first one waits on a real
         // sequence loading, which on a cold cache is longer than any of the
         // later waits and would otherwise expire them all at once.
-        self.test_colourkey = Some((next, if next == stage { frames } else { 0 }, id));
+        self.test.colourkey = Some((next, if next == stage { frames } else { 0 }, id));
     }
 }

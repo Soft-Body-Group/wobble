@@ -10,7 +10,7 @@ impl Gfx {
     /// widget claims the keyboard while it is dragged — which is what stops
     /// D (viewer back to Normal) from firing under the temperature axis.
     pub(crate) fn drive_test_rgb(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, id)) = self.test_rgb else { return };
+        let Some((stage, mut frames, id)) = self.test.rgb else { return };
         frames += 1;
         if frames > 1200 {
             println!("RGB TEST FAIL: timeout at stage {stage}");
@@ -91,7 +91,7 @@ impl Gfx {
                 self.bottom = BottomTab::Properties;
                 self.playing = false;
                 self.seek_to(0);
-                self.test_rgb = Some((1, frames, nid));
+                self.test.rgb = Some((1, frames, nid));
                 return;
             }
             // Ganged drag on the middle lane: the gang box sits over the
@@ -109,14 +109,14 @@ impl Gfx {
                          is too narrow for the widget's chrome"
                     ));
                 }
-                self.test_rgb_before = value(self);
-                self.test_rgb_anchor =
+                self.test.rgb_before = value(self);
+                self.test.rgb_anchor =
                     (egui::pos2(g.knob_x[1], g.lane_y[1]), g.track_x1 - g.track_x0);
-                press(raw, self.test_rgb_anchor.0, true);
+                press(raw, self.test.rgb_anchor.0, true);
                 next = 2;
             }
             2 | 3 | 4 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 raw.events
                     .push(egui::Event::PointerMoved(a + egui::vec2((stage - 1) as f32 * tw / 8.0, 0.0)));
                 if stage == 3 && !rgbslider::grabbing(&self.egui_ctx) {
@@ -126,12 +126,12 @@ impl Gfx {
                 next = stage + 1;
             }
             5 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 press(raw, a + egui::vec2(3.0 * tw / 8.0, 0.0), false);
                 next = 6;
             }
             6 => {
-                let (v, b) = (value(self), self.test_rgb_before);
+                let (v, b) = (value(self), self.test.rgb_before);
                 let d = [v[0] - b[0], v[1] - b[1], v[2] - b[2]];
                 if d[0] < 0.05 {
                     fail(format!("ganged drag right moved red by {:.4} — nothing happened", d[0]));
@@ -151,11 +151,11 @@ impl Gfx {
                     fail(format!(
                         "a {:.0}px drag moved the value {:.3}, want {want:.3} — the \
                          knob is not tracking the pointer",
-                        3.0 * self.test_rgb_anchor.1 / 8.0,
+                        3.0 * self.test.rgb_anchor.1 / 8.0,
                         d[0]
                     ));
                 }
-                self.test_rgb_before = v;
+                self.test.rgb_before = v;
                 next = 7;
             }
             // Same gesture with D held: the temperature axis. Warmer to the
@@ -163,25 +163,25 @@ impl Gfx {
             7 => {
                 let Some(g) = geom else { fail("widget gone".into()) };
                 key(raw, egui::Key::D, true);
-                self.test_rgb_anchor =
+                self.test.rgb_anchor =
                     (egui::pos2(g.knob_x[1], g.lane_y[1]), g.track_x1 - g.track_x0);
-                press(raw, self.test_rgb_anchor.0, true);
+                press(raw, self.test.rgb_anchor.0, true);
                 next = 8;
             }
             8 | 9 | 10 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 raw.events
                     .push(egui::Event::PointerMoved(a + egui::vec2((stage - 7) as f32 * tw / 8.0, 0.0)));
                 next = stage + 1;
             }
             11 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 press(raw, a + egui::vec2(3.0 * tw / 8.0, 0.0), false);
                 key(raw, egui::Key::D, false);
                 next = 12;
             }
             12 => {
-                let (v, b) = (value(self), self.test_rgb_before);
+                let (v, b) = (value(self), self.test.rgb_before);
                 if !(v[0] > b[0] && v[2] < b[2]) {
                     fail(format!("D dragged right must warm the triple: {b:?} -> {v:?}"));
                 }
@@ -192,7 +192,7 @@ impl Gfx {
                 if (l1 - l0).abs() > 2e-3 * l0.max(1.0) {
                     fail(format!("temperature axis moved the luma {l0:.4} -> {l1:.4}"));
                 }
-                self.test_rgb_before = v;
+                self.test.rgb_before = v;
                 next = 13;
             }
             // And with G held the gang inverts: one lane, alone.
@@ -206,25 +206,25 @@ impl Gfx {
             }
             14 => {
                 let Some(g) = geom else { fail("widget gone".into()) };
-                self.test_rgb_anchor =
+                self.test.rgb_anchor =
                     (egui::pos2(g.knob_x[2], g.lane_y[2]), g.track_x1 - g.track_x0);
-                press(raw, self.test_rgb_anchor.0, true);
+                press(raw, self.test.rgb_anchor.0, true);
                 next = 15;
             }
             15 | 16 | 17 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 raw.events
                     .push(egui::Event::PointerMoved(a + egui::vec2((stage - 14) as f32 * tw / 8.0, 0.0)));
                 next = stage + 1;
             }
             18 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 press(raw, a + egui::vec2(3.0 * tw / 8.0, 0.0), false);
                 key(raw, egui::Key::G, false);
                 next = 19;
             }
             19 => {
-                let (v, b) = (value(self), self.test_rgb_before);
+                let (v, b) = (value(self), self.test.rgb_before);
                 if (v[0] - b[0]).abs() > 1e-4 || (v[1] - b[1]).abs() > 1e-4 {
                     fail(format!("G-held drag was not per-lane: {b:?} -> {v:?}"));
                 }
@@ -246,7 +246,7 @@ impl Gfx {
                     n.grade_sliders = true;
                 }
                 self.prop_order = vec![gid];
-                self.test_rgb = Some((20, 0, gid));
+                self.test.rgb = Some((20, 0, gid));
                 return;
             }
             // The mode has to actually draw rgb rows: no geometry under
@@ -281,26 +281,26 @@ impl Gfx {
                 {
                     fail("rows are not laid out two per column".into());
                 }
-                self.test_rgb_before = gain_of(self);
-                self.test_rgb_anchor =
+                self.test.rgb_before = gain_of(self);
+                self.test.rgb_anchor =
                     (egui::pos2(g.knob_x[1], g.lane_y[1]), g.track_x1 - g.track_x0);
-                press(raw, self.test_rgb_anchor.0, true);
+                press(raw, self.test.rgb_anchor.0, true);
                 next = 21;
             }
             21 | 22 | 23 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 raw.events.push(egui::Event::PointerMoved(
                     a + egui::vec2((stage - 20) as f32 * tw / 8.0, 0.0),
                 ));
                 next = stage + 1;
             }
             24 => {
-                let (a, tw) = self.test_rgb_anchor;
+                let (a, tw) = self.test.rgb_anchor;
                 press(raw, a + egui::vec2(3.0 * tw / 8.0, 0.0), false);
                 next = 25;
             }
             25 => {
-                let (v, b) = (gain_of(self), self.test_rgb_before);
+                let (v, b) = (gain_of(self), self.test.rgb_before);
                 let d = [v[0] - b[0], v[1] - b[1], v[2] - b[2]];
                 if d[0] < 0.05 {
                     fail(format!("Grade slider mode: gain did not move ({b:?} -> {v:?})"));
@@ -308,7 +308,7 @@ impl Gfx {
                 if (d[1] - d[0]).abs() > 1e-3 || (d[2] - d[0]).abs() > 1e-3 {
                     fail(format!("Grade slider gang was not relative: {b:?} -> {v:?}"));
                 }
-                self.test_rgb_before = v;
+                self.test.rgb_before = v;
                 // Every node with a colour triple has to be driving THIS
                 // widget: a tint drawn with a colour button cannot be ganged,
                 // keyed or pushed along the S/D/F axes. Each panel is pinned
@@ -337,7 +337,7 @@ impl Gfx {
                             .replace("{nid}", &nid.to_string()),
                     );
                 }
-                let v = self.test_rgb_before;
+                let v = self.test.rgb_before;
                 println!(
                     "RGB TEST PASS: ganged drag stayed relative, D held \
                      slid orange<->cyan at constant luma, G held moved \
@@ -355,6 +355,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_rgb = Some((next, if next == stage { frames } else { 0 }, id));
+        self.test.rgb = Some((next, if next == stage { frames } else { 0 }, id));
     }
 }

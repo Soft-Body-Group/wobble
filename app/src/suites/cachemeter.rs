@@ -7,7 +7,7 @@ impl Gfx {
     /// RAM tier on, and the reported occupancy has to climb from nothing to
     /// the frames actually decoded — and never exceed the sequence length.
     pub(crate) fn drive_test_cachemeter(&mut self) {
-        let Some((stage, mut frames)) = self.test_cachemeter else { return };
+        let Some((stage, mut frames)) = self.test.cachemeter else { return };
         frames += 1;
         if frames > 2400 {
             println!("CACHEMETER TEST FAIL: timeout at stage {stage}");
@@ -46,7 +46,7 @@ impl Gfx {
                 }
                 self.playing = true;
                 self.fps = 60.0;
-                self.test_cachemeter = Some((1, frames));
+                self.test.cachemeter = Some((1, frames));
                 log::info!("cachemeter: start {n}/{len}");
             }
             // Gate on the reported residency itself, not on how many frames
@@ -68,9 +68,9 @@ impl Gfx {
                     );
                     std::process::exit(0);
                 }
-                self.test_cachemeter = Some((1, frames));
+                self.test.cachemeter = Some((1, frames));
             }
-            _ => self.test_cachemeter = Some((stage, frames)),
+            _ => self.test.cachemeter = Some((stage, frames)),
         }
     }
 }

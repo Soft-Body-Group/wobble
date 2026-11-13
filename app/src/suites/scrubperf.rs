@@ -13,8 +13,8 @@ impl Gfx {
     /// duration) and reports frames displayed per second. It is a
     /// measurement, not a pass/fail threshold: the number is the point.
     pub(crate) fn drive_test_scrubperf(&mut self) {
-        let Some((stage, shown0, pos)) = self.test_scrubperf else { return };
-        let t0 = *self.test_scrub_t0.get_or_insert_with(web_time::Instant::now);
+        let Some((stage, shown0, pos)) = self.test.scrubperf else { return };
+        let t0 = *self.test.scrub_t0.get_or_insert_with(web_time::Instant::now);
         let el = t0.elapsed().as_secs_f32();
         if el > 30.0 {
             println!("SCRUBPERF TEST FAIL: timeout at stage {stage}");
@@ -24,12 +24,12 @@ impl Gfx {
             0 if self.playback.is_some() && self.displayed_total >= 3 => {
                 self.playing = false;
                 self.seek_to(0);
-                self.test_scrubperf = Some((1, 0, 0));
+                self.test.scrubperf = Some((1, 0, 0));
             }
             // Settle, then start the clock.
             1 if el > 1.0 => {
-                self.test_scrubperf = Some((2, self.displayed_total, 0));
-                self.test_scrub_t0 = Some(web_time::Instant::now());
+                self.test.scrubperf = Some((2, self.displayed_total, 0));
+                self.test.scrub_t0 = Some(web_time::Instant::now());
             }
             // Drag: one frame per UI frame, exactly as the viewer's
             // space-drag does when swept across the whole timeline.
@@ -48,7 +48,7 @@ impl Gfx {
                     if want != pos {
                         self.seek_to(want);
                     }
-                    self.test_scrubperf = Some((2, shown0, want));
+                    self.test.scrubperf = Some((2, shown0, want));
                     return;
                 }
                 let shown = self.displayed_total - shown0;

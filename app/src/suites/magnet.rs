@@ -7,7 +7,7 @@ impl Gfx {
     /// sockets land inside the magnet's reach), hover the graph with shift
     /// held, and expect the pair to wire itself up.
     pub(crate) fn drive_test_magnet(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, gid)) = self.test_magnet else { return };
+        let Some((stage, mut frames, gid)) = self.test.magnet else { return };
         frames += 1;
         if frames > 600 {
             println!("MAGNET TEST FAIL: timeout at stage {stage}");
@@ -21,7 +21,7 @@ impl Gfx {
                     NodeKind::Grade(Default::default()),
                     ra + egui::vec2(0.0, 100.0),
                 );
-                self.test_magnet = Some((1, frames, id));
+                self.test.magnet = Some((1, frames, id));
                 return;
             }
             1 | 2 | 3 => {
@@ -47,6 +47,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_magnet = Some((next, frames, gid));
+        self.test.magnet = Some((next, frames, gid));
     }
 }

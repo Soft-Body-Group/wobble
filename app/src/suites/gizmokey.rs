@@ -7,7 +7,7 @@ impl Gfx {
     /// at frame 6 (evaluated x = 120), drag the pivot right, and verify the
     /// drag became a NEW key at frame 6 while authored params stayed 0.
     pub(crate) fn drive_test_gizmokey(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_gizmokey else { return };
+        let Some((stage, mut frames)) = self.test.gizmokey else { return };
         frames += 1;
         if frames > 1800 {
             println!("GIZMOKEY TEST FAIL: timeout at stage {stage}");
@@ -94,7 +94,7 @@ impl Gfx {
                 // frame, and nowhere near flying off.
                 match key6 {
                     Some(v) if authored == 0.0 && nkeys == 3 && v > 121.0 && v < 400.0 => {
-                        self.test_gizmokey_key6 = v;
+                        self.test.gizmokey_key6 = v;
                     }
                     _ => {
                         println!(
@@ -150,7 +150,7 @@ impl Gfx {
                 let ok = locked
                     && x_keys == 3
                     && x_at_8.is_none()
-                    && x_at_6 == Some(self.test_gizmokey_key6)
+                    && x_at_6 == Some(self.test.gizmokey_key6)
                     && ax == 0.0
                     && y_at_8.is_some_and(|v| v.abs() > 1.0);
                 if !ok {
@@ -161,7 +161,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                self.test_gizmokey_y8 = y_at_8.unwrap_or(f32::NAN);
+                self.test.gizmokey_y8 = y_at_8.unwrap_or(f32::NAN);
                 // PHASE 3: the motion path. Off, nothing is drawn; on, the
                 // animated pivot's path goes on screen.
                 if self.last_path_points != 0 {
@@ -196,24 +196,24 @@ impl Gfx {
                     (k, self.node_res_f32(2).unwrap_or((2048.0, 1080.0)))
                 };
                 let at = element_point(&k0, size).expect("a transform has a point");
-                self.test_gizmokey_before = match &k0 {
+                self.test.gizmokey_before = match &k0 {
                     NodeKind::Transform(t) => [t.translate[0], t.translate[1]],
                     _ => [f32::NAN; 2],
                 };
                 let c = self.node_point_on_screen(2, (at[0], at[1]));
                 press(raw, c, true);
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 frames = 0;
                 next = 16;
             }
             16 | 17 => {
                 let d = if stage == 16 { 20.0 } else { 40.0 };
                 raw.events
-                    .push(egui::Event::PointerMoved(self.test_pos.unwrap() + egui::vec2(d, d / 2.0)));
+                    .push(egui::Event::PointerMoved(self.test.pos.unwrap() + egui::vec2(d, d / 2.0)));
                 next = stage + 1;
             }
             18 => {
-                press(raw, self.test_pos.unwrap() + egui::vec2(40.0, 20.0), false);
+                press(raw, self.test.pos.unwrap() + egui::vec2(40.0, 20.0), false);
                 next = 19;
             }
             19 if frames > 2 => {
@@ -226,8 +226,8 @@ impl Gfx {
                 // Screen pixels -> this node's pixels, the way the path maps.
                 let (ow, _) = self.comp.output_size().unwrap_or((4096, 2160));
                 let per_px = ow as f32 / self.image_rect.width().max(1.0);
-                let want_x = self.test_gizmokey_before[0] + 40.0 * per_px;
-                let want_y = self.test_gizmokey_before[1] + 20.0 * per_px;
+                let want_x = self.test.gizmokey_before[0] + 40.0 * per_px;
+                let want_y = self.test.gizmokey_before[1] + 20.0 * per_px;
                 let got_x = key(x, 0.0);
                 let got_y = key(y, 0.0);
                 let near = |a: Option<f32>, b: f32| a.is_some_and(|v| (v - b).abs() < 8.0);
@@ -235,7 +235,7 @@ impl Gfx {
                 let ok = near(got_x, want_x)
                     && near(got_y, want_y)
                     && x.keys.len() == 3
-                    && key(x, 6.0).is_some_and(|v| (v - self.test_gizmokey_key6).abs() < 1e-3)
+                    && key(x, 6.0).is_some_and(|v| (v - self.test.gizmokey_key6).abs() < 1e-3)
                     && key(x, 12.0).is_some_and(|v| (v - 240.0).abs() < 1e-3);
                 if !ok {
                     println!(
@@ -252,8 +252,8 @@ impl Gfx {
                      keyed y at 8 ({:.1}); the motion path drew {} samples once switched on \
                      (none before); and dragging its key at frame 0 moved THAT key to \
                      ({:.1}, {:.1}) with frames 6 and 12 untouched",
-                    self.test_gizmokey_key6,
-                    self.test_gizmokey_y8,
+                    self.test.gizmokey_key6,
+                    self.test.gizmokey_y8,
                     self.last_path_points,
                     got_x.unwrap_or(f32::NAN),
                     got_y.unwrap_or(f32::NAN),
@@ -262,6 +262,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_gizmokey = Some((next, frames));
+        self.test.gizmokey = Some((next, frames));
     }
 }

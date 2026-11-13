@@ -15,11 +15,11 @@ impl Gfx {
     /// O held makes a cut op of the two — which lowers to a Subtract
     /// MatteCombine for the engine.
     pub(crate) fn drive_test_roto(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, sid)) = self.test_roto else { return };
+        let Some((stage, mut frames, sid)) = self.test.roto else { return };
         frames += 1;
         // Wall clock, not frames: the S-click loop re-enters its stages, and
         // the unpaced test loop makes a frame count mean nothing anyway.
-        let t0 = *self.test_roto_clock.get_or_insert_with(web_time::Instant::now);
+        let t0 = *self.test.roto_clock.get_or_insert_with(web_time::Instant::now);
         if t0.elapsed() > web_time::Duration::from_secs(30) {
             let n = match self.egraph.node(sid).map(|n| &n.kind) {
                 Some(NodeKind::Spline(sp)) => format!(
@@ -30,7 +30,7 @@ impl Gfx {
                     innards::selected(&self.egui_ctx, sid, sp.shape_count()) + 1,
                     self.spline_sel,
                     self.selected,
-                    self.test_rect
+                    self.test.rect
                 ),
                 _ => "no spline".into(),
             };
@@ -71,7 +71,7 @@ impl Gfx {
         };
         // Viewer spots for shape 2's points, anchored at capture time.
         let spot = |s: &Self, k: usize| -> egui::Pos2 {
-            let r = s.test_rect;
+            let r = s.test.rect;
             let f = [(0.55, 0.3), (0.7, 0.35), (0.6, 0.6)][k];
             egui::pos2(r.min.x + r.width() * f.0, r.min.y + r.height() * f.1)
         };
@@ -81,7 +81,7 @@ impl Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                self.test_rect = self.image_rect;
+                self.test.rect = self.image_rect;
                 // Shape 1: a square, so the node is a real roto.
                 let sq = [[0.2, 0.2], [0.45, 0.2], [0.45, 0.45], [0.2, 0.45]]
                     .iter()
@@ -103,7 +103,7 @@ impl Gfx {
                 self.node_editor.pan = -pos.to_vec2() * z;
                 self.selected = vec![id];
                 self.playing = false;
-                self.test_roto = Some((1, 0, id));
+                self.test.roto = Some((1, 0, id));
                 return;
             }
             // `+`: press on one frame, release on the next.
@@ -135,14 +135,14 @@ impl Gfx {
             4 => {
                 let k = sp(self).map(|s| s.more[0].points.len()).unwrap_or(0).min(2);
                 let p = spot(self, k);
-                self.test_roto_drag = (p, p);
+                self.test.roto_drag = (p, p);
                 key(raw, egui::Key::S, true);
                 click(raw, p, true);
                 next = 5;
             }
             5 => {
                 // Release where it pressed: anywhere else is a drag.
-                click(raw, self.test_roto_drag.0, false);
+                click(raw, self.test.roto_drag.0, false);
                 next = 6;
             }
             6 => {
@@ -170,14 +170,14 @@ impl Gfx {
                     else {
                         fail("no inner nodes for the shapes".into());
                     };
-                    self.test_roto_drag = (a, b);
+                    self.test.roto_drag = (a, b);
                     key(raw, egui::Key::O, true);
                     click(raw, a, true);
                 } else if frames <= 5 {
-                    let (a, b) = self.test_roto_drag;
+                    let (a, b) = self.test.roto_drag;
                     raw.events.push(egui::Event::PointerMoved(a + (b - a) * (frames as f32 - 1.0) / 4.0));
                 } else if frames == 6 {
-                    click(raw, self.test_roto_drag.1, false);
+                    click(raw, self.test.roto_drag.1, false);
                 } else if frames == 7 {
                     key(raw, egui::Key::O, false);
                 } else if frames > 10 {
@@ -237,8 +237,8 @@ impl Gfx {
                         fail(format!("no op→out wire to cut (hits {:?})", hits(self)));
                     };
                     let mid = a + (b - a) * 0.5;
-                    self.test_roto_drag = (mid - egui::vec2(60.0, 0.0), mid + egui::vec2(60.0, 0.0));
-                    let p = self.test_roto_drag.0;
+                    self.test.roto_drag = (mid - egui::vec2(60.0, 0.0), mid + egui::vec2(60.0, 0.0));
+                    let p = self.test.roto_drag.0;
                     raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                     raw.events.push(egui::Event::PointerMoved(p));
                     raw.events.push(egui::Event::PointerButton {
@@ -248,11 +248,11 @@ impl Gfx {
                         modifiers: ctrl,
                     });
                 } else if frames <= 5 {
-                    let (a, b) = self.test_roto_drag;
+                    let (a, b) = self.test.roto_drag;
                     raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                     raw.events.push(egui::Event::PointerMoved(a + (b - a) * (frames as f32 - 1.0) / 4.0));
                 } else if frames == 6 {
-                    let p = self.test_roto_drag.1;
+                    let p = self.test.roto_drag.1;
                     raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                     raw.events.push(egui::Event::PointerButton {
                         pos: p,
@@ -278,10 +278,10 @@ impl Gfx {
                 let op = engine::graph::ROTO_OP;
                 if frames == 1 {
                     let Some(a) = at(self, innards::Hit::Node(op)) else { fail("no op node to pick".into()) };
-                    self.test_roto_drag = (a, a);
+                    self.test.roto_drag = (a, a);
                     click(raw, a, true);
                 } else if frames == 2 {
-                    click(raw, self.test_roto_drag.0, false);
+                    click(raw, self.test.roto_drag.0, false);
                 } else if frames == 5 {
                     key(raw, egui::Key::Delete, true);
                 } else if frames == 6 {
@@ -313,6 +313,6 @@ impl Gfx {
         if next != stage {
             frames = 0;
         }
-        self.test_roto = Some((next, frames, sid));
+        self.test.roto = Some((next, frames, sid));
     }
 }

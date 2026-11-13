@@ -14,7 +14,7 @@ impl Gfx {
     /// wall clock.
     pub(crate) fn drive_test_geotools(&mut self, raw: &mut egui::RawInput) {
         use engine::geo::GeoNode as G;
-        let Some((stage, mut frames, t0)) = self.test_geotools else { return };
+        let Some((stage, mut frames, t0)) = self.test.geotools else { return };
         frames += 1;
         let fail = |msg: String| -> ! {
             println!("GEOTOOLS TEST FAIL: {msg}");
@@ -54,7 +54,7 @@ impl Gfx {
             let dy = r.height() * (editor::SOCKET_OFFSET / (2.0 * editor::NODE_R));
             Some(egui::pos2(r.center().x, r.center().y + dy))
         };
-        let id = |s: &Self, k: &str| s.test_geotools_ids.get(k).copied().unwrap_or(0);
+        let id = |s: &Self, k: &str| s.test.geotools_ids.get(k).copied().unwrap_or(0);
         let mut next = stage;
         // Every gesture is press / moves / release on separate passes, a
         // few passes apart, so egui never folds two into one.
@@ -140,7 +140,7 @@ impl Gfx {
                 if self.selected != [c] || self.geo_tool.is_some() {
                     fail(format!("after drawing: selected {:?}, tool {:?}", self.selected, self.geo_tool));
                 }
-                self.test_geotools_ids.insert("circle", c);
+                self.test.geotools_ids.insert("circle", c);
                 // Its centre handle: drag it right by 0.1.
                 press(raw, g2s(self, center), true);
                 next = 8;
@@ -192,7 +192,7 @@ impl Gfx {
                 if !matches!(fed, Some(G::Merge { .. })) {
                     fail(format!("two shapes but the Output is fed {:?}", fed.map(|k| k.name())));
                 }
-                self.test_geotools_ids.insert("star", st);
+                self.test.geotools_ids.insert("star", st);
                 if self.selected != [st] {
                     fail(format!("the new star is not selected: {:?}", self.selected));
                 }
@@ -220,7 +220,7 @@ impl Gfx {
                 if !matches!(kind(self, xf), Some(G::Transform { inherit: true, .. })) {
                     fail("a tool Transform should inherit the pivot".into());
                 }
-                self.test_geotools_ids.insert("xf", xf);
+                self.test.geotools_ids.insert("xf", xf);
                 // Its handles sit on the star's centre: drag that down.
                 press(raw, g2s(self, [0.75, 0.3]), true);
                 next = 17;
@@ -258,7 +258,7 @@ impl Gfx {
                 // The big dot: a Slider beside the Transform, dragged in.
                 let at = self.egraph.node(id(self, "xf")).map(|n| n.pos).unwrap_or_default();
                 let sl = self.egraph.add(NodeKind::GeoNode(G::Slider { value: 0.5, name: "turn".into() }), at + egui::vec2(130.0, -90.0));
-                self.test_geotools_ids.insert("slider", sl);
+                self.test.geotools_ids.insert("slider", sl);
                 next = 22;
             }
             22 if frames > 8 => {
@@ -281,11 +281,11 @@ impl Gfx {
                 press(raw, self.node_editor.test_big_dot(id(self, "xf")).unwrap_or_default(), false);
                 next = 25;
             }
-            25 if step && self.test_geotools_mark.get_or_insert_with(web_time::Instant::now).elapsed().as_secs_f32() > 0.8 => {
+            25 if step && self.test.geotools_mark.get_or_insert_with(web_time::Instant::now).elapsed().as_secs_f32() > 0.8 => {
                 // The names splay out over half a second: let them settle.
                 if std::env::var_os("WOBBLE_GEOTOOLS_SHOT_MENU").is_some() {
                     SHOT_NOW.store(true, std::sync::atomic::Ordering::Relaxed);
-                    return self.test_geotools = Some((stage, frames, t0));
+                    return self.test.geotools = Some((stage, frames, t0));
                 }
                 let Some(m) = self.node_editor.test_big_dot_menu() else {
                     fail("a number dropped on the big dot asked nothing".into())
@@ -299,7 +299,7 @@ impl Gfx {
                         if frames > 30 {
                             fail("no rotate row in the list".into());
                         }
-                        return self.test_geotools = Some((stage, frames, t0));
+                        return self.test.geotools = Some((stage, frames, t0));
                     }
                 }
                 next = 26;
@@ -322,7 +322,7 @@ impl Gfx {
                     NodeKind::GeoNode(G::Transform { translate: [0.0; 2], rotate: 0.0, scale: [1.0; 2], pivot: [0.0; 2], inherit: true }),
                     at + egui::vec2(-160.0, 40.0),
                 );
-                self.test_geotools_ids.insert("t2", t2);
+                self.test.geotools_ids.insert("t2", t2);
                 next = 28;
             }
             28 if frames > 8 => {
@@ -376,7 +376,7 @@ impl Gfx {
                 if self.selected != [b] {
                     fail("the new Brush is not selected".into());
                 }
-                self.test_geotools_ids.insert("brush", b);
+                self.test.geotools_ids.insert("brush", b);
                 press(raw, g2s(self, [0.2, 0.45]), true);
                 next = 35;
             }
@@ -443,8 +443,8 @@ impl Gfx {
                 };
                 let mid = a + (egui::pos2(r.center().x, r.top()) - a) * 0.5;
                 mv(raw, mid);
-                self.test_geotools_ids.insert("merge", m);
-                self.test_geotools_ids.insert("merge_in", i as u64);
+                self.test.geotools_ids.insert("merge", m);
+                self.test.geotools_ids.insert("merge_in", i as u64);
                 next = 42;
             }
             42 if frames > 3 => {
@@ -492,9 +492,9 @@ impl Gfx {
                 }
                 let Some(k) = self.selected.first().and_then(|s| kind(self, *s)) else { fail("nothing selected".into()) };
                 let Some(fr) = geo_frame(&k, [0.0, 0.0]) else { fail(format!("{} has no handles", k.name())) };
-                self.test_geotools_ids.insert("pick", self.selected[0]);
-                self.test_geotools_ids.insert("fx", (fr.centre[0] * 1e6) as u64);
-                self.test_geotools_ids.insert("fy", (fr.centre[1] * 1e6) as u64);
+                self.test.geotools_ids.insert("pick", self.selected[0]);
+                self.test.geotools_ids.insert("fx", (fr.centre[0] * 1e6) as u64);
+                self.test.geotools_ids.insert("fy", (fr.centre[1] * 1e6) as u64);
                 press(raw, g2s(self, fr.centre), true);
                 next = 47;
             }
@@ -557,7 +557,7 @@ impl Gfx {
                 if self.egraph.edges.iter().any(|e| e.2 == c && Some(e.0) != v) {
                     fail("the circle still feeds past the new Merge".into());
                 }
-                self.test_geotools_ids.insert("rect", rc);
+                self.test.geotools_ids.insert("rect", rc);
                 // The fill swatch: a Style after the rectangle, its panel up.
                 match tool(self, GeoTool::Fill) {
                     Some(p) => press(raw, p, true),
@@ -591,8 +591,8 @@ impl Gfx {
                     NodeKind::GeoNode(G::Transform { translate: [0.0; 2], rotate: 0.0, scale: [1.0; 2], pivot: [0.0; 2], inherit: true }),
                     cp + egui::vec2(0.0, 2.0 * editor::SOCKET_OFFSET + 4.0),
                 );
-                self.test_geotools_ids.insert("t3", t3);
-                self.test_geotools_mark = Some(web_time::Instant::now());
+                self.test.geotools_ids.insert("t3", t3);
+                self.test.geotools_mark = Some(web_time::Instant::now());
                 next = 56;
             }
             56 => {
@@ -602,7 +602,7 @@ impl Gfx {
                     raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers { shift: true, ..Default::default() }));
                     raw.events.push(egui::Event::PointerMoved(r.center() + egui::vec2(40.0, 0.0)));
                 }
-                if self.test_geotools_mark.is_some_and(|m| m.elapsed().as_secs_f32() > 1.0) {
+                if self.test.geotools_mark.is_some_and(|m| m.elapsed().as_secs_f32() > 1.0) {
                     raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::default()));
                     next = 57;
                 }
@@ -623,7 +623,7 @@ impl Gfx {
                     style.grad.to = [0.0, 0.0, 1.0, 1.0];
                 }
                 self.geo_select(st);
-                self.test_geotools_ids.insert("style", st);
+                self.test.geotools_ids.insert("style", st);
                 next = 58;
             }
             58 if step => {
@@ -633,11 +633,11 @@ impl Gfx {
                     if frames > 200 {
                         fail("the gradient's handles were never laid across the shape".into());
                     }
-                    return self.test_geotools = Some((stage, frames, t0));
+                    return self.test.geotools = Some((stage, frames, t0));
                 }
                 press(raw, g2s(self, style.grad.b), true);
-                self.test_geotools_ids.insert("gbx", (style.grad.b[0] * 1e6) as u64);
-                self.test_geotools_ids.insert("gby", (style.grad.b[1] * 1e6) as u64);
+                self.test.geotools_ids.insert("gbx", (style.grad.b[0] * 1e6) as u64);
+                self.test.geotools_ids.insert("gby", (style.grad.b[1] * 1e6) as u64);
                 next = 59;
             }
             59 if frames > 2 => {
@@ -684,8 +684,8 @@ impl Gfx {
                     // Midway along the bar, away from both end stops.
                     let p = egui::pos2(r.left() + r.width() * 0.5, r.top() + 10.0);
                     press(raw, p, true);
-                    self.test_geotools_ids.insert("rampx", (p.x * 10.0) as u64);
-                    self.test_geotools_ids.insert("rampy", (p.y * 10.0) as u64);
+                    self.test.geotools_ids.insert("rampx", (p.x * 10.0) as u64);
+                    self.test.geotools_ids.insert("rampy", (p.y * 10.0) as u64);
                     next = 65;
                 }
                 _ if frames > 400 => fail("the gradient tab shows no ramp editor".into()),
@@ -720,7 +720,7 @@ impl Gfx {
                 if self.egraph.input_of(e, 0) != Some(c) || self.selected != [e] {
                     fail("the Edit is not after the circle, selected".into());
                 }
-                self.test_geotools_ids.insert("edit", e);
+                self.test.geotools_ids.insert("edit", e);
                 // Its points come from the gizmo's own evaluation.
                 let p0 = self
                     .geo_hud_cache
@@ -732,10 +732,10 @@ impl Gfx {
                     if frames > 300 {
                         fail("the Edit's points never came up".into());
                     }
-                    return self.test_geotools = Some((stage, frames, t0));
+                    return self.test.geotools = Some((stage, frames, t0));
                 };
-                self.test_geotools_ids.insert("px", (p0[0] * 1e6) as u64);
-                self.test_geotools_ids.insert("py", (p0[1] * 1e6) as u64);
+                self.test.geotools_ids.insert("px", (p0[0] * 1e6) as u64);
+                self.test.geotools_ids.insert("py", (p0[1] * 1e6) as u64);
                 press(raw, g2s(self, p0), true);
                 next = 69;
             }
@@ -805,13 +805,13 @@ impl Gfx {
                 let Some(parts) = parts else { fail("no Particles in the catalog".into()) };
                 self.egraph.view = None;
                 let p = self.geo_tool_add(parts);
-                self.test_geotools_ids.insert("parts", p);
+                self.test.geotools_ids.insert("parts", p);
                 self.prefs.geo_viz.onion = true;
                 self.seek_to(1020);
-                self.test_geotools_mark = Some(web_time::Instant::now());
+                self.test.geotools_mark = Some(web_time::Instant::now());
                 next = 74;
             }
-            74 if self.test_geotools_mark.is_some_and(|m| m.elapsed().as_secs_f32() > 1.0) => {
+            74 if self.test.geotools_mark.is_some_and(|m| m.elapsed().as_secs_f32() > 1.0) => {
                 let near: Vec<u64> = self.geo_onion_cache.iter().map(|(f, ..)| *f).collect();
                 if !(near.contains(&1018) && near.contains(&1022)) {
                     fail(format!("onion skins were not drawn either side of 1020: {near:?}"));
@@ -843,8 +843,8 @@ impl Gfx {
                 self.egraph.connect(sn, 1, skel);
                 self.egraph.view = Some(sn);
                 self.selected = vec![skel];
-                self.test_geotools_ids.insert("skel", skel);
-                self.test_geotools_ids.insert("skin", sn);
+                self.test.geotools_ids.insert("skel", skel);
+                self.test.geotools_ids.insert("skin", sn);
                 self.playback_dirty = true;
                 next = 75;
             }
@@ -930,6 +930,6 @@ impl Gfx {
             99 if frames > 40 => SHOT_NOW.store(true, std::sync::atomic::Ordering::Relaxed),
             _ => {}
         }
-        self.test_geotools = Some((next, if next == stage { frames } else { 0 }, t0));
+        self.test.geotools = Some((next, if next == stage { frames } else { 0 }, t0));
     }
 }

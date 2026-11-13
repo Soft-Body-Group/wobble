@@ -14,7 +14,7 @@ impl Gfx {
     /// viewer's source) as the mean horizontal gradient, normalised to
     /// full-res pixels so half-res and full-res numbers compare.
     pub(crate) fn drive_test_proxy(&mut self) {
-        let Some(mut pt) = self.test_proxy.take() else { return };
+        let Some(mut pt) = self.test.proxy.take() else { return };
         let fail_now = |m: String| -> ! {
             println!("PROXY TEST FAIL: {m}");
             std::process::exit(1);
@@ -173,6 +173,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_proxy = Some(pt);
+        self.test.proxy = Some(pt);
     }
 }

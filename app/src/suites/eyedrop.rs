@@ -13,7 +13,7 @@ impl Gfx {
     /// click — the pixel readout's number at the same spot. Then E + Esc
     /// arms and stands down without touching the colour.
     pub(crate) fn drive_test_eyedrop(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, bid)) = self.test_eyedrop else { return };
+        let Some((stage, mut frames, bid)) = self.test.eyedrop else { return };
         frames += 1;
         if frames > 900 {
             println!("EYEDROP TEST FAIL: timeout at stage {stage}");
@@ -83,7 +83,7 @@ impl Gfx {
                 self.prop_order = vec![b];
                 self.props_visible = true;
                 self.bottom = BottomTab::Properties;
-                self.test_eyedrop = Some((1, 0, b));
+                self.test.eyedrop = Some((1, 0, b));
                 return;
             }
             // E over the swatch arms the viewer.
@@ -158,6 +158,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_eyedrop = Some((next, if next == stage { frames } else { 0 }, bid));
+        self.test.eyedrop = Some((next, if next == stage { frames } else { 0 }, bid));
     }
 }

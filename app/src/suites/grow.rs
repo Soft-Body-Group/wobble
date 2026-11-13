@@ -9,8 +9,8 @@ impl Gfx {
     /// its own. That last part is the feature — watching a render arrive —
     /// and it is the part a static test would miss entirely.
     pub(crate) fn drive_test_grow(&mut self) {
-        let Some((stage, node, frames)) = self.test_grow else { return };
-        let t0 = *self.test_grow_t0.get_or_insert_with(web_time::Instant::now);
+        let Some((stage, node, frames)) = self.test.grow else { return };
+        let t0 = *self.test.grow_t0.get_or_insert_with(web_time::Instant::now);
         if t0.elapsed().as_secs_f32() > 60.0 {
             println!("GROW TEST FAIL: timeout at stage {stage}");
             std::process::exit(1);
@@ -50,7 +50,7 @@ impl Gfx {
                 );
                 self.next_read_slot += 1;
                 self.load_read(id, &dir.display().to_string());
-                self.test_grow = Some((1, id, 0));
+                self.test.grow = Some((1, id, 0));
             }
             // Ask for eight frames when only four exist.
             1 => {
@@ -74,7 +74,7 @@ impl Gfx {
                 }
                 self.playback_dirty = true;
                 self.playing = true;
-                self.test_grow = Some((2, node, 0));
+                self.test.grow = Some((2, node, 0));
             }
             // This Read's own sequence must BE the range, not the footage.
             // (The app also has the two CLI plates loaded, so the GLOBAL
@@ -82,11 +82,11 @@ impl Gfx {
             2 if frames == 0 => {
                 let Some(seq) = self.grow_seq(&dir) else {
                     // The rig rebuilds asynchronously; keep waiting.
-                    self.test_grow = Some((2, node, 0));
+                    self.test.grow = Some((2, node, 0));
                     return;
                 };
                 if seq.frames.len() != 8 {
-                    self.test_grow = Some((2, node, 0));
+                    self.test.grow = Some((2, node, 0));
                     return;
                 }
                 // The extrapolated path for the frame that does not exist
@@ -106,7 +106,7 @@ impl Gfx {
                     println!("GROW TEST FAIL: the tail frames already exist on disk");
                     std::process::exit(1);
                 }
-                self.test_grow = Some((3, node, self.displayed_total));
+                self.test.grow = Some((3, node, self.displayed_total));
             }
             // Play across the empty tail: it must keep running.
             3 if self.displayed_total >= frames + 40 => {
@@ -116,7 +116,7 @@ impl Gfx {
                     println!("GROW TEST FAIL: could not write the late frame");
                     std::process::exit(1);
                 }
-                self.test_grow = Some((4, node, self.displayed_total));
+                self.test.grow = Some((4, node, self.displayed_total));
             }
             // Give the loop time to come back round to tick 4 and read it.
             4 if self.displayed_total >= frames + 60 => {

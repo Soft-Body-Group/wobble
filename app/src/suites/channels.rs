@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_channels(&mut self) {
-        let Some((stage, mut frames, sid)) = self.test_channels else { return };
+        let Some((stage, mut frames, sid)) = self.test.channels else { return };
         // Per-stage frame count (see the nodepack driver).
         frames += 1;
         if frames > 1500 {
@@ -62,7 +62,7 @@ impl Gfx {
                     *layer = Some("diffuse".into());
                 }
                 self.playback_dirty = true;
-                self.test_channels = Some((3, 0, base.to_bits() as u64));
+                self.test.channels = Some((3, 0, base.to_bits() as u64));
                 return;
             }
             3 if frames > 60 => {
@@ -97,7 +97,7 @@ impl Gfx {
                 );
                 self.egraph.connect(sh, 0, 0);
                 self.egraph.view = Some(sh);
-                self.test_channels = Some((4, 0, sh));
+                self.test.channels = Some((4, 0, sh));
                 return;
             }
             4 if frames > 60 => {
@@ -120,7 +120,7 @@ impl Gfx {
                             ],
                         };
                     }
-                    self.test_channels = Some((5, 0, sid));
+                    self.test.channels = Some((5, 0, sid));
                     return;
                 }
                 if frames > 300 {
@@ -150,6 +150,6 @@ impl Gfx {
             _ => {}
         }
         let frames = if next == stage { frames } else { 0 };
-        self.test_channels = Some((next, frames, sid));
+        self.test.channels = Some((next, frames, sid));
     }
 }

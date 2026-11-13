@@ -6,7 +6,7 @@ impl Gfx {
     /// --test-paint driver: splice a Paint node above the merge, select it,
     /// drag a stroke across the viewer, verify points + a live render.
     pub(crate) fn drive_test_paint(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames, pid)) = self.test_paint else { return };
+        let Some((stage, mut frames, pid)) = self.test.paint else { return };
         frames += 1;
         if frames > 900 {
             println!("PAINT TEST FAIL: timeout at stage {stage}");
@@ -68,7 +68,7 @@ impl Gfx {
                 self.egraph.connect(id, 0, 3);
                 self.egraph.connect(4, 0, id);
                 self.selected = vec![id];
-                self.test_paint = Some((1, frames, id));
+                self.test.paint = Some((1, frames, id));
                 return;
             }
             1 => {
@@ -461,7 +461,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                self.test_paint_bake = Some(bk);
+                self.test.paint_bake = Some(bk);
                 next = 32;
             }
             32 => {
@@ -470,7 +470,7 @@ impl Gfx {
                 if self.auto_bake.is_some() {
                     return;
                 }
-                let bk = self.test_paint_bake.unwrap_or(0);
+                let bk = self.test.paint_bake.unwrap_or(0);
                 if self.graph_bake.is_none() && !self.loaded.contains_key(&bk) {
                     println!(
                         "PAINT TEST FAIL: the bake did not start ({:?})",
@@ -498,6 +498,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_paint = Some((next, frames, pid));
+        self.test.paint = Some((next, frames, pid));
     }
 }

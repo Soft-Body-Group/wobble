@@ -10,9 +10,9 @@ impl Gfx {
     /// whose position advances while the picture never changes looks fine
     /// in a screenshot and is completely broken.
     pub(crate) fn drive_test_scrub(&mut self) {
-        let Some((stage, mut frames, len)) = self.test_scrub else { return };
+        let Some((stage, mut frames, len)) = self.test.scrub else { return };
         frames += 1;
-        let t0 = *self.test_scrub_t0.get_or_insert_with(web_time::Instant::now);
+        let t0 = *self.test.scrub_t0.get_or_insert_with(web_time::Instant::now);
         if t0.elapsed().as_secs_f32() > 20.0 {
             println!("SCRUB TEST FAIL: timeout at stage {stage}");
             std::process::exit(1);
@@ -24,7 +24,7 @@ impl Gfx {
                     std::path::PathBuf::from("data/2k_zip_bg"),
                     self.decoder.clone(),
                 ));
-                self.test_scrub = Some((1, frames, 0));
+                self.test.scrub = Some((1, frames, 0));
             }
             // Select the sequence and read how many frames it offers.
             1 if frames > 60 => {
@@ -42,7 +42,7 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 b.test_play(len);
-                self.test_scrub = Some((2, frames, len));
+                self.test.scrub = Some((2, frames, len));
             }
             // Poll until the transport has moved off frame 0, THEN check
             // the picture moved with it. Sampling one instant instead would
@@ -64,7 +64,7 @@ impl Gfx {
                 // as decodes land. Give them a second of REAL time and then
                 // say which one failed to show up.
                 if t0.elapsed().as_secs_f32() < 1.5 || (at > 0 && seen < 3) {
-                    self.test_scrub = Some((2, frames, len));
+                    self.test.scrub = Some((2, frames, len));
                     return;
                 }
                 if at == 0 {
@@ -96,7 +96,7 @@ impl Gfx {
                 );
                 std::process::exit(0);
             }
-            _ => self.test_scrub = Some((stage, frames, len)),
+            _ => self.test.scrub = Some((stage, frames, len)),
         }
     }
 }

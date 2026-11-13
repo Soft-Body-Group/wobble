@@ -14,7 +14,7 @@ impl Gfx {
     /// plain ` the ops pie, and F1 the most-used-nodes pie spawning its
     /// top slice.
     pub(crate) fn drive_test_region(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_region else { return };
+        let Some((stage, mut frames)) = self.test.region else { return };
         frames += 1;
         if frames > 900 {
             println!("REGION TEST FAIL: timeout at stage {stage}");
@@ -296,7 +296,7 @@ impl Gfx {
                 // F1: the most-used-nodes pie. Fresh prefs = no history,
                 // so the roster is the catalog's front rank; releasing over
                 // slice 0 must SPAWN that node and score one use.
-                self.test_rect =
+                self.test.rect =
                     egui::Rect::from_min_max(
                         egui::pos2(self.egraph.nodes.len() as f32, 0.0),
                         egui::Pos2::ZERO,
@@ -324,7 +324,7 @@ impl Gfx {
                     println!("REGION TEST FAIL: the node pie stayed open after release");
                     std::process::exit(1);
                 }
-                let before = self.test_rect.min.x as usize;
+                let before = self.test.rect.min.x as usize;
                 if self.egraph.nodes.len() != before + 1 {
                     println!(
                         "REGION TEST FAIL: the node pie's slice spawned {} nodes, want 1",
@@ -350,6 +350,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_region = Some((next, frames));
+        self.test.region = Some((next, frames));
     }
 }

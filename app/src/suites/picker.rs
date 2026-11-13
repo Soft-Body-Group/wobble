@@ -11,7 +11,7 @@ impl Gfx {
     /// unit tests cannot see — the key reaching the app, the pointer mapping
     /// to comp pixels, and the readback resolving.
     pub(crate) fn drive_test_picker(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_picker else { return };
+        let Some((stage, mut frames)) = self.test.picker else { return };
         frames += 1;
         if frames > 900 {
             println!("PICKER TEST FAIL: timeout at stage {stage}");
@@ -136,6 +136,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_picker = Some((next, frames));
+        self.test.picker = Some((next, frames));
     }
 }

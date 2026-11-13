@@ -14,7 +14,7 @@ impl Gfx {
     /// `WOBBLE_TEST_FOCUS=1` (an accessory window behind others produces
     /// no frames). `WOBBLE_RECORD_DIR` picks where the clip lands.
     pub(crate) fn drive_test_record(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, at)) = self.test_record else { return };
+        let Some((stage, at)) = self.test.record else { return };
         self.egui_ctx.request_repaint();
         let fail = |m: String| -> ! {
             println!("RECORD TEST FAIL: {m}");
@@ -63,7 +63,7 @@ impl Gfx {
             3 => {
                 let Some(n) = self.recorder.review_frames() else {
                     if self.recorder.recording() {
-                        self.test_record = Some((stage, at));
+                        self.test.record = Some((stage, at));
                         return;
                     }
                     fail(format!("the take did not reach review: {:?}", self.recorder.error));
@@ -130,6 +130,6 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_record = Some((next, at));
+        self.test.record = Some((next, at));
     }
 }

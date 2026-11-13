@@ -1193,7 +1193,7 @@ impl Gfx {
     /// click marks the loaded matte STALE without re-running anything.
     /// Waits are wall-clock.
     pub(crate) fn drive_test_sammie(&mut self, raw: &mut egui::RawInput) {
-        let Some(mut t) = self.test_sammie.take() else { return };
+        let Some(mut t) = self.test.sammie.take() else { return };
         t.frames += 1;
         let fail = |m: String| -> ! {
             println!("SAMMIE TEST FAIL: {m}");
@@ -1203,7 +1203,7 @@ impl Gfx {
             fail(format!("timeout at stage {}", t.stage));
         }
         let at = |s: &Self, q: [f32; 2]| {
-            let r = s.test_rect;
+            let r = s.test.rect;
             egui::pos2(r.min.x + q[0] * r.width(), r.min.y + q[1] * r.height())
         };
         let press = |raw: &mut egui::RawInput, pos: egui::Pos2, down: bool, mods: egui::Modifiers| {
@@ -1240,13 +1240,13 @@ impl Gfx {
         // release, or a key and the click it modifies, folded into one pass
         // read as a different gesture.
         if ((2..=7).contains(&t.stage) || t.stage == 71 || t.stage == 72) && t.since.elapsed().as_millis() < 120 {
-            self.test_sammie = Some(t);
+            self.test.sammie = Some(t);
             return;
         }
         match t.stage {
             0 if t.frames >= 6 && self.playback.is_some() && self.displayed_total >= 2 => {
                 if !self.layout_settled() {
-                    self.test_sammie = Some(t);
+                    self.test.sammie = Some(t);
                     return;
                 }
                 let exe = std::env::current_exe().unwrap_or_else(|e| fail(format!("current_exe: {e}")));
@@ -1265,7 +1265,7 @@ impl Gfx {
                 self.egraph.view = Some(k);
                 self.selected = vec![k];
                 self.playing = false;
-                self.test_rect = self.image_rect;
+                self.test.rect = self.image_rect;
                 t.node = k;
                 next(&mut t, 1);
             }
@@ -1299,7 +1299,7 @@ impl Gfx {
                     if t.since.elapsed().as_millis() > 1000 {
                         fail(format!("two S-clicks made {} points", p.len()));
                     }
-                    self.test_sammie = Some(t);
+                    self.test.sammie = Some(t);
                     return;
                 }
                 let tick = self.timeline_pos as i64;
@@ -1325,7 +1325,7 @@ impl Gfx {
                     if t.since.elapsed().as_millis() > 1000 {
                         fail(format!("a D-click on the exclude point left {} points", p.len()));
                     }
-                    self.test_sammie = Some(t);
+                    self.test.sammie = Some(t);
                     return;
                 }
                 if !p[0].positive {
@@ -1386,7 +1386,7 @@ impl Gfx {
                     if t.since.elapsed().as_millis() > 1000 {
                         fail("the second S-click made no point".into());
                     }
-                    self.test_sammie = Some(t);
+                    self.test.sammie = Some(t);
                     return;
                 }
                 // Stale until the auto preview re-runs by itself.
@@ -1469,6 +1469,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_sammie = Some(t);
+        self.test.sammie = Some(t);
     }
 }

@@ -11,7 +11,7 @@ impl Gfx {
     /// to give the comp a timeline — a running clock, a moving playhead and
     /// animation that follows it.
     pub(crate) fn drive_test_shot(&mut self) {
-        let Some((stage, mut frames, mark)) = self.test_shot else { return };
+        let Some((stage, mut frames, mark)) = self.test.shot else { return };
         frames += 1;
         if frames > 1200 {
             println!(
@@ -42,7 +42,7 @@ impl Gfx {
                 }
                 self.comp_range = Some((0, 23)); // the shot range wins
                 self.playing = true;
-                self.test_shot = Some((1, 0, self.timeline_pos));
+                self.test.shot = Some((1, 0, self.timeline_pos));
                 return;
             }
             1 if frames >= 40 => {
@@ -89,6 +89,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_shot = Some((next, frames, mark));
+        self.test.shot = Some((next, frames, mark));
     }
 }

@@ -490,7 +490,7 @@ impl Gfx {
     /// Waits are wall-clock.
     pub(crate) fn drive_test_flow(&mut self) {
         use engine::planar::{h_apply, h_inv, h_mul, synth};
-        let Some(mut t) = self.test_flow.take() else { return };
+        let Some(mut t) = self.test.flow.take() else { return };
         let fail = |m: String| -> ! {
             println!("FLOW TEST FAIL: {m}");
             std::process::exit(1);
@@ -626,7 +626,7 @@ impl Gfx {
                         }
                         self.flow_action(t.node, Action::Dismiss);
                         next(&mut t, 1);
-                        self.test_flow = Some(t);
+                        self.test.flow = Some(t);
                         return;
                     }
                     // A VectorBlur over the plate, along those vectors.
@@ -727,7 +727,7 @@ impl Gfx {
                     self.flow_action(t.retime, Action::Dismiss);
                     self.flow_action(t.retime, Action::Analyse);
                     next(&mut t, 12);
-                    self.test_flow = Some(t);
+                    self.test.flow = Some(t);
                     return;
                 }
             }
@@ -766,7 +766,7 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_flow = Some(t);
+        self.test.flow = Some(t);
     }
 
     fn flow_state_words(&self) -> String {

@@ -630,7 +630,7 @@ impl Gfx {
     /// solve's, a lens change marks the solve STALE and a re-solve finds
     /// the tracks on disk (no render). Waits are wall-clock.
     pub(crate) fn drive_test_camtrack(&mut self) {
-        let Some(mut t) = self.test_camtrack.take() else { return };
+        let Some(mut t) = self.test.camtrack.take() else { return };
         let fail = |m: String| -> ! {
             println!("CAMTRACK TEST FAIL: {m}");
             std::process::exit(1);
@@ -896,6 +896,6 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_camtrack = Some(t);
+        self.test.camtrack = Some(t);
     }
 }

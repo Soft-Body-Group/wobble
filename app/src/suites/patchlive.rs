@@ -10,7 +10,7 @@ impl Gfx {
     /// the authored scale the way a widget drag would, and assert the LIVE
     /// engine graph (what write_params consumed) carries the driven gain.
     pub(crate) fn drive_test_patchlive(&mut self) {
-        let Some((stage, mut frames)) = self.test_patchlive else {
+        let Some((stage, mut frames)) = self.test.patchlive else {
             return;
         };
         frames += 1;
@@ -35,7 +35,7 @@ impl Gfx {
                     editor::PSrc::Chan(2, anim::Channel::ScaleX),
                     editor::PDst::Chan(3, anim::Channel::GainR),
                 );
-                self.test_patchlive = Some((1, frames));
+                self.test.patchlive = Some((1, frames));
                 return;
             }
             1 => {
@@ -46,7 +46,7 @@ impl Gfx {
                             t.scale = [5.0, 1.0];
                         }
                     }
-                    self.test_patchlive = Some((2, frames));
+                    self.test.patchlive = Some((2, frames));
                     return;
                 }
             }
@@ -66,6 +66,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_patchlive = Some((stage, frames));
+        self.test.patchlive = Some((stage, frames));
     }
 }

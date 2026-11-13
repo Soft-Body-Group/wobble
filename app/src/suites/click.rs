@@ -17,18 +17,18 @@ impl Gfx {
                 .map(|(id, r)| (*id, r.center()));
             match found {
                 Some(t) if stage >= 3 => {
-                    self.test_target = Some(t);
-                    self.test_click = Some(1000);
+                    self.test.target = Some(t);
+                    self.test.click = Some(1000);
                 }
                 _ if stage > 240 => {
                     println!("CLICK TEST FAIL: no node rects after {stage} frames");
                     std::process::exit(1);
                 }
-                _ => self.test_click = Some(stage + 1),
+                _ => self.test.click = Some(stage + 1),
             }
             return;
         }
-        let Some((tid, pos)) = self.test_target else {
+        let Some((tid, pos)) = self.test.target else {
             println!("CLICK TEST FAIL: target vanished");
             std::process::exit(1);
         };
@@ -41,9 +41,9 @@ impl Gfx {
                     pressed: stage == 1000,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
-            1002 => self.test_click = Some(1003), // settle frame
+            1002 => self.test.click = Some(1003), // settle frame
             1003 => {
                 let pass = self.selected.contains(&tid);
                 println!(
@@ -63,8 +63,8 @@ impl Gfx {
                     .map(|(_, r)| *r)
                     .reduce(|a, b| a.union(b))
                     .unwrap();
-                self.test_target = Some((tid, egui::pos2(bb.min.x - 40.0, bb.center().y)));
-                self.test_click = Some(2000);
+                self.test.target = Some((tid, egui::pos2(bb.min.x - 40.0, bb.center().y)));
+                self.test.click = Some(2000);
             }
             2000 | 2001 => {
                 raw.events.push(egui::Event::PointerMoved(pos));
@@ -74,9 +74,9 @@ impl Gfx {
                     pressed: stage == 2000,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
-            2002 => self.test_click = Some(2003),
+            2002 => self.test.click = Some(2003),
             2003 => {
                 let pass = self.selected.is_empty();
                 println!(
@@ -105,11 +105,11 @@ impl Gfx {
                     println!("INK TEST FAIL: no transform node");
                     std::process::exit(1);
                 };
-                self.test_target = Some(t);
-                self.test_click = Some(3000);
+                self.test.target = Some(t);
+                self.test.click = Some(3000);
             }
             3000 | 3001 => {
-                let (_, tpos) = self.test_target.unwrap();
+                let (_, tpos) = self.test.target.unwrap();
                 raw.events.push(egui::Event::PointerMoved(tpos));
                 raw.events.push(egui::Event::PointerButton {
                     pos: tpos,
@@ -117,11 +117,11 @@ impl Gfx {
                     pressed: stage == 3000,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
-            n @ 3002..=3011 => self.test_click = Some(n + 1),
+            n @ 3002..=3011 => self.test.click = Some(n + 1),
             3012 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let pass = self.selected.contains(&tid);
                 println!(
                     "INK TEST {}: transform gizmo + per-pixel ink rendered 10 frames (selected={:?})",
@@ -131,7 +131,7 @@ impl Gfx {
                 if !pass {
                     std::process::exit(1);
                 }
-                self.test_click = Some(4000);
+                self.test.click = Some(4000);
             }
             // Phase 4: drag the pivot handle in the viewer; the transform's
             // translate must change.
@@ -142,10 +142,10 @@ impl Gfx {
                 // The NODE's centre, where its pivot is drawn — the proxy
                 // phase repeats this exact gesture and compares distances,
                 // so both must aim the same way.
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let (nw, nh) = self.node_res_f32(tid).unwrap_or((2048.0, 1080.0));
                 let c = self.node_point_on_screen(tid, (0.5 * nw, 0.5 * nh));
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 raw.events.push(egui::Event::PointerMoved(c));
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
@@ -153,26 +153,26 @@ impl Gfx {
                     pressed: true,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(4001);
+                self.test.click = Some(4001);
             }
             4001 | 4002 => {
-                let c = self.test_pos.unwrap()
+                let c = self.test.pos.unwrap()
                     + egui::vec2(if stage == 4001 { 15.0 } else { 30.0 }, 0.0);
                 raw.events.push(egui::Event::PointerMoved(c));
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
             4003 => {
-                let c = self.test_pos.unwrap() + egui::vec2(30.0, 0.0);
+                let c = self.test.pos.unwrap() + egui::vec2(30.0, 0.0);
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(4004);
+                self.test.click = Some(4004);
             }
             4004 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let tx = match self.egraph.node(tid).map(|n| &n.kind) {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
@@ -182,7 +182,7 @@ impl Gfx {
                     std::process::exit(1);
                 }
                 println!("GIZMO DRAG TEST PASS: pivot drag moved translate.x to {tx:.1}");
-                self.test_proxy_drag.0 = tx * self.image_rect.width();
+                self.test.proxy_drag.0 = tx * self.image_rect.width();
                 // hud off phase: the same drag on the same spot must now do
                 // NOTHING — including for X-pinned nodes. Hidden through
                 // the KEY (shift+W), not the pref, so the hotkey is driven.
@@ -197,8 +197,8 @@ impl Gfx {
                     });
                 }
                 self.gizmo_pinned = vec![tid];
-                self.test_pos = None;
-                self.test_click = Some(4005);
+                self.test.pos = None;
+                self.test.click = Some(4005);
             }
             // Re-run the exact pivot gesture with the HUD hidden.
             4005 => {
@@ -209,7 +209,7 @@ impl Gfx {
                     println!("HUD OFF TEST FAIL: shift+W did not hide the HUD (hud_hide {:?})", self.prefs.hud_hide);
                     std::process::exit(1);
                 }
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let tx0 = match self.egraph.node(tid).map(|n| &n.kind) {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
@@ -222,7 +222,7 @@ impl Gfx {
                         r.min.y + 0.5 * r.height(),
                     )
                 };
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 raw.events.push(egui::Event::PointerMoved(c));
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
@@ -230,26 +230,26 @@ impl Gfx {
                     pressed: true,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(4006);
+                self.test.click = Some(4006);
             }
             4006 | 4007 => {
-                let c = self.test_pos.unwrap()
-                    + egui::vec2(if self.test_click == Some(4006) { 15.0 } else { 30.0 }, 0.0);
+                let c = self.test.pos.unwrap()
+                    + egui::vec2(if self.test.click == Some(4006) { 15.0 } else { 30.0 }, 0.0);
                 raw.events.push(egui::Event::PointerMoved(c));
-                self.test_click = Some(if self.test_click == Some(4006) { 4007 } else { 4008 });
+                self.test.click = Some(if self.test.click == Some(4006) { 4007 } else { 4008 });
             }
             4008 => {
-                let c = self.test_pos.unwrap() + egui::vec2(30.0, 0.0);
+                let c = self.test.pos.unwrap() + egui::vec2(30.0, 0.0);
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(4009);
+                self.test.click = Some(4009);
             }
             4009 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let tx = match self.egraph.node(tid).map(|n| &n.kind) {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
@@ -270,8 +270,8 @@ impl Gfx {
                 self.selected.clear();
                 self.prop_order.clear();
                 self.props_visible = false;
-                self.test_pos = None;
-                self.test_click = Some(4010);
+                self.test.pos = None;
+                self.test.click = Some(4010);
             }
             // Ctrl+cmd-CLICK (press and release without moving) on the pivot:
             // select, HUD AND properties.
@@ -279,7 +279,7 @@ impl Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let (cx, cy, tx, ty) = match self.egraph.node(tid).map(|n| &n.kind) {
                     Some(NodeKind::Transform(t)) => {
                         (t.center[0], t.center[1], t.translate[0], t.translate[1])
@@ -293,7 +293,7 @@ impl Gfx {
                 // this stage has been failing.
                 let (nw, nh) = self.node_res_f32(tid).unwrap_or((2048.0, 1080.0));
                 let c = self.node_point_on_screen(tid, (cx * nw + tx, cy * nh + ty));
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 let ctrl = egui::Modifiers { ctrl: true, mac_cmd: true, command: true, ..Default::default() };
                 raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                 raw.events.push(egui::Event::PointerMoved(c));
@@ -303,10 +303,10 @@ impl Gfx {
                     pressed: true,
                     modifiers: ctrl,
                 });
-                self.test_click = Some(4011);
+                self.test.click = Some(4011);
             }
             4011 => {
-                let c = self.test_pos.unwrap();
+                let c = self.test.pos.unwrap();
                 let ctrl = egui::Modifiers { ctrl: true, mac_cmd: true, command: true, ..Default::default() };
                 raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                 raw.events.push(egui::Event::PointerButton {
@@ -315,7 +315,7 @@ impl Gfx {
                     pressed: false,
                     modifiers: ctrl,
                 });
-                self.test_click = Some(4012);
+                self.test.click = Some(4012);
             }
             // D-DRAG the pivot: the centre moves under the pointer and the
             // picture does not move at all.
@@ -323,7 +323,7 @@ impl Gfx {
                 if !self.layout_settled() {
                     return;
                 }
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let Some(NodeKind::Transform(t)) = self.egraph.node(tid).map(|n| &n.kind)
                 else {
                     println!("PIVOT DRAG TEST FAIL: transform node vanished");
@@ -334,7 +334,7 @@ impl Gfx {
                     tid,
                     (t.center[0] * nw + t.translate[0], t.center[1] * nh + t.translate[1]),
                 );
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 raw.events.push(egui::Event::Key {
                     key: egui::Key::D,
                     physical_key: None,
@@ -349,16 +349,16 @@ impl Gfx {
                     pressed: true,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(5001);
+                self.test.click = Some(5001);
             }
             5001 | 5002 => {
-                let c = self.test_pos.unwrap()
+                let c = self.test.pos.unwrap()
                     + egui::vec2(if stage == 5001 { 15.0 } else { 30.0 }, 0.0);
                 raw.events.push(egui::Event::PointerMoved(c));
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
             5003 => {
-                let c = self.test_pos.unwrap() + egui::vec2(30.0, 0.0);
+                let c = self.test.pos.unwrap() + egui::vec2(30.0, 0.0);
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
                     button: egui::PointerButton::Primary,
@@ -372,10 +372,10 @@ impl Gfx {
                     repeat: false,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(5004);
+                self.test.click = Some(5004);
             }
             5004 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let Some(NodeKind::Transform(t)) = self.egraph.node(tid).map(|n| &n.kind)
                 else {
                     println!("PIVOT DRAG TEST FAIL: transform node vanished");
@@ -385,7 +385,7 @@ impl Gfx {
                 let aff = engine::codegen::forward_affine(t, [w, h]);
                 // The picture: every affine term within half a pixel.
                 let shift = (0..6)
-                    .map(|k| (aff[k] - self.test_pivot_aff[k]).abs())
+                    .map(|k| (aff[k] - self.test.pivot_aff[k]).abs())
                     .fold(0.0f32, f32::max);
                 // The pivot: it was pressed at the old centre (0.5, 0.5) and
                 // dragged along +x, so it must now sit to the right of where
@@ -397,7 +397,7 @@ impl Gfx {
                 );
                 // The old pivot in OUTPUT space is where the source centre
                 // landed: the stored affine applied to (0.5, 0.5).
-                let was = crate::apply_aff(&self.test_pivot_aff, egui::vec2(0.5 * w, 0.5 * h));
+                let was = crate::apply_aff(&self.test.pivot_aff, egui::vec2(0.5 * w, 0.5 * h));
                 let travel = pivot - was;
                 let centred = (t.center[0] - 0.5).abs() > 0.002 || (t.center[1] - 0.5).abs() > 0.002;
                 let pass = shift < 0.5 && travel.x > 5.0 && travel.y.abs() < 1.0 && centred;
@@ -420,16 +420,16 @@ impl Gfx {
                 // Reset now, not at the press: egui hit-tests against LAST
                 // frame's widgets, so the handle must already be drawn where
                 // the press will land.
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 if let Some(NodeKind::Transform(t)) =
                     self.egraph.node_mut(tid).map(|n| &mut n.kind)
                 {
                     *t = engine::graph::TransformParams::default();
                 }
                 self.selected = vec![tid];
-                self.test_click = Some(5097);
+                self.test.click = Some(5097);
             }
-            5097..=5099 => self.test_click = Some(stage + 1),
+            5097..=5099 => self.test.click = Some(stage + 1),
             // Distort phase: ctrl-drag the bottom-right CORNER handle. That
             // corner follows the pointer; the other three stay where they
             // were — a corner pin on the Transform, not a scale.
@@ -440,10 +440,10 @@ impl Gfx {
                 // Fresh from the reset the frame's corner is the NODE's
                 // bottom-right — which is not the image's when the viewed
                 // output is bigger than this node (the 4K branch here).
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let (nw, nh) = self.node_res_f32(tid).unwrap_or((2048.0, 1080.0));
                 let c = self.node_point_on_screen(tid, (nw, nh));
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
                 raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
                 raw.events.push(egui::Event::PointerMoved(c));
@@ -453,29 +453,29 @@ impl Gfx {
                     pressed: true,
                     modifiers: ctrl,
                 });
-                self.test_click = Some(5101);
+                self.test.click = Some(5101);
             }
             5101 | 5102 => {
                 raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers { ctrl: true, ..Default::default() }));
-                let c = self.test_pos.unwrap()
+                let c = self.test.pos.unwrap()
                     - if stage == 5101 { egui::vec2(20.0, 10.0) } else { egui::vec2(60.0, 40.0) };
                 raw.events.push(egui::Event::PointerMoved(c));
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
             5103 => {
                 let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
                 raw.events.insert(0, egui::Event::ModifiersChanged(ctrl));
-                let c = self.test_pos.unwrap() - egui::vec2(60.0, 40.0);
+                let c = self.test.pos.unwrap() - egui::vec2(60.0, 40.0);
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     modifiers: ctrl,
                 });
-                self.test_click = Some(5104);
+                self.test.click = Some(5104);
             }
             5104 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let Some(NodeKind::Transform(t)) = self.egraph.node(tid).map(|n| n.kind.clone())
                 else {
                     println!("DISTORT TEST FAIL: transform node vanished");
@@ -517,14 +517,14 @@ impl Gfx {
                 if !pass {
                     std::process::exit(1);
                 }
-                self.test_click = Some(6000);
+                self.test.click = Some(6000);
             }
             // Proxy phase: the SAME pivot drag with proxy on. Params are
             // full-res pixels and the proxy canvas is half size, so a
             // manipulator working in canvas pixels moved the image half as
             // far as the pointer — invisible to every other assertion here.
             6000 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 if let Some(NodeKind::Transform(t)) =
                     self.egraph.node_mut(tid).map(|n| &mut n.kind)
                 {
@@ -532,15 +532,15 @@ impl Gfx {
                     // pivot phase left both behind).
                     *t = engine::graph::TransformParams::default();
                 }
-                self.test_proxy_drag.1 = self.comp.output_size().map(|s| s.0).unwrap_or(0);
-                self.test_proxy_drag.2 = Some(web_time::Instant::now());
+                self.test.proxy_drag.1 = self.comp.output_size().map(|s| s.0).unwrap_or(0);
+                self.test.proxy_drag.2 = Some(web_time::Instant::now());
                 self.prefs.hud_hide = Some(false);
                 self.selected = vec![tid];
                 // Exactly what the toolbar chip does.
                 self.proxy = 0.5;
                 self.playback_dirty = true;
                 self.last_engine_graph = None;
-                self.test_click = Some(6001);
+                self.test.click = Some(6001);
             }
             6001 => {
                 // Wait for the half-size canvas to land, then settle. On the
@@ -548,12 +548,12 @@ impl Gfx {
                 // is not a duration (CLAUDE.md).
                 let w = self.comp.output_size().map(|s| s.0).unwrap_or(0);
                 let settled = self.layout_settled();
-                if w == 0 || w * 5 > self.test_proxy_drag.1 * 3 || !settled {
-                    if self.test_proxy_drag.2.is_some_and(|t| t.elapsed().as_secs() > 30) {
+                if w == 0 || w * 5 > self.test.proxy_drag.1 * 3 || !settled {
+                    if self.test.proxy_drag.2.is_some_and(|t| t.elapsed().as_secs() > 30) {
                         println!(
                             "PROXY GIZMO TEST FAIL: timeout waiting for the proxy canvas \
                              (output width {w}, full {}, layout settled {settled})",
-                            self.test_proxy_drag.1
+                            self.test.proxy_drag.1
                         );
                         std::process::exit(1);
                     }
@@ -562,7 +562,7 @@ impl Gfx {
                 // The NODE's centre (its pivot), not the image's.
                 let (nw, nh) = self.node_res_f32(tid).unwrap_or((2048.0, 1080.0));
                 let c = self.node_point_on_screen(tid, (0.5 * nw, 0.5 * nh));
-                self.test_pos = Some(c);
+                self.test.pos = Some(c);
                 raw.events.push(egui::Event::PointerMoved(c));
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
@@ -570,31 +570,31 @@ impl Gfx {
                     pressed: true,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(6002);
+                self.test.click = Some(6002);
             }
             6002 | 6003 => {
-                let c = self.test_pos.unwrap()
+                let c = self.test.pos.unwrap()
                     + egui::vec2(if stage == 6002 { 15.0 } else { 30.0 }, 0.0);
                 raw.events.push(egui::Event::PointerMoved(c));
-                self.test_click = Some(stage + 1);
+                self.test.click = Some(stage + 1);
             }
             6004 => {
-                let c = self.test_pos.unwrap() + egui::vec2(30.0, 0.0);
+                let c = self.test.pos.unwrap() + egui::vec2(30.0, 0.0);
                 raw.events.push(egui::Event::PointerButton {
                     pos: c,
                     button: egui::PointerButton::Primary,
                     pressed: false,
                     modifiers: Default::default(),
                 });
-                self.test_click = Some(6005);
+                self.test.click = Some(6005);
             }
             6005 => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 let tx = match self.egraph.node(tid).map(|n| &n.kind) {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
                 };
-                let ratio = tx * self.image_rect.width() / self.test_proxy_drag.0.max(1e-3);
+                let ratio = tx * self.image_rect.width() / self.test.proxy_drag.0.max(1e-3);
                 let pass = (ratio - 1.0).abs() < 0.05;
                 println!(
                     "PROXY GIZMO TEST {}: the same pivot drag moved {:.2}x as far under proxy \
@@ -605,7 +605,7 @@ impl Gfx {
                 std::process::exit(if pass { 0 } else { 1 });
             }
             _ => {
-                let (tid, _) = self.test_target.unwrap();
+                let (tid, _) = self.test.target.unwrap();
                 if self.selected != vec![tid] {
                     println!(
                         "GIZMO FOCUS TEST FAIL: ctrl+cmd-click left the selection {:?}, wanted [{tid}] \
@@ -614,7 +614,7 @@ impl Gfx {
                         self.eval_tick(),
                         self.shown_tick,
                         self.playing,
-                        self.test_pos,
+                        self.test.pos,
                     );
                     std::process::exit(1);
                 }
@@ -638,10 +638,10 @@ impl Gfx {
                 {
                     t.rotate = 30.0;
                     t.scale = [1.5, 0.8];
-                    self.test_pivot_aff = engine::codegen::forward_affine(t, [sz.0, sz.1]);
+                    self.test.pivot_aff = engine::codegen::forward_affine(t, [sz.0, sz.1]);
                 }
-                self.test_pos = None;
-                self.test_click = Some(5000);
+                self.test.pos = None;
+                self.test.click = Some(5000);
             }
 
         }

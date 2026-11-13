@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_write(&mut self) {
-        let Some((stage, mut frames, wid)) = self.test_write else { return };
+        let Some((stage, mut frames, wid)) = self.test.write else { return };
         frames += 1;
         if frames > 2500 {
             println!("WRITE TEST FAIL: timeout at stage {stage}");
@@ -42,7 +42,7 @@ impl Gfx {
                 // so the passthrough is exercised too.
                 self.egraph.connect(w, 0, 3);
                 self.egraph.view = Some(w);
-                self.test_write = Some((1, 0, w));
+                self.test.write = Some((1, 0, w));
                 return;
             }
             1 if frames > 30 => {
@@ -183,7 +183,7 @@ impl Gfx {
                     self.egraph.connect(w, 0, noise);
                     self.egraph.view = Some(w);
                     self.playback_dirty = true;
-                    self.test_write = Some((3, 0, w));
+                    self.test.write = Some((3, 0, w));
                     return;
                 }
                 println!(
@@ -231,6 +231,6 @@ impl Gfx {
             _ => {}
         }
         let frames = if next == stage { frames } else { 0 };
-        self.test_write = Some((next, frames, wid));
+        self.test.write = Some((next, frames, wid));
     }
 }

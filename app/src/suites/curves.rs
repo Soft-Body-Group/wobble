@@ -4,7 +4,7 @@ use crate::*;
 
 impl Gfx {
     pub(crate) fn drive_test_curves(&mut self, raw: &mut egui::RawInput) {
-        let Some((stage, mut frames)) = self.test_curves else { return };
+        let Some((stage, mut frames)) = self.test.curves else { return };
         frames += 1;
         if frames > 900 {
             println!("CURVES TEST FAIL: timeout at stage {stage}");
@@ -121,24 +121,24 @@ impl Gfx {
                     std::process::exit(1);
                 };
                 press(raw, rp, true);
-                self.test_scale_from = Some(rp);
-                self.test_curves = Some((8, 0));
+                self.test.scale_from = Some(rp);
+                self.test.curves = Some((8, 0));
                 return;
             }
             8 => {
                 // Two moves: egui needs a little travel before a press
                 // becomes a drag. Pull the edge 120px to the right.
-                let from = self.test_scale_from.unwrap();
+                let from = self.test.scale_from.unwrap();
                 raw.events.push(egui::Event::PointerMoved(from + egui::vec2(180.0, 0.0)));
                 next = 9;
             }
             9 => {
-                let from = self.test_scale_from.unwrap();
+                let from = self.test.scale_from.unwrap();
                 raw.events.push(egui::Event::PointerMoved(from + egui::vec2(380.0, 0.0)));
                 next = 10;
             }
             10 => {
-                let from = self.test_scale_from.unwrap();
+                let from = self.test.scale_from.unwrap();
                 press(raw, from + egui::vec2(380.0, 0.0), false);
                 next = 11;
             }
@@ -152,7 +152,7 @@ impl Gfx {
                 // Anchored on the left edge, frame 0 holds and 16 stretches
                 // by exactly the ratio the drag describes — derived from the
                 // view's own mapping rather than guessed.
-                let from = self.test_scale_from.unwrap();
+                let from = self.test.scale_from.unwrap();
                 let f_was = self.curves.frame_at_x(from.x);
                 let f_now = self.curves.frame_at_x(from.x + 380.0);
                 let want = (16.0 * (f_now / f_was.max(1e-3))).round() as u64;
@@ -174,6 +174,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_curves = Some((next, frames));
+        self.test.curves = Some((next, frames));
     }
 }
