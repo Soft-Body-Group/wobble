@@ -12,6 +12,7 @@ mod assets;
 mod collect;
 mod stress;
 mod suites;
+mod viewer;
 mod animnoise;
 mod bg;
 mod filedialog;
