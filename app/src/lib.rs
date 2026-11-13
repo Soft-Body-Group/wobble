@@ -30160,50 +30160,24 @@ impl Gfx {
                             });
                     }
                     NodeKind::GraphBake { mask, matte_half, .. } => {
-                        if *mask
-                            && ui
-                                .checkbox(matte_half, "16-bit matte")
-                                .on_hover_text(
-                                    "play the matte back as half float, not 8-bit: for a soft \
-                                     gradient over a large area that would band (no re-bake)",
-                                )
-                                .changed()
-                        {
-                            self.playback_dirty = true;
-                        }
-                        let clicks = bake_rows(ui, &BakeRows {
-                            running: self
-                                .graph_bake
-                                .as_ref()
-                                .filter(|b| b.node == key)
-                                .map(|b| (b.next, b.len)),
-                            playing: self.loaded.get(&key).map(|l| {
-                                (l.seq.proxy, l.seq.frames.len(), l.seq.info.width, l.seq.info.height)
-                            }),
-                            current: gb_current,
-                            on_disk: gb_target.is_some(),
-                            half_waiting: self.proxy >= 1.0
-                                && gb_proxy_dir.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-                            proxy_on: self.proxy < 1.0,
-                            can_bake: gb_key.is_some(),
-                        });
-                        graph_bake_click |= clicks.bake;
-                        graph_bake_clear |= clicks.clear;
-                        graph_bake_cancel |= clicks.cancel;
-                        if let Some(e) = self.load_errors.get(&key) {
-                            ui.colored_label(theme::error(), e);
-                        }
-                        if let Some(d) = &gb_dir {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(d.to_string_lossy()).weak().small(),
-                                )
-                                .truncate(),
-                            );
-                        }
-                        ui.weak(
-                            "caches this point of the graph to NVMe (EXR half,                              full alpha); an explicit bake, keyed on the whole                              upstream state",
-                        );
+                        nodes::graphbake::panel(ui, nodes::graphbake::Cx {
+                                mask,
+                                matte_half,
+                                key,
+                                gb_current,
+                                gb_key,
+                                gb_dir: &gb_dir,
+                                gb_proxy_dir: &gb_proxy_dir,
+                                gb_target: &gb_target,
+                                playback_dirty: &mut self.playback_dirty,
+                                proxy: self.proxy,
+                                loaded: &self.loaded,
+                                load_errors: &self.load_errors,
+                                graph_bake: &self.graph_bake,
+                                graph_bake_cancel: &mut graph_bake_cancel,
+                                graph_bake_clear: &mut graph_bake_clear,
+                                graph_bake_click: &mut graph_bake_click,
+                            });
                     }
                     NodeKind::MatteIn => {
                         ui.weak(
