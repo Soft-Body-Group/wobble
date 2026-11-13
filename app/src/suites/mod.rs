@@ -3,3 +3,4 @@
 mod curveedit;
 mod shot;
 mod slice;
+mod subwob;
