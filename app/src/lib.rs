@@ -34346,30 +34346,7 @@ impl Gfx {
                         ui.weak("crossfades input 1 ➡ input 2");
                     }
                     NodeKind::LumaKey(k) => {
-                        // Locked bands: one partition of the luma axis, every
-                        // boundary shared with the band next to it. There is
-                        // no second model — a key loaded from an older setup
-                        // has already been migrated (`adopt_ranges`), and one
-                        // that somehow has not is migrated here rather than
-                        // shown a different editor.
-                        if k.ranges.is_none() {
-                            k.adopt_ranges(engine::graph::LUMA_SPAN);
-                        }
-                        let bid = ui.id().with(("lk-band", node));
-                        let mut sel =
-                            ui.data_mut(|d| d.get_temp::<usize>(bid).unwrap_or(0));
-                        let out = bandui::luma_panel(
-                            ui,
-                            k,
-                            node,
-                            &mut sel,
-                            zoom,
-                            &bandui::BandOpts::KEYER,
-                        );
-                        ui.data_mut(|d| d.insert_temp(bid, sel));
-                        if let Some(b) = out.view_band {
-                            view_band_req = Some((node, b));
-                        }
+                        nodes::lumakey::panel(ui, k, node, zoom, &mut view_band_req);
                     }
                     NodeKind::Spline(full) => {
                         use engine::graph::ROTO_OP;
