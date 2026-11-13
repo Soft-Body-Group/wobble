@@ -43,3 +43,4 @@ mod thumbs;
 mod viewlock;
 mod viewswitch;
 mod zones;
+mod zoom;
