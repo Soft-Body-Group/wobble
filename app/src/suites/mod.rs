@@ -3,6 +3,7 @@
 mod bake;
 mod compose;
 mod curveedit;
+mod curves;
 mod dual;
 mod eyedrop;
 mod frames;
