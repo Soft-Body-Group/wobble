@@ -1,0 +1,92 @@
+#!/bin/zsh
+# wobble: launch wobble with the scripting API on.
+#
+#   wobble [args...]      the latest release (/Applications/Wobble.app),
+#                         updated from download.wobble.ing first if older
+#   wobble -b [args...]   build local main in ~/src/devl/wobble and run that
+#
+# Extra args pass through. Install: copy to a directory on PATH
+# (~/.local/bin/wobble) and chmod +x.
+
+set -u
+REPO=$HOME/src/devl/wobble
+APP=/Applications/Wobble.app
+RELEASE_BIN=$APP/Contents/MacOS/wobble
+DEV_BIN=$REPO/target/release/wobble
+LATEST='https://download.wobble.ing/latest.json?platform=macos-aarch64'
+ZIP_URL='https://download.wobble.ing/get/mac'
+
+# Add --api unless the caller already did.
+with_api() {
+  local a
+  for a in "$@"; do [[ $a == --api ]] && return 1; done
+  return 0
+}
+
+installed_version() {
+  [[ -f $APP/Contents/Info.plist ]] || return
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null
+}
+
+# True when $1 (semver, pre-release allowed) is newer than $2.
+newer() {
+  /usr/bin/python3 -I - "$1" "$2" <<'EOF'
+import sys, re
+def key(v):
+    core, _, pre = v.partition("-")
+    nums = [int(x) for x in re.findall(r"\d+", core)]
+    if not pre:
+        return (nums, 1, [])
+    return (nums, 0, [(0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")])
+sys.exit(0 if key(sys.argv[1]) > key(sys.argv[2]) else 1)
+EOF
+}
+
+update_release() {
+  local json latest have tmp
+  json=$(curl -fsS --max-time 5 "$LATEST" 2>/dev/null) || {
+    print -u2 "wobble: couldn't reach download.wobble.ing, skipping the update check"; return; }
+  latest=$(print -r -- "$json" | /usr/bin/python3 -Ic 'import sys,json; print(json.load(sys.stdin).get("version",""))' 2>/dev/null)
+  [[ -n $latest ]] || return
+  have=$(installed_version)
+  if [[ -n $have ]] && ! newer "$latest" "$have"; then return; fi
+  print -u2 "wobble: installing $latest${have:+ (have $have)}..."
+  tmp=$(mktemp -d) || return
+  if curl -fsSL --max-time 300 -o "$tmp/w.zip" "$ZIP_URL" \
+     && /usr/bin/ditto -x -k "$tmp/w.zip" "$tmp/x" \
+     && [[ -x $tmp/x/Wobble.app/Contents/MacOS/wobble ]]; then
+    rm -rf "$APP" && mv "$tmp/x/Wobble.app" "$APP" && print -u2 "wobble: installed $latest"
+  else
+    print -u2 "wobble: download failed, keeping ${have:-nothing}"
+  fi
+  rm -rf "$tmp"
+}
+
+run_release() {
+  update_release
+  [[ -x $RELEASE_BIN ]] || { print -u2 "wobble: no release installed at $APP"; exit 1; }
+  if with_api "$@"; then exec "$RELEASE_BIN" --api "$@"; else exec "$RELEASE_BIN" "$@"; fi
+}
+
+if [[ ${1:-} == -b ]]; then
+  shift
+  # The dev build runs from the repo root (so ./plugins addons load); make
+  # relative paths the caller typed absolute so they still resolve.
+  args=()
+  for a in "$@"; do
+    if [[ $a != /* && $a != -* && -e $a ]]; then args+=("$PWD/$a"); else args+=("$a"); fi
+  done
+  cd "$REPO" || exit 1
+  print -u2 "wobble: building $(git rev-parse --abbrev-ref HEAD 2>/dev/null) @ $(git rev-parse --short HEAD 2>/dev/null)..."
+  if ! cargo build --release -p app --features app/movie; then
+    print -u2 "wobble: the build failed (error above)."
+    if [[ -t 0 ]]; then
+      read -q "?Launch the release instead? [y/N] " && { print; run_release "$@"; }
+      print
+    fi
+    exit 1
+  fi
+  if with_api "${args[@]}"; then exec "$DEV_BIN" --api "${args[@]}"; else exec "$DEV_BIN" "${args[@]}"; fi
+fi
+
+run_release "$@"

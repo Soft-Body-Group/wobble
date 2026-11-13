@@ -1,0 +1,646 @@
+{
+  "version": 2,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "0": {
+        "kind": {
+          "Grid": {
+            "size": [
+              1024,
+              1024
+            ],
+            "inherit": false,
+            "spacing": [
+              64.0,
+              64.0
+            ],
+            "width": 3.0,
+            "offset": [
+              0.0,
+              0.0
+            ],
+            "line": [
+              0.9,
+              0.9,
+              0.95,
+              1.0
+            ],
+            "back": [
+              0.08,
+              0.09,
+              0.12,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 0.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "1": {
+        "kind": {
+          "Gradient": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "stops": [
+              {
+                "pos": 0.0,
+                "color": [
+                  0.05,
+                  0.12,
+                  0.35,
+                  1.0
+                ]
+              },
+              {
+                "pos": 1.0,
+                "color": [
+                  0.65,
+                  0.75,
+                  0.95,
+                  1.0
+                ]
+              }
+            ],
+            "angle": 90.0,
+            "center": [
+              0.5,
+              0.5
+            ],
+            "scale": 1.0,
+            "interp": "Linear"
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "2": {
+        "kind": {
+          "Grid": {
+            "size": [
+              512,
+              512
+            ],
+            "inherit": false,
+            "spacing": [
+              128.0,
+              128.0
+            ],
+            "width": 24.0,
+            "offset": [
+              0.0,
+              0.0
+            ],
+            "line": [
+              0.95,
+              0.25,
+              0.3,
+              1.0
+            ],
+            "back": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 320.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "3": {
+        "kind": {
+          "Card3D": {
+            "xform": {
+              "translate": [
+                0.0,
+                -1.0,
+                -3.0
+              ],
+              "rotate": [
+                -90.0,
+                0.0,
+                0.0
+              ],
+              "scale": [
+                6.0,
+                6.0,
+                6.0
+              ]
+            },
+            "aspect": 0.0,
+            "opacity": 1.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 0.0,
+          "y": 120.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "4": {
+        "kind": {
+          "Card3D": {
+            "xform": {
+              "translate": [
+                0.0,
+                0.69,
+                -6.0
+              ],
+              "rotate": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "scale": [
+                6.0,
+                6.0,
+                6.0
+              ]
+            },
+            "aspect": 0.0,
+            "opacity": 1.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 120.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "5": {
+        "kind": {
+          "Card3D": {
+            "xform": {
+              "translate": [
+                -3.0,
+                2.0,
+                -3.0
+              ],
+              "rotate": [
+                0.0,
+                90.0,
+                0.0
+              ],
+              "scale": [
+                6.0,
+                6.0,
+                6.0
+              ]
+            },
+            "aspect": 0.0,
+            "opacity": 1.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 120.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "6": {
+        "kind": {
+          "Card3D": {
+            "xform": {
+              "translate": [
+                3.0,
+                2.0,
+                -3.0
+              ],
+              "rotate": [
+                0.0,
+                -90.0,
+                0.0
+              ],
+              "scale": [
+                6.0,
+                6.0,
+                6.0
+              ]
+            },
+            "aspect": 0.0,
+            "opacity": 1.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 120.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "7": {
+        "kind": {
+          "Card3D": {
+            "xform": {
+              "translate": [
+                0.4,
+                -0.3,
+                -2.5
+              ],
+              "rotate": [
+                0.0,
+                25.0,
+                0.0
+              ],
+              "scale": [
+                1.2,
+                1.2,
+                1.2
+              ]
+            },
+            "aspect": 0.0,
+            "opacity": 1.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 480.0,
+          "y": 120.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "8": {
+        "kind": {
+          "CardScene": {
+            "inputs": 5
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 240.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "9": {
+        "kind": {
+          "Camera3D": {
+            "xform": {
+              "translate": [
+                0.0,
+                0.0,
+                2.5
+              ],
+              "rotate": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "scale": [
+                1.0,
+                1.0,
+                1.0
+              ]
+            },
+            "focal": 28.0,
+            "aperture": [
+              36.0,
+              24.0
+            ],
+            "near": 0.01,
+            "far": 10000.0,
+            "source": "Wobble"
+          }
+        },
+        "pos": {
+          "x": 60.0,
+          "y": 240.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {
+          "Cam3dTx": {
+            "keys": [
+              {
+                "frame": 0,
+                "value": -0.6,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 48,
+                "value": 0.8,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          },
+          "Cam3dTz": {
+            "keys": [
+              {
+                "frame": 0,
+                "value": 2.5,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 48,
+                "value": -1.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          },
+          "Cam3dRy": {
+            "keys": [
+              {
+                "frame": 0,
+                "value": -8.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 48,
+                "value": 14.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          }
+        },
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "10": {
+        "kind": {
+          "Render3D": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "samples": 8,
+            "shutter": 0.5,
+            "offset": 0.0
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 360.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        3,
+        0,
+        0
+      ],
+      [
+        4,
+        0,
+        1
+      ],
+      [
+        5,
+        0,
+        0
+      ],
+      [
+        6,
+        0,
+        0
+      ],
+      [
+        7,
+        0,
+        2
+      ],
+      [
+        8,
+        0,
+        3
+      ],
+      [
+        8,
+        1,
+        4
+      ],
+      [
+        8,
+        2,
+        5
+      ],
+      [
+        8,
+        3,
+        6
+      ],
+      [
+        8,
+        4,
+        7
+      ],
+      [
+        10,
+        0,
+        9
+      ],
+      [
+        10,
+        1,
+        8
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 11,
+    "view": 10,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Rec709",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    0,
+    48
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [
+    10
+  ],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

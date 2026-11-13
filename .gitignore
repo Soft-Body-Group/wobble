@@ -1,0 +1,11 @@
+/target
+/data
+bench_results*.txt
+.DS_Store
+/dist
+__pycache__/
+
+# Never tracked: a third-party proprietary add-on kept beside the repo, and
+# wrangler's per-machine cache (it records the Cloudflare account).
+/zba_fx-*.zip
+.wrangler/

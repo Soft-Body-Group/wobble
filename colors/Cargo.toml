@@ -1,0 +1,29 @@
+[package]
+name = "colors"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# The colour designer: Wobble's theme on mock layouts, click a thing to
+# recolour it. Shares `app/src/theme.rs` + `app/src/colorpicker.rs` by
+# #[path], so the slots, links and picker are Wobble's own.
+[[bin]]
+name = "wobble-colors"
+path = "src/main.rs"
+# The #[path]-shared modules carry test blocks that need the app crate.
+test = false
+
+[dependencies]
+egui = { workspace = true }
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "accesskit"] }
+serde_json = "1"
+rfd = "0.17"
+png = "0.18"
+log = { workspace = true }
+env_logger = { workspace = true }
+# colorpicker.rs (shared with app) reads time through web-time.
+web-time = "1"
+# `--shot`: a frame rendered with no window.
+wgpu = { workspace = true }
+egui-wgpu = { workspace = true }
+pollster = { workspace = true }

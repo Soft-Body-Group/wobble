@@ -1,0 +1,29 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Wobble in a browser: the engine on WebGPU, driven from a page (see README.md)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Everything is wasm32-only: on native the crate compiles empty, so a
+# workspace `cargo build` / `cargo test` (and CI) never needs a web toolchain.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+engine = { path = "../engine" }
+wgpu = { workspace = true }
+half = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+web-time = "1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "console"] }
+
+[package.metadata.wasm-pack.profile.release]
+# The build runs offline-friendly: no binaryen download.
+wasm-opt = false

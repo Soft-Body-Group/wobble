@@ -1,0 +1,873 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "5": {
+        "kind": {
+          "Geo": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "graph": {
+              "nodes": {
+                "49": {
+                  "Slider": {
+                    "value": 0.0,
+                    "name": "turn"
+                  }
+                },
+                "50": {
+                  "Math": {
+                    "op": "Mul",
+                    "a": 0.0,
+                    "b": -0.5555556
+                  }
+                },
+                "51": {
+                  "Math": {
+                    "op": "Mul",
+                    "a": 0.0,
+                    "b": 2.0
+                  }
+                },
+                "52": {
+                  "Polygon": {
+                    "center": [
+                      0.5,
+                      0.28
+                    ],
+                    "radius": 0.17,
+                    "sides": 9,
+                    "step": 1,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "53": {
+                  "Polygon": {
+                    "center": [
+                      0.0,
+                      0.0
+                    ],
+                    "radius": 0.026,
+                    "sides": 6,
+                    "step": 1,
+                    "rotation": 0.5236,
+                    "style": {
+                      "fill": [
+                        0.55,
+                        0.57,
+                        0.62,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "54": {
+                  "Instance": {
+                    "scale": 1.0,
+                    "rotation": 0.0,
+                    "inherit_cd": false,
+                    "pivot": "Origin"
+                  }
+                },
+                "55": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.5,
+                      0.28
+                    ],
+                    "inherit": false
+                  }
+                },
+                "56": {
+                  "Star": {
+                    "center": [
+                      0.5,
+                      0.28
+                    ],
+                    "outer": 0.07,
+                    "inner": 0.03,
+                    "points": 5,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.5,
+                        0.5,
+                        0.55,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "57": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.5,
+                      0.28
+                    ],
+                    "inherit": false
+                  }
+                },
+                "58": {
+                  "Circle": {
+                    "center": [
+                      0.615,
+                      0.28
+                    ],
+                    "radius": 0.014,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        0.62,
+                        0.25,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "59": {
+                  "Light": {
+                    "strength": 7.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": true
+                  }
+                },
+                "60": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.5,
+                      0.28
+                    ],
+                    "inherit": false
+                  }
+                },
+                "61": {
+                  "Circle": {
+                    "center": [
+                      0.76,
+                      0.28
+                    ],
+                    "radius": 0.018,
+                    "style": {
+                      "fill": [
+                        0.35,
+                        0.6,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "62": {
+                  "Light": {
+                    "strength": 6.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": true
+                  }
+                },
+                "63": {
+                  "Math": {
+                    "op": "Mul",
+                    "a": 0.0,
+                    "b": -1.0
+                  }
+                },
+                "64": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.5,
+                      0.28
+                    ],
+                    "inherit": false
+                  }
+                },
+                "65": {
+                  "Merge": {
+                    "count": 5
+                  }
+                },
+                "66": "Output"
+              },
+              "edges": [
+                [
+                  [
+                    50,
+                    0
+                  ],
+                  49
+                ],
+                [
+                  [
+                    51,
+                    0
+                  ],
+                  49
+                ],
+                [
+                  [
+                    54,
+                    0
+                  ],
+                  53
+                ],
+                [
+                  [
+                    54,
+                    1
+                  ],
+                  52
+                ],
+                [
+                  [
+                    55,
+                    0
+                  ],
+                  54
+                ],
+                [
+                  [
+                    55,
+                    3
+                  ],
+                  50
+                ],
+                [
+                  [
+                    57,
+                    0
+                  ],
+                  56
+                ],
+                [
+                  [
+                    57,
+                    3
+                  ],
+                  49
+                ],
+                [
+                  [
+                    59,
+                    0
+                  ],
+                  58
+                ],
+                [
+                  [
+                    60,
+                    0
+                  ],
+                  59
+                ],
+                [
+                  [
+                    60,
+                    3
+                  ],
+                  51
+                ],
+                [
+                  [
+                    62,
+                    0
+                  ],
+                  61
+                ],
+                [
+                  [
+                    63,
+                    0
+                  ],
+                  49
+                ],
+                [
+                  [
+                    64,
+                    0
+                  ],
+                  62
+                ],
+                [
+                  [
+                    64,
+                    3
+                  ],
+                  63
+                ],
+                [
+                  [
+                    65,
+                    0
+                  ],
+                  55
+                ],
+                [
+                  [
+                    65,
+                    1
+                  ],
+                  57
+                ],
+                [
+                  [
+                    65,
+                    2
+                  ],
+                  60
+                ],
+                [
+                  [
+                    65,
+                    3
+                  ],
+                  64
+                ],
+                [
+                  [
+                    66,
+                    0
+                  ],
+                  65
+                ]
+              ],
+              "out": 66,
+              "layout": {
+                "49": [
+                  0.0,
+                  540.0
+                ],
+                "50": [
+                  190.0,
+                  540.0
+                ],
+                "51": [
+                  190.0,
+                  630.0
+                ],
+                "52": [
+                  0.0,
+                  0.0
+                ],
+                "53": [
+                  0.0,
+                  90.0
+                ],
+                "54": [
+                  190.0,
+                  0.0
+                ],
+                "55": [
+                  380.0,
+                  0.0
+                ],
+                "56": [
+                  0.0,
+                  180.0
+                ],
+                "57": [
+                  380.0,
+                  180.0
+                ],
+                "58": [
+                  0.0,
+                  270.0
+                ],
+                "59": [
+                  190.0,
+                  270.0
+                ],
+                "60": [
+                  380.0,
+                  270.0
+                ],
+                "61": [
+                  0.0,
+                  360.0
+                ],
+                "62": [
+                  190.0,
+                  360.0
+                ],
+                "63": [
+                  190.0,
+                  720.0
+                ],
+                "64": [
+                  380.0,
+                  360.0
+                ],
+                "65": [
+                  570.0,
+                  180.0
+                ],
+                "66": [
+                  760.0,
+                  180.0
+                ]
+              },
+              "next_id": 67
+            },
+            "seed": 3.0,
+            "look": {
+              "light": true,
+              "intensity": 1.0,
+              "ambient": 0.02,
+              "air": 0.12,
+              "spacing": 3.0,
+              "sky": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "offset": 0.0,
+              "shadow": false,
+              "shadow_offset": [
+                8.0,
+                8.0
+              ],
+              "shadow_soft": 8.0,
+              "shadow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "glow": false,
+              "glow_size": 24.0,
+              "glow_color": [
+                1.0,
+                0.8,
+                0.3,
+                0.8
+              ],
+              "inner": false,
+              "inner_offset": [
+                4.0,
+                4.0
+              ],
+              "inner_soft": 6.0,
+              "inner_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "bevel": true,
+              "bevel_depth": 6.0,
+              "bevel_angle": 90.0,
+              "bevel_strength": 0.35,
+              "outline": false,
+              "outline_width": 4.0,
+              "outline_pos": 1.0,
+              "outline_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {
+          "Custom:turn": {
+            "keys": [
+              {
+                "frame": 1,
+                "value": 0.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 121,
+                "value": 6.2831855,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          }
+        },
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "lanterns",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "6": {
+        "kind": {
+          "Blank": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "color": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "7": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        7,
+        0,
+        5
+      ],
+      [
+        7,
+        1,
+        6
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 8,
+    "view": 7,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Ap1",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    120
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

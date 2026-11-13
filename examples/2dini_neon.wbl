@@ -1,0 +1,758 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "14": {
+        "kind": {
+          "Grid": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "spacing": [
+              64.0,
+              64.0
+            ],
+            "width": 2.0,
+            "offset": [
+              0.0,
+              0.0
+            ],
+            "line": [
+              0.05,
+              0.06,
+              0.09,
+              1.0
+            ],
+            "back": [
+              0.012,
+              0.012,
+              0.022,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "15": {
+        "kind": {
+          "Geo": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "graph": {
+              "nodes": {
+                "13": {
+                  "Slider": {
+                    "value": 0.0,
+                    "name": "spin"
+                  }
+                },
+                "14": {
+                  "Text": {
+                    "text": "wobble",
+                    "font": "Sans",
+                    "size": 0.14,
+                    "position": [
+                      0.5,
+                      0.33
+                    ],
+                    "align": "Centre",
+                    "tracking": 0.05,
+                    "leading": 1.1,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.9,
+                        0.15,
+                        0.55,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "15": {
+                  "Star": {
+                    "center": [
+                      0.15,
+                      0.285
+                    ],
+                    "outer": 0.045,
+                    "inner": 0.02,
+                    "points": 5,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.15,
+                        0.75,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "16": {
+                  "Star": {
+                    "center": [
+                      0.85,
+                      0.285
+                    ],
+                    "outer": 0.045,
+                    "inner": 0.02,
+                    "points": 5,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.15,
+                        0.75,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "17": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.0,
+                      0.0
+                    ],
+                    "inherit": true
+                  }
+                },
+                "18": {
+                  "Math": {
+                    "op": "Mul",
+                    "a": 0.0,
+                    "b": -1.0
+                  }
+                },
+                "19": {
+                  "Transform": {
+                    "translate": [
+                      0.0,
+                      0.0
+                    ],
+                    "rotate": 0.0,
+                    "scale": [
+                      1.0,
+                      1.0
+                    ],
+                    "pivot": [
+                      0.0,
+                      0.0
+                    ],
+                    "inherit": true
+                  }
+                },
+                "20": {
+                  "Merge": {
+                    "count": 4
+                  }
+                },
+                "21": "Output"
+              },
+              "edges": [
+                [
+                  [
+                    17,
+                    0
+                  ],
+                  15
+                ],
+                [
+                  [
+                    17,
+                    3
+                  ],
+                  13
+                ],
+                [
+                  [
+                    18,
+                    0
+                  ],
+                  13
+                ],
+                [
+                  [
+                    19,
+                    0
+                  ],
+                  16
+                ],
+                [
+                  [
+                    19,
+                    3
+                  ],
+                  18
+                ],
+                [
+                  [
+                    20,
+                    0
+                  ],
+                  14
+                ],
+                [
+                  [
+                    20,
+                    1
+                  ],
+                  17
+                ],
+                [
+                  [
+                    20,
+                    2
+                  ],
+                  19
+                ],
+                [
+                  [
+                    21,
+                    0
+                  ],
+                  20
+                ]
+              ],
+              "out": 21,
+              "layout": {
+                "13": [
+                  0.0,
+                  450.0
+                ],
+                "14": [
+                  0.0,
+                  0.0
+                ],
+                "15": [
+                  0.0,
+                  90.0
+                ],
+                "16": [
+                  0.0,
+                  180.0
+                ],
+                "17": [
+                  190.0,
+                  90.0
+                ],
+                "18": [
+                  190.0,
+                  450.0
+                ],
+                "19": [
+                  190.0,
+                  180.0
+                ],
+                "20": [
+                  380.0,
+                  90.0
+                ],
+                "21": [
+                  570.0,
+                  90.0
+                ]
+              },
+              "next_id": 22
+            },
+            "seed": 3.0,
+            "look": {
+              "light": false,
+              "intensity": 1.0,
+              "ambient": 0.05,
+              "air": 0.0,
+              "spacing": 4.0,
+              "sky": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "offset": 5.0,
+              "shadow": true,
+              "shadow_offset": [
+                14.0,
+                18.0
+              ],
+              "shadow_soft": 14.0,
+              "shadow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.85
+              ],
+              "glow": true,
+              "glow_size": 40.0,
+              "glow_color": [
+                1.0,
+                0.2,
+                0.65,
+                0.9
+              ],
+              "inner": true,
+              "inner_offset": [
+                3.0,
+                5.0
+              ],
+              "inner_soft": 8.0,
+              "inner_color": [
+                0.15,
+                0.0,
+                0.1,
+                0.7
+              ],
+              "bevel": true,
+              "bevel_depth": 9.0,
+              "bevel_angle": 120.0,
+              "bevel_strength": 0.7,
+              "outline": true,
+              "outline_width": 3.0,
+              "outline_pos": 1.0,
+              "outline_color": [
+                0.85,
+                0.95,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {
+          "Custom:look.glow.size": {
+            "keys": [
+              {
+                "frame": 1,
+                "value": 30.0,
+                "interp": "Smooth",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 31,
+                "value": 60.0,
+                "interp": "Smooth",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 61,
+                "value": 30.0,
+                "interp": "Smooth",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 91,
+                "value": 60.0,
+                "interp": "Smooth",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 121,
+                "value": 30.0,
+                "interp": "Smooth",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          },
+          "Custom:look.bevel.angle": {
+            "keys": [
+              {
+                "frame": 1,
+                "value": 0.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 121,
+                "value": 360.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          },
+          "Custom:look.outline.a": {
+            "keys": [
+              {
+                "frame": 1,
+                "value": 1.0,
+                "interp": "Hold",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 47,
+                "value": 0.25,
+                "interp": "Hold",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 49,
+                "value": 1.0,
+                "interp": "Hold",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 52,
+                "value": 0.4,
+                "interp": "Hold",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 53,
+                "value": 1.0,
+                "interp": "Hold",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          },
+          "Custom:spin": {
+            "keys": [
+              {
+                "frame": 1,
+                "value": 0.0,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 121,
+                "value": 3.7699113,
+                "interp": "Linear",
+                "tan_in": [
+                  0.0,
+                  0.0
+                ],
+                "tan_out": [
+                  0.0,
+                  0.0
+                ]
+              }
+            ]
+          }
+        },
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "neon",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "16": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        16,
+        0,
+        15
+      ],
+      [
+        16,
+        1,
+        14
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 17,
+    "view": 16,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Ap1",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    120
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

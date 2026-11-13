@@ -1,0 +1,27 @@
+[package]
+name = "wobble-blender-native"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "The native half of wobble's Blender bridge: a Python extension module Blender loads that hands Blender's own GPU textures to wobble without a readback (IOSurface on macOS)"
+
+# `import wobble_native` inside Blender's Python. Stable ABI, so one build
+# serves every CPython 3.11+ Blender ships.
+[lib]
+name = "wobble_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# `generate-import-lib`: a Windows build links against python3.dll's import
+# library, which pyo3 then makes itself — no Python needed on the build box.
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py311", "generate-import-lib"] }
+libc = "0.2"
+
+[build-dependencies]
+pyo3-build-config = "0.24"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "MTLDevice", "MTLTexture", "MTLResource", "MTLCommandQueue", "MTLCommandBuffer", "MTLCommandEncoder", "MTLBlitCommandEncoder", "MTLTypes", "MTLPixelFormat", "MTLAllocation", "objc2-io-surface"] }
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFString", "CFNumber"] }

@@ -1,0 +1,31 @@
+[package]
+name = "genai"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "wobble's generative-AI pipelines: the step graph a GenAI node carries, the remote model registry, one adapter per provider (fal, ComfyUI, the wobble relay) and the runner that turns a pipeline into files on disk"
+
+# No egui, no wgpu, no engine. The app draws a pipeline and the engine plays
+# its result back, but running one is plain HTTP + files, so a headless
+# server, a test or someone else's tool can link this and nothing else.
+[features]
+default = ["relay"]
+# The wobble relay: wobble credits, one account, money through wobble. A
+# distributed build leaves it out (the app's `commerce` feature turns it on);
+# without it a remote step runs on the user's own fal key or not at all.
+relay = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+sha2 = "0.10"
+base64 = "0.23"
+png = "0.18"
+log = "0.4"
+
+# The HTTP half (http, fal, comfy, relay, run, service) is native-only: ring's
+# C build script has no wasm toolchain. The web build (web/) links the data
+# half — pipeline, catalog, config, image — which is all the engine reads.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = "3"

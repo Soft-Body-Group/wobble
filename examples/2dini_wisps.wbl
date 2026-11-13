@@ -1,0 +1,833 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "49": {
+        "kind": {
+          "Blank": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "color": [
+              0.003,
+              0.003,
+              0.006,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "50": {
+        "kind": {
+          "Geo": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "graph": {
+              "nodes": {
+                "13": {
+                  "Noise": {
+                    "graph": {
+                      "nodes": {
+                        "1": {
+                          "Fbm": {
+                            "mode": "Fbm",
+                            "scale": [
+                              0.25,
+                              0.25
+                            ],
+                            "offset": [
+                              0.0,
+                              0.0
+                            ],
+                            "lacunarity": 2.0,
+                            "gain": 0.5,
+                            "seed": 0.0,
+                            "speed": 1.0,
+                            "octaves": 2
+                          }
+                        },
+                        "2": "Output"
+                      },
+                      "edges": [
+                        [
+                          [
+                            2,
+                            0
+                          ],
+                          1
+                        ]
+                      ],
+                      "out": null,
+                      "layout": {
+                        "1": [
+                          0.0,
+                          0.0
+                        ],
+                        "2": [
+                          0.0,
+                          220.0
+                        ]
+                      },
+                      "next_id": 3
+                    },
+                    "scale": 3.0,
+                    "seed": 3.0,
+                    "speed": 0.015
+                  }
+                },
+                "14": {
+                  "Rectangle": {
+                    "center": [
+                      0.2,
+                      0.57
+                    ],
+                    "size": [
+                      0.12,
+                      0.01
+                    ],
+                    "corner": 0.0,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        0.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "15": {
+                  "Particles": {
+                    "rate": 3.0,
+                    "life": 140.0,
+                    "life_var": 0.3,
+                    "speed": 2.0,
+                    "speed_var": 0.5,
+                    "direction": -1.5707964,
+                    "spread": 0.5,
+                    "gravity": -0.012,
+                    "wind": 0.03,
+                    "drag": 0.0,
+                    "size": 1.0,
+                    "size_end": 0.3,
+                    "fade": true,
+                    "start": -150.0,
+                    "seed": 1.0
+                  }
+                },
+                "16": {
+                  "Polygon": {
+                    "center": [
+                      0.0,
+                      0.0
+                    ],
+                    "radius": 0.0032,
+                    "sides": 4,
+                    "step": 1,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.75,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "17": {
+                  "Displace": {
+                    "mode": "Curl",
+                    "amount": 0.01,
+                    "x": 0.5,
+                    "y": 0.5
+                  }
+                },
+                "18": {
+                  "Instance": {
+                    "scale": 1.0,
+                    "rotation": 0.0,
+                    "inherit_cd": true,
+                    "pivot": "Origin"
+                  }
+                },
+                "19": {
+                  "Light": {
+                    "strength": 5.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": false
+                  }
+                },
+                "20": {
+                  "Rectangle": {
+                    "center": [
+                      0.8,
+                      0.57
+                    ],
+                    "size": [
+                      0.12,
+                      0.01
+                    ],
+                    "corner": 0.0,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        0.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "21": {
+                  "Particles": {
+                    "rate": 3.0,
+                    "life": 140.0,
+                    "life_var": 0.3,
+                    "speed": 2.0,
+                    "speed_var": 0.5,
+                    "direction": -1.5707964,
+                    "spread": 0.5,
+                    "gravity": -0.012,
+                    "wind": -0.03,
+                    "drag": 0.0,
+                    "size": 1.0,
+                    "size_end": 0.3,
+                    "fade": true,
+                    "start": -150.0,
+                    "seed": 2.0
+                  }
+                },
+                "22": {
+                  "Polygon": {
+                    "center": [
+                      0.0,
+                      0.0
+                    ],
+                    "radius": 0.0032,
+                    "sides": 4,
+                    "step": 1,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        0.25,
+                        0.7,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "23": {
+                  "Displace": {
+                    "mode": "Curl",
+                    "amount": 0.01,
+                    "x": 0.5,
+                    "y": 0.5
+                  }
+                },
+                "24": {
+                  "Instance": {
+                    "scale": 1.0,
+                    "rotation": 0.0,
+                    "inherit_cd": true,
+                    "pivot": "Origin"
+                  }
+                },
+                "25": {
+                  "Light": {
+                    "strength": 5.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": false
+                  }
+                },
+                "26": {
+                  "Text": {
+                    "text": "2dini",
+                    "font": "Sans",
+                    "size": 0.2,
+                    "position": [
+                      0.5,
+                      0.36
+                    ],
+                    "align": "Centre",
+                    "tracking": 0.04,
+                    "leading": 1.1,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.55,
+                        0.55,
+                        0.6,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "27": {
+                  "Merge": {
+                    "count": 4
+                  }
+                },
+                "28": "Output"
+              },
+              "edges": [
+                [
+                  [
+                    15,
+                    0
+                  ],
+                  14
+                ],
+                [
+                  [
+                    17,
+                    0
+                  ],
+                  15
+                ],
+                [
+                  [
+                    17,
+                    1
+                  ],
+                  13
+                ],
+                [
+                  [
+                    18,
+                    0
+                  ],
+                  16
+                ],
+                [
+                  [
+                    18,
+                    1
+                  ],
+                  17
+                ],
+                [
+                  [
+                    19,
+                    0
+                  ],
+                  18
+                ],
+                [
+                  [
+                    21,
+                    0
+                  ],
+                  20
+                ],
+                [
+                  [
+                    23,
+                    0
+                  ],
+                  21
+                ],
+                [
+                  [
+                    23,
+                    1
+                  ],
+                  13
+                ],
+                [
+                  [
+                    24,
+                    0
+                  ],
+                  22
+                ],
+                [
+                  [
+                    24,
+                    1
+                  ],
+                  23
+                ],
+                [
+                  [
+                    25,
+                    0
+                  ],
+                  24
+                ],
+                [
+                  [
+                    27,
+                    0
+                  ],
+                  26
+                ],
+                [
+                  [
+                    27,
+                    1
+                  ],
+                  19
+                ],
+                [
+                  [
+                    27,
+                    2
+                  ],
+                  25
+                ],
+                [
+                  [
+                    28,
+                    0
+                  ],
+                  27
+                ]
+              ],
+              "out": 28,
+              "layout": {
+                "13": [
+                  380.0,
+                  360.0
+                ],
+                "14": [
+                  0.0,
+                  0.0
+                ],
+                "15": [
+                  190.0,
+                  0.0
+                ],
+                "16": [
+                  190.0,
+                  90.0
+                ],
+                "17": [
+                  380.0,
+                  0.0
+                ],
+                "18": [
+                  570.0,
+                  0.0
+                ],
+                "19": [
+                  760.0,
+                  0.0
+                ],
+                "20": [
+                  0.0,
+                  270.0
+                ],
+                "21": [
+                  190.0,
+                  270.0
+                ],
+                "22": [
+                  190.0,
+                  360.0
+                ],
+                "23": [
+                  380.0,
+                  270.0
+                ],
+                "24": [
+                  570.0,
+                  270.0
+                ],
+                "25": [
+                  760.0,
+                  270.0
+                ],
+                "26": [
+                  760.0,
+                  630.0
+                ],
+                "27": [
+                  950.0,
+                  270.0
+                ],
+                "28": [
+                  1140.0,
+                  270.0
+                ]
+              },
+              "next_id": 29
+            },
+            "seed": 3.0,
+            "look": {
+              "light": true,
+              "intensity": 1.2,
+              "ambient": 0.015,
+              "air": 0.05,
+              "spacing": 3.0,
+              "sky": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "offset": 3.0,
+              "shadow": false,
+              "shadow_offset": [
+                8.0,
+                8.0
+              ],
+              "shadow_soft": 8.0,
+              "shadow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "glow": true,
+              "glow_size": 10.0,
+              "glow_color": [
+                1.0,
+                1.0,
+                1.0,
+                0.12
+              ],
+              "inner": false,
+              "inner_offset": [
+                4.0,
+                4.0
+              ],
+              "inner_soft": 6.0,
+              "inner_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "bevel": true,
+              "bevel_depth": 10.0,
+              "bevel_angle": 90.0,
+              "bevel_strength": 0.5,
+              "outline": false,
+              "outline_width": 4.0,
+              "outline_pos": 1.0,
+              "outline_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "wisps",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "51": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        51,
+        0,
+        50
+      ],
+      [
+        51,
+        1,
+        49
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 52,
+    "view": 51,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Ap1",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    120
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

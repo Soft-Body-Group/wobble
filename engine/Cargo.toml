@@ -1,0 +1,126 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+# Serde derives on the graph model (setup files) + plugin manifest parsing;
+# engine core stays serde-free.
+serde = ["dep:serde", "dep:serde_json"]
+# OpenDRT display transform. UPSTREAM IS GPLv3 (see src/viewtf/opendrt.rs) —
+# enabling this makes the resulting binary GPLv3. Off by default so a stock
+# build stays under this project's own licence.
+opendrt = []
+# Movie containers (ProRes, H.264, ...) through FFmpeg's libav*. OFF by
+# default: it is the one dependency that is not pure Rust and not vendored,
+# so a stock `cargo build` must not need a system FFmpeg. Turning it on adds
+# the movie extensions to `decode::SUPPORTED_EXTS` — without the feature the
+# app does not offer a format it cannot decode.
+movie = ["dep:ffmpeg-next"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+wgpu = { workspace = true }
+exr = { workspace = true }
+rayon = { workspace = true }
+lz4_flex = { workspace = true }
+half = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+crossbeam-channel = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+# Shader nodes are validated BEFORE they can become topology, so a typo in a
+# user-authored shader leaves that node a passthrough instead of taking the
+# whole comp down. Pinned to the version wgpu 29 already pulls in.
+naga = { version = "30", features = ["wgsl-in"] }
+# Stills. Both pure Rust, both decode-only.
+png = "0.18"
+zune-jpeg = "0.5"
+# Movies, behind the `movie` feature. Only codec/format/scaling: the filter
+# graph, resampler and device layers are not used and cost build time.
+ffmpeg-next = { version = "9", optional = true, default-features = false, features = [
+    "codec",
+    "format",
+    "software-scaling",
+] }
+sha2 = "0.10"
+# 2dini Physics node, rigid mode (the soft mode is our own XPBD in geophys.rs).
+rapier2d = "0.36"
+# 2dini Text node: glyph outlines. The built-in faces are egui's own
+# (Ubuntu Light, Hack), already in the build.
+ttf-parser = "0.25"
+i_overlay = "9"
+epaint_default_fonts = "0.35"
+# `Instant` that works in a browser: a plain re-export of std's on native,
+# `performance.now()` on wasm32 (where std's panics). See web/.
+web-time = "1"
+# The Blender node's pixel ring: one file both processes map.
+memmap2 = "0.9"
+# The GenAI node's pipeline (data) and licence registry. No UI, no GPU.
+genai = { path = "../genai", default-features = false }
+
+
+
+# POSIX shared memory for the Blender node's pixel ring (`shm_open`,
+# blender/shm.rs) — every Unix, not just the Mac.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# libc here too: the WOBBLE_NOCACHE measurement toggle (F_NOCACHE on .gcf
+# reads).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+# The Blender node's pixel ring handed to the GPU (blender/gpuimport.rs): a
+# Metal buffer over the shared mapping, imported through wgpu's hal. Same
+# objc2-metal wgpu-hal 29 builds on, so the raw buffer type is theirs.
+objc2 = "0.6"
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "block2", "MTLAllocation", "MTLBuffer", "MTLDevice", "MTLResource", "MTLTexture", "MTLPixelFormat", "objc2-io-surface"] }
+# Blender's frames as IOSurfaces (`blender/gpuimport.rs`): looked up by id
+# and wrapped as textures, no readback anywhere.
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "libc", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase"] }
+
+# Live Cycles into a Blender layer (blender/cycles.rs): an exportable Vulkan
+# buffer on wgpu's own device, its Win32 handle duplicated into a Blender
+# built from the wobble fork. Same ash wgpu-hal builds on.
+[target.'cfg(windows)'.dependencies]
+ash = "0.38"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Memory", "Win32_System_Threading"] }
+
+# Model downloads (models.rs). Not in the web build: ring's C build script has
+# no wasm toolchain, and a browser demo fetches nothing on its own.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = "3"
+
+# wasm32 without atomics is single-threaded, and WebGPU handles are not Send.
+# This marks them Send/Sync anyway so the engine's `Arc<Device>` code builds;
+# the web build never actually hands one to another thread (web/).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+
+[dev-dependencies]
+# Setup-file round-trip for the graph model (serde feature only).
+serde_json = "1"
+# We only ship a JPEG DECODER, so the tests need an encoder to make one.
+jpeg-encoder = "0.6"
+
+[[bin]]
+name = "gen_exr"
+path = "src/bin/gen_exr.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+
+[[bin]]
+name = "models"
+path = "src/bin/models.rs"
+
+[[bin]]
+name = "planar"
+path = "src/bin/planar.rs"

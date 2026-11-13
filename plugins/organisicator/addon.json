@@ -1,0 +1,36 @@
+{
+  "id": "organisicator",
+  "label": "Organisicator",
+  "version": "0.1",
+  "author": "wobble",
+  "description": "Work inside organisicator-managed projects: pick a shot, open and save its comps, send Writes to its render folder, read its plates. The wobble twin of organisicator's Blender add-on.",
+  "run": ["python3", "main.py"],
+  "commands": [
+    { "id": "panel", "label": "projects…", "tip": "open the Organisicator panel" },
+    { "id": "save", "label": "save comp to shot", "tip": "save the comp in the picked shot's comp folder, Writes pointed at its renders" },
+    { "id": "version_up", "label": "version up", "tip": "…_v004.wbl -> …_v005.wbl, Writes following" },
+    { "id": "route", "label": "renders to shot", "tip": "point every Write at the shot's render folder" },
+    { "id": "plates", "label": "add plates", "tip": "a Load for each sequence in the shot's plates folder" }
+  ],
+  "panels": [
+    {
+      "id": "main",
+      "label": "Projects",
+      "rows": [
+        { "kind": "field", "id": "root", "label": "managed root" },
+        { "kind": "choice", "id": "project", "label": "project" },
+        { "kind": "choice", "id": "shot", "label": "shot" },
+        { "kind": "text", "id": "where", "text": "" },
+        { "kind": "choice", "id": "comp", "label": "comps" },
+        { "kind": "button", "id": "open", "label": "open comp" },
+        { "kind": "field", "id": "task", "label": "task", "default": "comp" },
+        { "kind": "button", "id": "save", "label": "save comp here" },
+        { "kind": "button", "id": "version_up", "label": "version up" },
+        { "kind": "button", "id": "route", "label": "renders to shot" },
+        { "kind": "button", "id": "plates", "label": "add plates as Reads" },
+        { "kind": "button", "id": "reveal", "label": "reveal shot folder" },
+        { "kind": "button", "id": "rescan", "label": "rescan projects" }
+      ]
+    }
+  ]
+}

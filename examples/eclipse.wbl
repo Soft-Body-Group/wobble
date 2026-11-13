@@ -1,0 +1,275 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "0": {
+        "kind": {
+          "Plasma": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "seed": 0.0,
+            "center": [
+              960.0,
+              540.0
+            ],
+            "radius": 190.0,
+            "count": 1500000.0,
+            "loops": 3000.0,
+            "strands": 8.0,
+            "regions": 9.0,
+            "cluster": 0.8,
+            "region_size": 0.4,
+            "depth": 0.8,
+            "span": 0.32,
+            "span_var": 0.7,
+            "height": 0.3,
+            "height_var": 0.7,
+            "thickness": 0.45,
+            "lean": 0.3,
+            "arcade": 0.08,
+            "life": 240.0,
+            "flow": 0.5,
+            "pulse": 0.15,
+            "streak": 22.0,
+            "width": 2.4,
+            "turbulence": 5.0,
+            "turb_scale": 1.5,
+            "turb_speed": 0.008,
+            "fuzz": 2.5,
+            "streamers": 1.0,
+            "reach": 2.4,
+            "falloff": 5.0,
+            "pinch": 0.55,
+            "feet": 2.0,
+            "spin": 0.0,
+            "occlude": true,
+            "eclipse": true,
+            "brightness": 1.4,
+            "color": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "alpha": 0.0,
+            "body": 0.0,
+            "limb": 0.6,
+            "mottle": 0.6,
+            "mottle_scale": 9.0,
+            "mottle_speed": 0.01
+          }
+        },
+        "pos": {
+          "x": 60.0,
+          "y": 40.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "1": {
+        "kind": {
+          "Plasma": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "seed": 1.0,
+            "center": [
+              960.0,
+              540.0
+            ],
+            "radius": 190.0,
+            "count": 60000.0,
+            "loops": 16.0,
+            "strands": 10.0,
+            "regions": 5.0,
+            "cluster": 0.7,
+            "region_size": 0.2,
+            "depth": 0.12,
+            "span": 0.07,
+            "span_var": 0.6,
+            "height": 0.035,
+            "height_var": 0.8,
+            "thickness": 0.9,
+            "lean": 0.8,
+            "arcade": 0.03,
+            "life": 400.0,
+            "flow": 0.3,
+            "pulse": 0.5,
+            "streak": 3.0,
+            "width": 1.2,
+            "turbulence": 2.5,
+            "turb_scale": 8.0,
+            "turb_speed": 0.02,
+            "fuzz": 1.2,
+            "streamers": 0.0,
+            "reach": 0.7,
+            "falloff": 2.5,
+            "pinch": 0.0,
+            "feet": 1.0,
+            "spin": 0.0,
+            "occlude": true,
+            "eclipse": true,
+            "brightness": 1.2,
+            "color": [
+              1.0,
+              0.12,
+              0.3
+            ],
+            "alpha": 0.0,
+            "body": 0.0,
+            "limb": 0.6,
+            "mottle": 0.6,
+            "mottle_scale": 9.0,
+            "mottle_speed": 0.01
+          }
+        },
+        "pos": {
+          "x": 260.0,
+          "y": 40.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "2": {
+        "kind": {
+          "Blend": {
+            "op": "Add",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 180.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "3": {
+        "kind": {
+          "Glow": {
+            "size": 50.0,
+            "falloff": 0.8,
+            "threshold": 0.0,
+            "knee": 0.0,
+            "intensity": 0.5,
+            "tint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mode": "Add"
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 300.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        2,
+        0,
+        1
+      ],
+      [
+        2,
+        1,
+        0
+      ],
+      [
+        3,
+        0,
+        2
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 4,
+    "view": 3,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Rec709",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    240
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

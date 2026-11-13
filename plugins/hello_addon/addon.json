@@ -1,0 +1,24 @@
+{
+  "id": "hello_addon",
+  "label": "Hello Addon",
+  "version": "0.1",
+  "author": "wobble",
+  "description": "Sample addon",
+  "run": ["python3", "main.py"],
+  "commands": [
+    { "id": "add_blur", "label": "add blur", "tip": "a Blur after the viewed node, viewed" },
+    { "id": "count", "label": "count nodes" }
+  ],
+  "panels": [
+    {
+      "id": "main",
+      "label": "Blur",
+      "rows": [
+        { "kind": "text", "id": "info", "text": "add a blur to start" },
+        { "kind": "slider", "id": "size", "label": "size", "min": 0, "max": 100, "default": 12 },
+        { "kind": "toggle", "id": "live", "label": "follow the slider", "default": true },
+        { "kind": "button", "id": "add", "label": "add blur" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1249 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "8": {
+        "kind": {
+          "Blank": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "color": [
+              0.01,
+              0.012,
+              0.02,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "9": {
+        "kind": {
+          "Geo": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "graph": {
+              "nodes": {
+                "13": {
+                  "Skeleton": {
+                    "bones": [
+                      {
+                        "name": "spine",
+                        "parent": null,
+                        "head": [
+                          0.5,
+                          0.2
+                        ],
+                        "tail": [
+                          0.5,
+                          0.11
+                        ]
+                      },
+                      {
+                        "name": "neck",
+                        "parent": 0,
+                        "head": [
+                          0.5,
+                          0.11
+                        ],
+                        "tail": [
+                          0.5,
+                          0.07
+                        ]
+                      },
+                      {
+                        "name": "arm.L",
+                        "parent": 0,
+                        "head": [
+                          0.49,
+                          0.115
+                        ],
+                        "tail": [
+                          0.44,
+                          0.16
+                        ]
+                      },
+                      {
+                        "name": "fore.L",
+                        "parent": 2,
+                        "head": [
+                          0.44,
+                          0.16
+                        ],
+                        "tail": [
+                          0.41,
+                          0.21
+                        ]
+                      },
+                      {
+                        "name": "arm.R",
+                        "parent": 0,
+                        "head": [
+                          0.51,
+                          0.115
+                        ],
+                        "tail": [
+                          0.56,
+                          0.16
+                        ]
+                      },
+                      {
+                        "name": "fore.R",
+                        "parent": 4,
+                        "head": [
+                          0.56,
+                          0.16
+                        ],
+                        "tail": [
+                          0.59,
+                          0.21
+                        ]
+                      },
+                      {
+                        "name": "thigh.L",
+                        "parent": 0,
+                        "head": [
+                          0.49,
+                          0.2
+                        ],
+                        "tail": [
+                          0.475,
+                          0.28
+                        ]
+                      },
+                      {
+                        "name": "shin.L",
+                        "parent": 6,
+                        "head": [
+                          0.475,
+                          0.28
+                        ],
+                        "tail": [
+                          0.465,
+                          0.36
+                        ]
+                      },
+                      {
+                        "name": "thigh.R",
+                        "parent": 0,
+                        "head": [
+                          0.51,
+                          0.2
+                        ],
+                        "tail": [
+                          0.525,
+                          0.28
+                        ]
+                      },
+                      {
+                        "name": "shin.R",
+                        "parent": 8,
+                        "head": [
+                          0.525,
+                          0.28
+                        ],
+                        "tail": [
+                          0.535,
+                          0.36
+                        ]
+                      }
+                    ],
+                    "pose": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                },
+                "14": {
+                  "Ragdoll": {
+                    "gravity": 9.8,
+                    "limit": 1.1,
+                    "frames": 120,
+                    "start": 1.0,
+                    "walls": true,
+                    "kick": [
+                      0.12,
+                      -0.05,
+                      2.5
+                    ],
+                    "bake": [
+                      0,
+                      0,
+                      []
+                    ]
+                  }
+                },
+                "15": {
+                  "Rectangle": {
+                    "center": [
+                      0.5,
+                      0.155
+                    ],
+                    "size": [
+                      0.12,
+                      0.05
+                    ],
+                    "corner": 0.025,
+                    "rotation": -1.5707964,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.45,
+                        0.9,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "16": {
+                  "Rectangle": {
+                    "center": [
+                      0.465,
+                      0.1375
+                    ],
+                    "size": [
+                      0.08046812,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 2.4087775,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.45,
+                        0.9,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "17": {
+                  "Rectangle": {
+                    "center": [
+                      0.425,
+                      0.185
+                    ],
+                    "size": [
+                      0.07150952,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 2.1112158,
+                    "style": {
+                      "fill": [
+                        0.92,
+                        0.55,
+                        0.35,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "18": {
+                  "Rectangle": {
+                    "center": [
+                      0.535,
+                      0.1375
+                    ],
+                    "size": [
+                      0.08046812,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 0.7328151,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.45,
+                        0.9,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "19": {
+                  "Rectangle": {
+                    "center": [
+                      0.575,
+                      0.185
+                    ],
+                    "size": [
+                      0.07150952,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 1.0303768,
+                    "style": {
+                      "fill": [
+                        0.92,
+                        0.55,
+                        0.35,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "20": {
+                  "Rectangle": {
+                    "center": [
+                      0.4825,
+                      0.24
+                    ],
+                    "size": [
+                      0.094594106,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 1.7561443,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.45,
+                        0.9,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "21": {
+                  "Rectangle": {
+                    "center": [
+                      0.47,
+                      0.32
+                    ],
+                    "size": [
+                      0.093822576,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 1.6951513,
+                    "style": {
+                      "fill": [
+                        0.92,
+                        0.55,
+                        0.35,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "22": {
+                  "Rectangle": {
+                    "center": [
+                      0.5175,
+                      0.24
+                    ],
+                    "size": [
+                      0.094594106,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 1.3854483,
+                    "style": {
+                      "fill": [
+                        0.2,
+                        0.45,
+                        0.9,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "23": {
+                  "Rectangle": {
+                    "center": [
+                      0.53,
+                      0.32
+                    ],
+                    "size": [
+                      0.093822576,
+                      0.022
+                    ],
+                    "corner": 0.011,
+                    "rotation": 1.4464413,
+                    "style": {
+                      "fill": [
+                        0.92,
+                        0.55,
+                        0.35,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "24": {
+                  "Circle": {
+                    "center": [
+                      0.5,
+                      0.06
+                    ],
+                    "radius": 0.029,
+                    "style": {
+                      "fill": [
+                        0.92,
+                        0.55,
+                        0.35,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "25": {
+                  "Merge": {
+                    "count": 11
+                  }
+                },
+                "26": {
+                  "Resample": {
+                    "mode": "Spacing",
+                    "spacing": 4.0,
+                    "count": 32
+                  }
+                },
+                "27": {
+                  "Skin": {
+                    "smooth": false,
+                    "falloff": 4.0
+                  }
+                },
+                "28": {
+                  "Circle": {
+                    "center": [
+                      0.15,
+                      0.06
+                    ],
+                    "radius": 0.02,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        0.9,
+                        0.7,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "29": {
+                  "Light": {
+                    "strength": 6.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": true
+                  }
+                },
+                "30": {
+                  "Merge": {
+                    "count": 3
+                  }
+                },
+                "31": "Output"
+              },
+              "edges": [
+                [
+                  [
+                    14,
+                    0
+                  ],
+                  13
+                ],
+                [
+                  [
+                    25,
+                    0
+                  ],
+                  15
+                ],
+                [
+                  [
+                    25,
+                    1
+                  ],
+                  16
+                ],
+                [
+                  [
+                    25,
+                    2
+                  ],
+                  17
+                ],
+                [
+                  [
+                    25,
+                    3
+                  ],
+                  18
+                ],
+                [
+                  [
+                    25,
+                    4
+                  ],
+                  19
+                ],
+                [
+                  [
+                    25,
+                    5
+                  ],
+                  20
+                ],
+                [
+                  [
+                    25,
+                    6
+                  ],
+                  21
+                ],
+                [
+                  [
+                    25,
+                    7
+                  ],
+                  22
+                ],
+                [
+                  [
+                    25,
+                    8
+                  ],
+                  23
+                ],
+                [
+                  [
+                    25,
+                    9
+                  ],
+                  24
+                ],
+                [
+                  [
+                    26,
+                    0
+                  ],
+                  25
+                ],
+                [
+                  [
+                    27,
+                    0
+                  ],
+                  26
+                ],
+                [
+                  [
+                    27,
+                    1
+                  ],
+                  14
+                ],
+                [
+                  [
+                    29,
+                    0
+                  ],
+                  28
+                ],
+                [
+                  [
+                    30,
+                    0
+                  ],
+                  27
+                ],
+                [
+                  [
+                    30,
+                    1
+                  ],
+                  29
+                ],
+                [
+                  [
+                    31,
+                    0
+                  ],
+                  30
+                ]
+              ],
+              "out": 31,
+              "layout": {
+                "13": [
+                  0.0,
+                  0.0
+                ],
+                "14": [
+                  190.0,
+                  0.0
+                ],
+                "15": [
+                  380.0,
+                  0.0
+                ],
+                "16": [
+                  380.0,
+                  180.0
+                ],
+                "17": [
+                  380.0,
+                  270.0
+                ],
+                "18": [
+                  380.0,
+                  360.0
+                ],
+                "19": [
+                  380.0,
+                  450.0
+                ],
+                "20": [
+                  380.0,
+                  540.0
+                ],
+                "21": [
+                  380.0,
+                  630.0
+                ],
+                "22": [
+                  380.0,
+                  720.0
+                ],
+                "23": [
+                  380.0,
+                  810.0
+                ],
+                "24": [
+                  380.0,
+                  990.0
+                ],
+                "25": [
+                  570.0,
+                  450.0
+                ],
+                "26": [
+                  760.0,
+                  450.0
+                ],
+                "27": [
+                  950.0,
+                  450.0
+                ],
+                "28": [
+                  760.0,
+                  720.0
+                ],
+                "29": [
+                  950.0,
+                  720.0
+                ],
+                "30": [
+                  1140.0,
+                  450.0
+                ],
+                "31": [
+                  1330.0,
+                  450.0
+                ]
+              },
+              "next_id": 32
+            },
+            "seed": 3.0,
+            "look": {
+              "light": true,
+              "intensity": 1.2,
+              "ambient": 0.08,
+              "air": 0.1,
+              "spacing": 4.0,
+              "sky": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "offset": 0.0,
+              "shadow": false,
+              "shadow_offset": [
+                8.0,
+                8.0
+              ],
+              "shadow_soft": 8.0,
+              "shadow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "glow": false,
+              "glow_size": 24.0,
+              "glow_color": [
+                1.0,
+                0.8,
+                0.3,
+                0.8
+              ],
+              "inner": false,
+              "inner_offset": [
+                4.0,
+                4.0
+              ],
+              "inner_soft": 6.0,
+              "inner_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "bevel": true,
+              "bevel_depth": 8.0,
+              "bevel_angle": 120.0,
+              "bevel_strength": 0.5,
+              "outline": true,
+              "outline_width": 2.0,
+              "outline_pos": 1.0,
+              "outline_color": [
+                0.02,
+                0.02,
+                0.03,
+                1.0
+              ]
+            }
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "ragdoll",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "10": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        10,
+        0,
+        9
+      ],
+      [
+        10,
+        1,
+        8
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 11,
+    "view": 10,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Ap1",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    120
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

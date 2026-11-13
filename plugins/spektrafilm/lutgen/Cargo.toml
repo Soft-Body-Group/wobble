@@ -1,0 +1,23 @@
+[package]
+name = "spektra-lut"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+description = "Bakes a spektrafilm film/print chain into a 3D LUT for the wobble spektrafilm wobbin"
+publish = false
+
+# Its own workspace: this crate links spektrafilm-rs (GPL-3.0) and must never
+# join wobble's, so wobble's own binaries never contain spektrafilm code.
+[workspace]
+
+[dependencies]
+# A fork, branch `spektro-experimental` (the same checkout spektrorganize
+# builds against). Relative to plugins/spektrafilm/lutgen in a wobble checkout
+# that sits next to spektrafilm-rs.
+spektrafilm-core = { path = "../../../../spektrafilm-rs/crates/spektrafilm-core", features = ["precision-f64"] }
+spektrafilm-gpu = { path = "../../../../spektrafilm-rs/crates/spektrafilm-gpu", features = ["precision-f64"] }
+spektrafilm-math = { path = "../../../../spektrafilm-rs/crates/spektrafilm-math", features = ["precision-f64"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3

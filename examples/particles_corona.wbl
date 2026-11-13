@@ -1,0 +1,395 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "0": {
+        "kind": {
+          "Particles": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "seed": 0.0,
+            "start": 1.0,
+            "preroll": 150.0,
+            "substeps": 1.0,
+            "quality": 1.0,
+            "alpha": 0.0,
+            "graph": {
+              "nodes": {
+                "1": {
+                  "Emit": {
+                    "shape": "Ring",
+                    "center": [
+                      960.0,
+                      540.0
+                    ],
+                    "size": [
+                      300.0,
+                      300.0
+                    ],
+                    "angle": 0.0,
+                    "rate": 8000.0,
+                    "life": 170.0,
+                    "life_var": 0.7,
+                    "speed": 0.0,
+                    "speed_var": 0.0,
+                    "direction": 90.0,
+                    "spread": 0.0,
+                    "normal": 0.0,
+                    "spots": 0.0,
+                    "spot_size": 0.05,
+                    "clump": 1.0,
+                    "seed": 0.0
+                  }
+                },
+                "2": {
+                  "Force": {
+                    "kind": "FieldLines",
+                    "strength": 1.2,
+                    "direction": -90.0,
+                    "center": [
+                      960.0,
+                      540.0
+                    ],
+                    "radius": 300.0,
+                    "scale": 200.0,
+                    "speed": 0.02,
+                    "follow": 1.0,
+                    "seed": 3.0,
+                    "invert": false,
+                    "both_ways": true,
+                    "pairs": 230.0,
+                    "regions": 14.0,
+                    "cluster": 0.7,
+                    "region_size": 0.3,
+                    "span": 0.2,
+                    "span_var": 0.8,
+                    "depth": 0.01,
+                    "open": 0.36,
+                    "foot": 3.0,
+                    "strands": 12.0,
+                    "fan": 125.0,
+                    "fill": 0.0,
+                    "own_pair": true,
+                    "sphere": 1.0
+                  }
+                },
+                "3": {
+                  "Force": {
+                    "kind": "Turbulence",
+                    "strength": 0.07,
+                    "direction": -90.0,
+                    "center": [
+                      960.0,
+                      540.0
+                    ],
+                    "radius": 300.0,
+                    "scale": 500.0,
+                    "speed": 0.002,
+                    "follow": 1.0,
+                    "seed": 0.0,
+                    "invert": false,
+                    "both_ways": true,
+                    "pairs": 24.0,
+                    "regions": 6.0,
+                    "cluster": 0.8,
+                    "region_size": 0.3,
+                    "span": 0.25,
+                    "span_var": 0.6,
+                    "depth": 0.04,
+                    "open": 0.2,
+                    "foot": 0.0,
+                    "strands": 0.0,
+                    "fan": 100.0,
+                    "fill": 0.0,
+                    "own_pair": false,
+                    "sphere": 0.0
+                  }
+                },
+                "4": {
+                  "Render": {
+                    "color": [
+                      1.0,
+                      0.36,
+                      0.06
+                    ],
+                    "color_end": [
+                      1.0,
+                      0.24,
+                      0.03
+                    ],
+                    "brightness": 0.7,
+                    "streak": 7.0,
+                    "stretch": 0.0,
+                    "width": 1.2,
+                    "fade_in": 0.06,
+                    "fade_out": 0.55,
+                    "vary": 0.9,
+                    "occlude": true,
+                    "disc_center": [
+                      960.0,
+                      540.0
+                    ],
+                    "disc_radius": 300.0
+                  }
+                }
+              },
+              "edges": [
+                [
+                  [
+                    2,
+                    0
+                  ],
+                  1
+                ],
+                [
+                  [
+                    3,
+                    0
+                  ],
+                  2
+                ],
+                [
+                  [
+                    4,
+                    0
+                  ],
+                  3
+                ]
+              ],
+              "layout": {
+                "1": [
+                  0.0,
+                  0.0
+                ],
+                "2": [
+                  0.0,
+                  110.0
+                ],
+                "3": [
+                  0.0,
+                  220.0
+                ],
+                "4": [
+                  0.0,
+                  330.0
+                ]
+              },
+              "next_id": 5
+            }
+          }
+        },
+        "pos": {
+          "x": 60.0,
+          "y": 40.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "1": {
+        "kind": {
+          "Plasma": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "seed": 0.0,
+            "center": [
+              960.0,
+              540.0
+            ],
+            "radius": 300.0,
+            "count": 0.0,
+            "loops": 160.0,
+            "strands": 12.0,
+            "regions": 9.0,
+            "cluster": 0.8,
+            "region_size": 0.3,
+            "depth": 0.85,
+            "span": 0.32,
+            "span_var": 0.7,
+            "height": 0.3,
+            "height_var": 0.7,
+            "thickness": 0.45,
+            "lean": 0.3,
+            "arcade": 0.08,
+            "life": 240.0,
+            "flow": 1.2,
+            "pulse": 0.5,
+            "streak": 7.0,
+            "width": 1.3,
+            "turbulence": 6.0,
+            "turb_scale": 3.0,
+            "turb_speed": 0.02,
+            "fuzz": 0.5,
+            "streamers": 0.25,
+            "reach": 0.7,
+            "falloff": 2.5,
+            "pinch": 0.0,
+            "feet": 2.0,
+            "spin": 0.0,
+            "occlude": true,
+            "eclipse": true,
+            "brightness": 1.0,
+            "color": [
+              1.0,
+              0.3,
+              0.04
+            ],
+            "alpha": 0.0,
+            "body": 0.0,
+            "limb": 0.6,
+            "mottle": 0.6,
+            "mottle_scale": 9.0,
+            "mottle_speed": 0.01
+          }
+        },
+        "pos": {
+          "x": 260.0,
+          "y": 40.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "2": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 180.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "3": {
+        "kind": {
+          "Glow": {
+            "size": 40.0,
+            "falloff": 0.7,
+            "threshold": 0.0,
+            "knee": 0.0,
+            "intensity": 0.5,
+            "tint": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "mode": "Add"
+          }
+        },
+        "pos": {
+          "x": 160.0,
+          "y": 300.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        2,
+        0,
+        1
+      ],
+      [
+        2,
+        1,
+        0
+      ],
+      [
+        3,
+        0,
+        2
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 4,
+    "view": 3,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Rec709",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    240
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

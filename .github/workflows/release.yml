@@ -1,0 +1,141 @@
+name: release
+
+# The public builds — the one build everyone gets (no `commerce`, movies
+# through the LGPL decode-only FFmpeg) — for macOS arm64, Windows x64 and
+# Linux x86_64, made by the same scripts a hand-run release uses:
+#
+#   macOS    tools/release_public.sh        -> wobble-<ver>-<git>-macos-arm64.zip
+#   Windows  tools/release_public_win.ps1   -> wobble-<ver>-<git>-windows-x86_64.zip
+#   Linux    tools/release_public_linux.sh  -> wobble-<ver>-<git>-linux-x86_64.tar.gz
+#
+# Runs on a `v*` tag (release_public.sh tags v<version> locally; pushing the
+# tag is the choice to release) or by hand: the Actions tab, or
+# `gh workflow run release.yml`. Nothing is published: the three archives
+# are attached to the run, and putting them on R2 / the download worker
+# stays a manual step.
+#
+# ci.yml (build + unit tests on all three) runs ALONGSIDE packaging on the
+# same commit: a red test shows on the run, but the archives never wait for
+# it (that wait was ~55 min a release, mostly Windows).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  macos:
+    name: package — macos arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: public-macos
+          workspaces: '. -> target/public'
+      # The FFmpeg build is the slow, never-changing part: keyed on the
+      # script, so a new version or configure line rebuilds it.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            target/ffmpeg-lgpl
+            !target/ffmpeg-lgpl/src
+          key: ffmpeg-lgpl-macos-${{ hashFiles('tools/build_ffmpeg_lgpl.sh') }}
+      - name: Build + package
+        run: sh tools/release_public.sh
+        env:
+          WOBBLE_INGEST_KEY: ${{ secrets.WOBBLE_INGEST_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-macos-arm64
+          path: dist/public/*.zip
+          retention-days: 3
+          if-no-files-found: error
+
+  windows:
+    name: package — windows x64
+    # Pinned: FFMPEG.txt says the DLLs were built with Visual Studio 2022.
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: public-windows
+          workspaces: '. -> target/public'
+      - uses: actions/cache@v4
+        with:
+          path: target/ffmpeg-lgpl
+          key: ffmpeg-lgpl-windows-${{ hashFiles('tools/build_ffmpeg_lgpl_win.sh', 'tools/build_ffmpeg_lgpl_win.cmd') }}
+      # The .cmd wants MSYS2 with these four (it sets up MSVC itself).
+      - uses: msys2/setup-msys2@v2
+        id: msys
+        with:
+          msystem: MSYS
+          update: false
+          install: make diffutils nasm pkgconf
+      - name: Build + package
+        shell: pwsh
+        env:
+          WOBBLE_MSYS: ${{ steps.msys.outputs.msys2-location }}
+          # bindgen's libclang: the runner image ships LLVM.
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: powershell -File tools\release_public_win.ps1
+        env:
+          WOBBLE_INGEST_KEY: ${{ secrets.WOBBLE_INGEST_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-windows-x86_64
+          path: dist/public-win/*.zip
+          retention-days: 3
+          if-no-files-found: error
+
+  linux:
+    name: package — linux x86_64
+    # 22.04 for glibc 2.35: the binary runs on anything that new or newer.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: public-linux
+          workspaces: '. -> target/public'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            target/ffmpeg-lgpl
+            !target/ffmpeg-lgpl/src
+          key: ffmpeg-lgpl-linux-${{ hashFiles('tools/build_ffmpeg_lgpl_linux.sh') }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libwayland-dev \
+            nasm zlib1g-dev libbz2-dev clang libclang-dev
+      - name: Build + package
+        run: sh tools/release_public_linux.sh
+        env:
+          WOBBLE_INGEST_KEY: ${{ secrets.WOBBLE_INGEST_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-linux-x86_64
+          path: dist/public-linux/*.tar.gz
+          retention-days: 3
+          if-no-files-found: error

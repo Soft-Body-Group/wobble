@@ -1,0 +1,129 @@
+[package]
+name = "app"
+# THE version: SemVer with a pre-release tag (0.1.0-alpha.1, -alpha.2, …,
+# -beta.1, then 0.1.0). Shown in the title bar + welcome window, in zip
+# names, and compared by the new-build check. Bump with tools/bump_version.sh.
+version = "0.1.0-alpha.11"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+default = ["commerce"]
+# Everything that involves money: wobble.ing accounts + sign-in, paid
+# wobbins (prices, buy/tip buttons), GenAI relay credits. On for dev builds;
+# a distributed build is `--no-default-features` and ships none of it.
+commerce = ["genai/relay"]
+# Segment Anything roto. Off by default: it pulls a native ONNX Runtime.
+# Forwards to engine/opendrt. GPLv3 — see engine/src/viewtf/opendrt.rs.
+opendrt = ["engine/opendrt"]
+# Forwards to engine/movie: ProRes/H.264 and friends through a system
+# FFmpeg. Off by default so a stock build needs no non-Rust dependency.
+movie = ["engine/movie"]
+
+[dependencies]
+engine = { path = "../engine", features = ["serde"] }
+# The scripting protocol (`--api`): method table + socket server. No UI deps.
+api = { path = "../api" }
+# GenAI pipelines: the step graph, the services, the runner. No UI, no GPU.
+genai = { path = "../genai", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = { workspace = true }
+winit = { workspace = true }
+egui = { workspace = true }
+imfram = { git = "https://github.com/Soft-Body-Group/imfram.git", rev = "bb05a3aa980c0901d3870943bdbd330deec611d9" }
+egui-wgpu = { workspace = true }
+# Not inherited: the web build (web/) needs its default features OFF, which
+# a workspace dependency cannot switch off per member. Native turns them all
+# back on below; keep the version in step with the workspace's.
+egui-winit = { version = "0.36", default-features = false }
+pollster = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+half = { workspace = true }
+bytemuck = { workspace = true }
+png = "0.18"
+# Reading a Write's EXRs back to submit them to the blog (blogpost.rs).
+exr = { workspace = true }
+rayon = { workspace = true }
+# Pinned by rev from the public repo, so a fresh clone needs no sibling repos.
+sequitur = { git = "https://github.com/Soft-Body-Group/sequitur.git", rev = "d09a43def095b1aa8283b277c727fb15d8f59179", default-features = false }
+# Plugin store: a bundle's sha256 is checked before it is installed.
+sha2 = "0.10"
+# `Instant`/`SystemTime` that work in a browser: std's own on native (a
+# plain re-export), `performance.now()` on wasm32, where std's panic.
+web-time = "1"
+# Readable Rust frames in macOS native crash summaries (report.rs).
+rustc-demangle = "0.1"
+# The screen recorder (recorder.rs): a take is LZ4'd frames on disk, the
+# GIF is written by `gif`, and the "made with wobble" mark is set in egui's
+# own bundled face. All pure Rust, all already in the tree via egui/image.
+lz4_flex = "0.11"
+gif = "0.14"
+ab_glyph = "0.2"
+epaint_default_fonts = "0.36"
+
+# `wobble://` links arrive as a GetURL Apple Event, which winit does not
+# surface (urlhook.rs). Same objc2 wgpu already builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+# The recorder's AVAssetWriter wants a completion block.
+block2 = "0.6"
+
+# Native-only. ureq -> ring has no wasm toolchain; egui-winit's clipboard
+# (arboard) has no web backend. The web build goes without both.
+# Windows native crash capture (report_win.rs): the unhandled-exception
+# filter, stack unwinding, dbghelp symbols + minidumps. Same 0.61 the tree
+# already resolves (winit/wgpu), features only.
+# Free space on the cache drive (statvfs), for the first-run cache window.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The exe's icon (build.rs, app/icons/wobble.rc). Build scripts run on the
+# HOST, so this cfg is the host's: a Windows build is built on Windows.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Kernel",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+] }
+# The recorder's H.264 encoder: Media Foundation's sink writer.
+windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Feedback + crash-report uploads (report.rs). Same "3" the engine's model
+# fetcher resolves to, so no duplicate build.
+ureq = "3"
+# The recorder's "copy": the clip as a FILE on the clipboard. Same arboard
+# egui-winit already pulls in.
+arboard = { version = "3.6", default-features = false }
+egui-winit = { version = "0.36", features = ["default"] }
+# File dialogs; the web build uses filedialog.rs's stand-in.
+rfd = "0.17"
+# The remote viewer's picture (apiserve/remote.rs). Pure Rust; already in
+# the tree as the engine's test encoder.
+jpeg-encoder = "0.6"
+# Other wobbles on the local network (apiserve/peers.rs): mDNS announce +
+# browse, pure Rust, the same on macOS, Windows and Linux.
+mdns-sd = "0.21"
+
+# The browser build (webmain.rs, web/): console logging, the async device
+# request, the canvas.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Performance", "Storage", "console", "Event", "EventTarget", "MouseEvent", "PointerEvent"] }
+console_error_panic_hook = "0.1"
+
+[[bin]]
+name = "wobble"
+path = "src/main.rs"

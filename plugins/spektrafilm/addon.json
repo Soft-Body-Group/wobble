@@ -1,0 +1,36 @@
+{
+  "id": "spektrafilm",
+  "label": "Spektrafilm",
+  "version": "0.1",
+  "author": "wobble",
+  "description": "Film stock emulation: spektrafilm's spectral film -> print -> scan chain (GPL-3.0, via the spektrafilm-rs port) baked into a LUT on a Shader node. Pick a stock and a paper; exposure and mix are live on the node. Grain, halation and diffusion are not included.",
+  "run": ["python3", "main.py"],
+  "commands": [
+    { "id": "panel", "label": "film…", "tip": "open the Spektrafilm panel" },
+    { "id": "add", "label": "add film node", "tip": "a film node after the viewed node, viewed" },
+    { "id": "rebake", "label": "re-bake selected", "tip": "bake the selected film node again from its recipe" }
+  ],
+  "panels": [
+    {
+      "id": "film",
+      "label": "Spektrafilm",
+      "rows": [
+        { "kind": "text", "id": "info", "text": "select a film node, or add one" },
+        { "kind": "choice", "id": "film", "label": "film stock" },
+        { "kind": "choice", "id": "print", "label": "print" },
+        { "kind": "slider", "id": "print_exposure", "label": "print exposure", "min": 0.1, "max": 5.0, "default": 1.0 },
+        { "kind": "slider", "id": "m_shift", "label": "magenta filter", "min": -50, "max": 50, "default": 0 },
+        { "kind": "slider", "id": "y_shift", "label": "yellow filter", "min": -50, "max": 50, "default": 0 },
+        { "kind": "slider", "id": "film_gamma", "label": "film contrast", "min": 0.25, "max": 4.0, "default": 1.0 },
+        { "kind": "slider", "id": "print_gamma", "label": "print contrast", "min": 0.25, "max": 4.0, "default": 1.0 },
+        { "kind": "toggle", "id": "couplers", "label": "DIR couplers", "default": true },
+        { "kind": "choice", "id": "size", "label": "LUT size", "options": ["33", "25", "17"], "default": "33" },
+        { "kind": "toggle", "id": "live", "label": "re-bake as I edit", "default": true },
+        { "kind": "button", "id": "add", "label": "add film node" },
+        { "kind": "button", "id": "pick", "label": "edit selected node" },
+        { "kind": "button", "id": "rebake", "label": "re-bake" },
+        { "kind": "button", "id": "build", "label": "build the baker" }
+      ]
+    }
+  ]
+}

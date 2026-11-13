@@ -1,0 +1,11 @@
+{
+  "type_id": "invert",
+  "label": "Invert",
+  "color": [206, 106, 76],
+  "inputs": 1,
+  "mattes": true,
+  "params": [
+    { "name": "amount", "label": "amount", "default": 1.0, "min": 0.0, "max": 1.0 }
+  ],
+  "expr": "mix($in, vec4f(vec3f(1.0) - $in.rgb, $in.a), $amount)"
+}

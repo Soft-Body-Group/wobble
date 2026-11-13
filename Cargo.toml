@@ -1,0 +1,46 @@
+[workspace]
+members = ["engine", "app", "colors", "api", "genai", "web", "blender_native", "geoplayer"]
+resolver = "2"
+
+[workspace.dependencies]
+wgpu = "30"
+winit = "0.30"
+egui = { version = "0.36", features = ["serde"] }
+egui-wgpu = "0.36"
+egui-winit = "0.36"
+exr = "1.74"
+rayon = "1.12"
+# Pure Rust: the Windows/Linux targets carry no C toolchain here (CLAUDE.md).
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+half = { version = "2.7", features = ["bytemuck"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+pollster = "1"
+crossbeam-channel = "0.5"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+debug = true
+
+# egui 0.36's epaint debug-asserts that every `TexturesDelta` is applied
+# before it is dropped. The scripted tests here run egui passes for their
+# geometry and drop the output; that is not a bug.
+[profile.dev.package.epaint]
+debug-assertions = false
+
+# Decode speed matters even in dev builds
+[profile.dev.package.exr]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.zune-inflate]
+opt-level = 3
+[profile.dev.package.half]
+opt-level = 3
+
+# egui-winit 0.36.2 does not compile for wasm32 (its dropped-file impl misses
+# egui's async trait method there), which broke the web build. A copy with
+# that one impl fixed, until upstream ships one; see vendor/egui-winit.
+[patch.crates-io]
+egui-winit = { path = "vendor/egui-winit" }

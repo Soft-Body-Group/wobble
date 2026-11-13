@@ -1,0 +1,13 @@
+{
+  "type_id": "vignette",
+  "label": "Vignette",
+  "color": [96, 96, 160],
+  "inputs": 1,
+  "params": [
+    { "name": "radius",   "default": 0.7, "min": 0.05, "max": 1.5 },
+    { "name": "softness", "default": 0.4, "min": 0.01, "max": 1.0 },
+    { "name": "gain",     "default": 0.0, "min": 0.0,  "max": 1.0 }
+  ],
+  "helpers": "fn vignette_w(pos: vec2f, size: vec2f, radius: f32, soft: f32) -> f32 {\n    let d = length((pos / size - vec2f(0.5)) * vec2f(size.x / size.y, 1.0));\n    return 1.0 - smoothstep(radius, radius + soft, d);\n}",
+  "expr": "vec4f($in.rgb * mix(vignette_w($pos, $size, $radius, $softness), 1.0, $gain), $in.a)"
+}

@@ -1,0 +1,783 @@
+diff --git a/build_files/cmake/platform/platform_win32.cmake b/build_files/cmake/platform/platform_win32.cmake
+index af58436cc29..0586213c97a 100644
+--- a/build_files/cmake/platform/platform_win32.cmake
++++ b/build_files/cmake/platform/platform_win32.cmake
+@@ -39,7 +39,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+   endif()
+ else()
+   if(WITH_BLENDER)
+-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.44.35216) # MSVC 2022 17.14.14
++    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.41) # wobble fork: try the 17.11 toolset (stock wants 17.14.14)
+       message(FATAL_ERROR
+         "Compiler is unsupported, MSVC 2022 17.14.14 or newer is required for building blender."
+       )
+diff --git a/intern/cycles/blender/CMakeLists.txt b/intern/cycles/blender/CMakeLists.txt
+index 508285156e7..370a2727e8f 100644
+--- a/intern/cycles/blender/CMakeLists.txt
++++ b/intern/cycles/blender/CMakeLists.txt
+@@ -16,6 +16,7 @@ set(SRC
+   camera.cpp
+   device.cpp
+   display_driver.cpp
++  wobble.cpp
+   image.cpp
+   implicit_sharing.cpp
+   geometry.cpp
+@@ -41,6 +42,7 @@ set(SRC
+   CCL_api.h
+   device.h
+   display_driver.h
++  wobble.h
+   id_map.h
+   image.h
+   light_linking.h
+@@ -102,6 +104,12 @@ if(WITH_CYCLES_DEVICE_METAL)
+   add_definitions(-DWITH_METAL)
+ endif()
+ 
++# wobble fork: the macOS mirror wraps wobble's shared pages in an MTLBuffer.
++if(APPLE)
++  list(APPEND SRC wobble_metal.mm)
++  list(APPEND LIB "-framework Metal")
++endif()
++
+ if(WITH_MOD_FLUID)
+   add_definitions(-DWITH_FLUID)
+ endif()
+diff --git a/intern/cycles/blender/python.cpp b/intern/cycles/blender/python.cpp
+index adf00e7ac04..2361fe85fca 100644
+--- a/intern/cycles/blender/python.cpp
++++ b/intern/cycles/blender/python.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include "blender/device.h"
+ #include "blender/session.h"
++#include "blender/wobble.h"
+ #include "blender/sync.h"
+ #include "blender/util.h"
+ 
+@@ -646,6 +647,32 @@ static PyObject *debug_flags_reset_func(PyObject * /*self*/, PyObject * /*args*/
+   Py_RETURN_NONE;
+ }
+ 
++/* wobble fork: `wobble_target(handle, size, uuid, stamp_name)` names wobble's
++ * shared buffer; `wobble_target(0, 0, b"", "")` clears it. */
++static PyObject *wobble_target_func(PyObject * /*self*/, PyObject *args)
++{
++  long long handle = 0;
++  Py_ssize_t size = 0;
++  const char *uuid = nullptr;
++  Py_ssize_t uuid_len = 0;
++  const char *stamp = nullptr;
++  if (!PyArg_ParseTuple(args, "Lny#s", &handle, &size, &uuid, &uuid_len, &stamp)) {
++    return nullptr;
++  }
++  if (handle == 0) {
++    wobble_target_clear();
++    Py_RETURN_NONE;
++  }
++  WobbleTarget target;
++  target.handle = int64_t(handle);
++  target.size = size_t(size);
++  target.uuid.assign(reinterpret_cast<const uint8_t *>(uuid),
++                     reinterpret_cast<const uint8_t *>(uuid) + uuid_len);
++  target.stamp_name = stamp;
++  wobble_target_set(target);
++  Py_RETURN_NONE;
++}
++
+ static PyObject *enable_print_stats_func(PyObject * /*self*/, PyObject * /*args*/)
+ {
+   BlenderSession::print_render_stats = true;
+@@ -844,6 +871,9 @@ static PyMethodDef methods[] = {
+     /* Statistics. */
+     {"enable_print_stats", enable_print_stats_func, METH_NOARGS, ""},
+ 
++    /* wobble fork */
++    {"wobble_target", wobble_target_func, METH_VARARGS, ""},
++
+     /* Compute Device selection */
+     {"get_device_types", get_device_types_func, METH_VARARGS, ""},
+     {"set_device_override", set_device_override_func, METH_O, ""},
+diff --git a/intern/cycles/blender/session.cpp b/intern/cycles/blender/session.cpp
+index 66825b562c9..9da098c691f 100644
+--- a/intern/cycles/blender/session.cpp
++++ b/intern/cycles/blender/session.cpp
+@@ -34,6 +34,7 @@
+ #include "util/time.h"
+ 
+ #include "blender/display_driver.h"
++#include "blender/wobble.h"
+ #include "blender/output_driver.h"
+ #include "blender/session.h"
+ #include "blender/sync.h"
+@@ -1129,7 +1130,10 @@ void BlenderSession::ensure_display_driver_if_needed()
+     return;
+   }
+ 
+-  unique_ptr<BlenderDisplayDriver> display_driver = make_unique<BlenderDisplayDriver>(
++  /* wobble fork: Blender's own display, which also mirrors every update into
++   * wobble's shared buffer while one is bound (and costs nothing while not, so
++   * a target bound mid-session is picked up). */
++  unique_ptr<BlenderDisplayDriver> display_driver = make_unique<WobbleTeeDisplayDriver>(
+       b_engine, *b_scene, b_rv3d, background);
+   display_driver_ = display_driver.get();
+   session->set_display_driver(std::move(display_driver));
+diff --git a/intern/cycles/blender/wobble.cpp b/intern/cycles/blender/wobble.cpp
+new file mode 100644
+index 00000000000..edf41c5011f
+--- /dev/null
++++ b/intern/cycles/blender/wobble.cpp
+@@ -0,0 +1,228 @@
++/* SPDX-FileCopyrightText: 2026 Blender Authors
++ *
++ * SPDX-License-Identifier: Apache-2.0 */
++
++#include "blender/wobble.h"
++
++#include "util/log.h"
++
++#ifdef _WIN32
++#  ifndef NOMINMAX
++#    define NOMINMAX
++#  endif
++#  include <windows.h>
++#endif
++
++#ifdef __APPLE__
++#  include <fcntl.h>
++#  include <sys/mman.h>
++#  include <sys/stat.h>
++#  include <unistd.h>
++#endif
++
++#include <atomic>
++
++CCL_NAMESPACE_BEGIN
++
++static thread_mutex wobble_mutex;
++static WobbleTarget wobble_target;
++/* Bumped on every set/clear: a driver holding an older id re-reads the target. */
++static std::atomic<uint64_t> wobble_generation = 0;
++
++void wobble_target_set(const WobbleTarget &target)
++{
++  thread_scoped_lock lock(wobble_mutex);
++  wobble_target = target;
++  wobble_generation++;
++}
++
++void wobble_target_clear()
++{
++  thread_scoped_lock lock(wobble_mutex);
++  wobble_target = WobbleTarget();
++  wobble_generation++;
++}
++
++bool wobble_target_active()
++{
++  thread_scoped_lock lock(wobble_mutex);
++  return wobble_target.handle != 0;
++}
++
++WobbleTeeDisplayDriver::~WobbleTeeDisplayDriver()
++{
++  close_stamp();
++#ifdef __APPLE__
++  for (const Mapping &m : retired_) {
++    if (m.buffer) {
++      wobble_metal_release(m.buffer);
++    }
++    munmap(m.base, m.len);
++  }
++  retired_.clear();
++#endif
++}
++
++void WobbleTeeDisplayDriver::close_stamp()
++{
++#ifdef _WIN32
++  if (stamp_) {
++    UnmapViewOfFile(stamp_);
++    stamp_ = nullptr;
++  }
++  if (stamp_mapping_) {
++    CloseHandle(HANDLE(stamp_mapping_));
++    stamp_mapping_ = nullptr;
++  }
++#elif defined(__APPLE__)
++  if (mapping_.base) {
++    retired_.push_back(mapping_);
++    mapping_ = Mapping();
++  }
++  stamp_ = nullptr;
++#endif
++}
++
++void WobbleTeeDisplayDriver::refresh_target()
++{
++  const uint64_t gen = wobble_generation.load();
++  if (gen == buffer_id_) {
++    return;
++  }
++  {
++    thread_scoped_lock lock(wobble_mutex);
++    target_ = wobble_target;
++  }
++  buffer_id_ = gen;
++  /* A new buffer: the mirror is re-imported on its next use. */
++  mirror_.clear();
++  close_stamp();
++#ifdef _WIN32
++  if (target_.handle != 0 && !target_.stamp_name.empty()) {
++    HANDLE m = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, target_.stamp_name.c_str());
++    if (m) {
++      stamp_mapping_ = m;
++      stamp_ = static_cast<WobbleStamp *>(
++          MapViewOfFile(m, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(WobbleStamp)));
++    }
++    else {
++      LOG_ERROR << "wobble: no stamp block named " << target_.stamp_name;
++    }
++  }
++#elif defined(__APPLE__)
++  if (target_.handle != 0 && !target_.stamp_name.empty()) {
++    const int fd = shm_open(target_.stamp_name.c_str(), O_RDWR);
++    struct stat st;
++    if (fd < 0 || fstat(fd, &st) != 0 || size_t(st.st_size) <= WOBBLE_HEADER_BYTES) {
++      LOG_ERROR << "wobble: no shared buffer named " << target_.stamp_name;
++    }
++    else {
++      void *base = mmap(nullptr, size_t(st.st_size), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++      if (base == MAP_FAILED) {
++        LOG_ERROR << "wobble: could not map " << target_.stamp_name;
++      }
++      else {
++        mapping_.base = base;
++        mapping_.len = size_t(st.st_size);
++        stamp_ = static_cast<WobbleStamp *>(base);
++        /* What the pixels can hold is what wobble mapped, whatever it said. */
++        target_.size = mapping_.len - WOBBLE_HEADER_BYTES;
++      }
++    }
++    if (fd >= 0) {
++      close(fd);
++    }
++  }
++#endif
++}
++
++bool WobbleTeeDisplayDriver::update_begin(const Params &params, const int width, const int height)
++{
++  mirroring_ = false;
++  /* Blender's display first: when it skips an update, Cycles skips the copy
++   * altogether, so there is nothing to mirror either. */
++  if (!BlenderDisplayDriver::update_begin(params, width, height)) {
++    return false;
++  }
++  refresh_target();
++  if (target_.handle == 0 || !stamp_) {
++    return true;
++  }
++  if (size_t(wobble_padded_width(width)) * size_t(height) * sizeof(half4) > target_.size) {
++    /* wobble sized the buffer; a bigger render waits for a bigger buffer. */
++    return true;
++  }
++  params_ = params;
++  width_ = width;
++  height_ = height;
++  mirroring_ = true;
++  stamp_->seq |= 1; /* odd: being written */
++  return true;
++}
++
++void WobbleTeeDisplayDriver::update_end()
++{
++  BlenderDisplayDriver::update_end();
++  if (!mirroring_ || !stamp_) {
++    return;
++  }
++  mirroring_ = false;
++  stamp_->magic = 0x43594357; /* 'WCYC' */
++#ifdef __APPLE__
++  stamp_->version = 2;
++#else
++  stamp_->version = 1;
++#endif
++  stamp_->width = uint32_t(width_);
++  stamp_->height = uint32_t(height_);
++  stamp_->full_width = uint32_t(params_.full_size.x);
++  stamp_->full_height = uint32_t(params_.full_size.y);
++  stamp_->updates++;
++  stamp_->buffer_id = buffer_id_;
++  std::atomic_thread_fence(std::memory_order_seq_cst);
++  stamp_->seq += 1; /* even again: complete */
++}
++
++GraphicsInteropBuffer *WobbleTeeDisplayDriver::mirror_interop_buffer()
++{
++  if (!mirroring_) {
++    return nullptr;
++  }
++#ifdef _WIN32
++  if (mirror_.is_empty()) {
++    /* The interop closes what it is given: hand it a copy of ours. */
++    HANDLE dup = nullptr;
++    if (!DuplicateHandle(GetCurrentProcess(),
++                         HANDLE(target_.handle),
++                         GetCurrentProcess(),
++                         &dup,
++                         0,
++                         FALSE,
++                         DUPLICATE_SAME_ACCESS))
++    {
++      LOG_ERROR << "wobble: DuplicateHandle failed (" << GetLastError() << ")";
++      return nullptr;
++    }
++    mirror_.assign(GraphicsInteropDevice::VULKAN, int64_t(dup), target_.size);
++  }
++  return &mirror_;
++#elif defined(__APPLE__)
++  if (mirror_.is_empty()) {
++    if (!mapping_.buffer) {
++      mapping_.buffer = wobble_metal_wrap(static_cast<uint8_t *>(mapping_.base) +
++                                              WOBBLE_HEADER_BYTES,
++                                          mapping_.len - WOBBLE_HEADER_BYTES);
++      if (!mapping_.buffer) {
++        LOG_ERROR << "wobble: Metal refused the shared pages";
++        return nullptr;
++      }
++    }
++    mirror_.assign(GraphicsInteropDevice::METAL, int64_t(mapping_.buffer), target_.size);
++  }
++  return &mirror_;
++#else
++  return nullptr;
++#endif
++}
++
++CCL_NAMESPACE_END
+diff --git a/intern/cycles/blender/wobble.h b/intern/cycles/blender/wobble.h
+new file mode 100644
+index 00000000000..08e59fc8ff9
+--- /dev/null
++++ b/intern/cycles/blender/wobble.h
+@@ -0,0 +1,131 @@
++/* SPDX-FileCopyrightText: 2026 Blender Authors
++ *
++ * SPDX-License-Identifier: Apache-2.0 */
++
++/* wobble fork: Cycles renders straight into a buffer wobble owns.
++ *
++ * wobble (a separate process) allocates an exportable Vulkan buffer of
++ * half4 pixels on the same GPU, duplicates its Win32 handle into this
++ * process and names it with `_cycles.wobble_target(...)`. While a target is
++ * set, every non-preview Cycles session (F12 and the rendered viewport)
++ * mirrors its display updates into it as well as into Blender's own
++ * display: Cycles' existing Vulkan graphics interop imports the buffer into
++ * CUDA and writes each update into it, and the driver bumps a sequence in a
++ * small shared stamp block wobble polls. No readback, no CPU copy.
++ *
++ * macOS: Cycles' Metal interop already takes a plain MTLBuffer on unified
++ * memory, so there is nothing to import. wobble creates ONE POSIX shared
++ * memory object named by `stamp_name`: the stamp in its first
++ * `WOBBLE_HEADER_BYTES` (a whole arm64 page, so what follows is page
++ * aligned), the pixels after it. The fork wraps the pixel pages in an
++ * MTLBuffer (`newBufferWithBytesNoCopy`) and Cycles writes into them. `handle`
++ * is only a flag there (non-zero = bound). Rows are padded to 256 bytes
++ * (`wobble_padded_width`) so wobble copies the buffer straight into a
++ * texture; the stamp says so with version 2. */
++
++#pragma once
++
++/* display_driver.h leans on its includer for these. */
++#include "DNA_view3d_types.h"
++#include "RE_engine.h"
++
++#include "blender/display_driver.h"
++#include "session/display_driver.h"
++
++#include "util/thread.h"
++#include "util/vector.h"
++
++#include <string>
++
++CCL_NAMESPACE_BEGIN
++
++/* What wobble handed over; empty `handle` = no target. */
++struct WobbleTarget {
++  int64_t handle = 0;
++  size_t size = 0;
++  vector<uint8_t> uuid;
++  std::string stamp_name;
++};
++
++void wobble_target_set(const WobbleTarget &target);
++void wobble_target_clear();
++bool wobble_target_active();
++
++/* macOS: the stamp occupies this much of the shared object; pixels follow. */
++#define WOBBLE_HEADER_BYTES 16384
++
++/* Row length in pixels of the mirror: Windows packs rows (version 1), macOS
++ * pads them to 256 bytes = 32 half4 pixels (version 2). */
++inline int wobble_padded_width(const int width)
++{
++#ifdef __APPLE__
++  return (width + 31) / 32 * 32;
++#else
++  return width;
++#endif
++}
++
++/* Layout of the stamp block, mirrored by wobble (`engine/src/blender/cycles.rs`). */
++struct WobbleStamp {
++  uint32_t magic;   /* 'WCYC' */
++  uint32_t version; /* 1: rows packed at width; 2: rows at wobble_padded_width */
++  uint64_t seq;     /* bumped after every completed update; odd while writing */
++  uint32_t width;   /* pixels written this update (row stride = width) */
++  uint32_t height;
++  uint32_t full_width; /* the render's full resolution */
++  uint32_t full_height;
++  uint64_t updates;   /* total display updates since the target was set */
++  uint64_t buffer_id; /* which target buffer the pixels went to */
++};
++
++/* Blender's own viewport/render display, plus a mirror: while wobble has a
++ * buffer bound, every display update is ALSO written into it by Cycles'
++ * Vulkan interop (`PathTraceWorkGPU::copy_to_display_mirror`) and the stamp
++ * is bumped. So Blender's viewport and wobble both show the render. */
++class WobbleTeeDisplayDriver : public BlenderDisplayDriver {
++ public:
++  using BlenderDisplayDriver::BlenderDisplayDriver;
++  ~WobbleTeeDisplayDriver() override;
++
++  GraphicsInteropBuffer *mirror_interop_buffer() override;
++
++ protected:
++  bool update_begin(const Params &params, const int width, const int height) override;
++  void update_end() override;
++
++  /* Re-read the target after a set/clear; open its stamp block. */
++  void refresh_target();
++  void close_stamp();
++
++  WobbleTarget target_;
++  uint64_t buffer_id_ = 0;
++  int width_ = 0, height_ = 0;
++  Params params_;
++  /* This update goes to wobble too. */
++  bool mirroring_ = false;
++  GraphicsInteropBuffer mirror_;
++  void *stamp_mapping_ = nullptr;
++  WobbleStamp *stamp_ = nullptr;
++#ifdef __APPLE__
++  /* The whole shared object (stamp + pixels) and the MTLBuffer over its
++   * pixels. Cycles' interop keeps an unretained pointer to the buffer until
++   * it is handed a new one, so a retired mapping is only freed with the
++   * driver. */
++  struct Mapping {
++    void *base = nullptr;
++    size_t len = 0;
++    void *buffer = nullptr; /* id<MTLBuffer>, retained */
++  };
++  Mapping mapping_;
++  vector<Mapping> retired_;
++#endif
++};
++
++#ifdef __APPLE__
++/* wobble_metal.mm: an MTLBuffer (retained) over `len` bytes at `ptr`, both
++ * page aligned, on the system GPU; null on failure. */
++void *wobble_metal_wrap(void *ptr, size_t len);
++void wobble_metal_release(void *buffer);
++#endif
++
++CCL_NAMESPACE_END
+diff --git a/intern/cycles/blender/wobble_metal.mm b/intern/cycles/blender/wobble_metal.mm
+new file mode 100644
+index 00000000000..c360b2a027d
+--- /dev/null
++++ b/intern/cycles/blender/wobble_metal.mm
+@@ -0,0 +1,35 @@
++/* SPDX-FileCopyrightText: 2026 Blender Authors
++ *
++ * SPDX-License-Identifier: Apache-2.0 */
++
++/* wobble fork, macOS: wobble's shared pages as an MTLBuffer for Cycles. */
++
++#include "blender/wobble.h"
++
++#import <Metal/Metal.h>
++
++CCL_NAMESPACE_BEGIN
++
++void *wobble_metal_wrap(void *ptr, const size_t len)
++{
++  /* One GPU on Apple silicon, and the system default is the device object
++   * Cycles' Metal device uses. */
++  id<MTLDevice> device = MTLCreateSystemDefaultDevice();
++  if (!device) {
++    return nullptr;
++  }
++  id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:ptr
++                                                   length:len
++                                                  options:MTLResourceStorageModeShared
++                                              deallocator:nil];
++  [device release];
++  /* `new...` returns it retained; the caller owns it. */
++  return (void *)buffer;
++}
++
++void wobble_metal_release(void *buffer)
++{
++  [(id<MTLBuffer>)buffer release];
++}
++
++CCL_NAMESPACE_END
+diff --git a/intern/cycles/integrator/path_trace_display.cpp b/intern/cycles/integrator/path_trace_display.cpp
+index 4bd2dbc31d6..d31fce00443 100644
+--- a/intern/cycles/integrator/path_trace_display.cpp
++++ b/intern/cycles/integrator/path_trace_display.cpp
+@@ -192,6 +192,11 @@ GraphicsInteropDevice PathTraceDisplay::graphics_interop_get_device()
+   return driver_->graphics_interop_get_device();
+ }
+ 
++GraphicsInteropBuffer *PathTraceDisplay::graphics_interop_get_mirror_buffer()
++{
++  return update_state_.is_active ? driver_->mirror_interop_buffer() : nullptr;
++}
++
+ GraphicsInteropBuffer &PathTraceDisplay::graphics_interop_get_buffer()
+ {
+   GraphicsInteropBuffer &interop_buffer = driver_->graphics_interop_get_buffer();
+diff --git a/intern/cycles/integrator/path_trace_display.h b/intern/cycles/integrator/path_trace_display.h
+index 704775fcc5d..facd04bc09b 100644
+--- a/intern/cycles/integrator/path_trace_display.h
++++ b/intern/cycles/integrator/path_trace_display.h
+@@ -117,6 +117,8 @@ class PathTraceDisplay {
+    * device API. */
+   GraphicsInteropDevice graphics_interop_get_device();
+   GraphicsInteropBuffer &graphics_interop_get_buffer();
++  /* wobble fork: the driver's second destination, or null. */
++  GraphicsInteropBuffer *graphics_interop_get_mirror_buffer();
+ 
+   /* (De)activate GPU display for graphics interoperability outside of regular display update
+    * routines. */
+diff --git a/intern/cycles/integrator/path_trace_work_gpu.cpp b/intern/cycles/integrator/path_trace_work_gpu.cpp
+index c1f62481090..2e793f0c5cf 100644
+--- a/intern/cycles/integrator/path_trace_work_gpu.cpp
++++ b/intern/cycles/integrator/path_trace_work_gpu.cpp
+@@ -1012,6 +1012,7 @@ void PathTraceWorkGPU::copy_to_display(PathTraceDisplay *display,
+ 
+   if (should_use_graphics_interop(display)) {
+     if (copy_to_display_interop(display, pass_mode, num_samples)) {
++      copy_to_display_mirror(display, pass_mode, num_samples);
+       return;
+     }
+ 
+@@ -1021,6 +1022,60 @@ void PathTraceWorkGPU::copy_to_display(PathTraceDisplay *display,
+   }
+ 
+   copy_to_display_naive(display, pass_mode, num_samples);
++  copy_to_display_mirror(display, pass_mode, num_samples);
++}
++
++void PathTraceWorkGPU::copy_to_display_mirror(PathTraceDisplay *display,
++                                              PassMode pass_mode,
++                                              const int num_samples)
++{
++  /* wobble fork: the same film pixels a second time, into the buffer another
++   * process shares. One more film-convert kernel; no copy through the host. */
++  GraphicsInteropBuffer *mirror = display->graphics_interop_get_mirror_buffer();
++  if (!mirror) {
++    return;
++  }
++  if (mirror->has_new_handle()) {
++    mirror_failed_ = false;
++  }
++  if (mirror_failed_) {
++    return;
++  }
++  if (!mirror_graphics_interop_) {
++    mirror_graphics_interop_ = queue_->graphics_interop_create();
++    if (!mirror_graphics_interop_) {
++      mirror_failed_ = true;
++      return;
++    }
++  }
++  mirror_graphics_interop_->set_buffer(*mirror);
++  const device_ptr d_rgba_half = mirror_graphics_interop_->map();
++  if (!d_rgba_half) {
++    LOG_ERROR << "wobble: could not map the mirror buffer";
++    mirror_failed_ = true;
++    return;
++  }
++
++  PassAccessor::Destination destination = get_display_destination_template(display, pass_mode);
++#ifdef __APPLE__
++  /* macOS rows are padded to 256 bytes (32 half4), so wobble copies the
++   * buffer straight into a texture: `wobble_padded_width` in
++   * blender/wobble.h, which this must match. */
++  if (destination.stride > 0) {
++    const int padded = (destination.stride + 31) / 32 * 32;
++    const int x = destination.offset % destination.stride;
++    const int y = destination.offset / destination.stride;
++    destination.offset = y * padded + x;
++    destination.stride = padded;
++  }
++#endif
++  destination.d_pixels_half_rgba = d_rgba_half;
++  get_render_tile_film_pixels(destination, pass_mode, num_samples);
++
++  mirror_graphics_interop_->unmap();
++  /* The other process reads the buffer as soon as the update ends: the
++   * writes must have landed by then. */
++  queue_->synchronize();
+ }
+ 
+ void PathTraceWorkGPU::copy_to_display_naive(PathTraceDisplay *display,
+@@ -1099,6 +1154,7 @@ bool PathTraceWorkGPU::copy_to_display_interop(PathTraceDisplay *display,
+ 
+ void PathTraceWorkGPU::destroy_gpu_resources(PathTraceDisplay *display)
+ {
++  mirror_graphics_interop_ = nullptr;
+   if (!device_graphics_interop_) {
+     return;
+   }
+diff --git a/intern/cycles/integrator/path_trace_work_gpu.h b/intern/cycles/integrator/path_trace_work_gpu.h
+index 569daccce99..2f89402a0f2 100644
+--- a/intern/cycles/integrator/path_trace_work_gpu.h
++++ b/intern/cycles/integrator/path_trace_work_gpu.h
+@@ -155,6 +155,10 @@ class PathTraceWorkGPU : public PathTraceWork {
+   device_vector<half4> display_rgba_half_;
+ 
+   unique_ptr<DeviceGraphicsInterop> device_graphics_interop_;
++  /* wobble fork: the display driver's mirror buffer, imported. */
++  unique_ptr<DeviceGraphicsInterop> mirror_graphics_interop_;
++  bool mirror_failed_ = false;
++  void copy_to_display_mirror(PathTraceDisplay *display, PassMode pass_mode, int num_samples);
+ 
+   /* Cached result of device->should_use_graphics_interop(). */
+   bool interop_use_checked_ = false;
+diff --git a/intern/cycles/session/display_driver.h b/intern/cycles/session/display_driver.h
+index da7f7f584b8..239d22b3ac9 100644
+--- a/intern/cycles/session/display_driver.h
++++ b/intern/cycles/session/display_driver.h
+@@ -120,6 +120,14 @@ class DisplayDriver {
+ 
+   virtual void next_tile_begin() = 0;
+ 
++  /* wobble fork: a second interop buffer every display update is ALSO
++   * written into (same layout as the main one), or null. Asked inside an
++   * update, after `update_begin()` returned true. */
++  virtual GraphicsInteropBuffer *mirror_interop_buffer()
++  {
++    return nullptr;
++  }
++
+   /* Update the render from the rendering thread.
+    *
+    * Cycles periodically updates the render to be displayed. For multithreaded updates with
+diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
+index 985b969e727..ff970d8cc35 100644
+--- a/source/creator/CMakeLists.txt
++++ b/source/creator/CMakeLists.txt
+@@ -145,6 +145,7 @@ set(SRC
+   creator.cc
+   creator_args.cc
+   creator_signals.cc
++  wobble_msvc_compat.cc
+ 
+   creator_intern.h
+ )
+diff --git a/source/creator/wobble_msvc_compat.cc b/source/creator/wobble_msvc_compat.cc
+new file mode 100644
+index 00000000000..06e3048c6be
+--- /dev/null
++++ b/source/creator/wobble_msvc_compat.cc
+@@ -0,0 +1,84 @@
++/* SPDX-FileCopyrightText: 2026 Blender Authors
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later */
++
++/* wobble fork: the prebuilt libraries were compiled against the MSVC 17.14
++ * STL, whose vectorized algorithms call helpers the 17.11 runtime this box
++ * links against does not have. These are plain scalar versions with the
++ * STL's own signatures (vector_algorithms.cpp), linked only into this build. */
++
++#if defined(_MSC_VER) && _MSC_VER < 1944
++
++#  include <cstddef>
++#  include <cstdint>
++#  include <cstring>
++
++extern "C" {
++
++size_t __stdcall __std_find_first_of_trivial_pos_1(const void *haystack,
++                                                   size_t haystack_length,
++                                                   const void *needle,
++                                                   size_t needle_length) noexcept
++{
++  const unsigned char *h = static_cast<const unsigned char *>(haystack);
++  const unsigned char *n = static_cast<const unsigned char *>(needle);
++  for (size_t i = 0; i < haystack_length; i++) {
++    if (std::memchr(n, h[i], needle_length)) {
++      return i;
++    }
++  }
++  return size_t(-1);
++}
++
++size_t __stdcall __std_find_last_of_trivial_pos_1(const void *haystack,
++                                                  size_t haystack_length,
++                                                  const void *needle,
++                                                  size_t needle_length) noexcept
++{
++  const unsigned char *h = static_cast<const unsigned char *>(haystack);
++  const unsigned char *n = static_cast<const unsigned char *>(needle);
++  for (size_t i = haystack_length; i-- > 0;) {
++    if (std::memchr(n, h[i], needle_length)) {
++      return i;
++    }
++  }
++  return size_t(-1);
++}
++
++void *__stdcall __std_remove_4(void *first, void *last, uint32_t value) noexcept
++{
++  uint32_t *in = static_cast<uint32_t *>(first);
++  uint32_t *end = static_cast<uint32_t *>(last);
++  uint32_t *out = in;
++  for (; in != end; in++) {
++    if (*in != value) {
++      *out++ = *in;
++    }
++  }
++  return out;
++}
++
++const void *__stdcall __std_search_1(const void *first1,
++                                     const void *last1,
++                                     const void *first2,
++                                     size_t count2) noexcept
++{
++  const unsigned char *a = static_cast<const unsigned char *>(first1);
++  const unsigned char *a_end = static_cast<const unsigned char *>(last1);
++  const unsigned char *b = static_cast<const unsigned char *>(first2);
++  if (count2 == 0) {
++    return first1;
++  }
++  if (size_t(a_end - a) < count2) {
++    return last1;
++  }
++  for (const unsigned char *p = a; p + count2 <= a_end; p++) {
++    if (std::memcmp(p, b, count2) == 0) {
++      return p;
++    }
++  }
++  return last1;
++}
++}
++
++#endif

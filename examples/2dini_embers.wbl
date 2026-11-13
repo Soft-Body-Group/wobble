@@ -1,0 +1,1037 @@
+{
+  "version": 4,
+  "fps": 24.0,
+  "pinned_dirs": [],
+  "graph": {
+    "nodes": {
+      "32": {
+        "kind": {
+          "Blank": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "color": [
+              0.004,
+              0.004,
+              0.008,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 120.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "33": {
+        "kind": {
+          "Geo": {
+            "size": [
+              1920,
+              1080
+            ],
+            "inherit": false,
+            "graph": {
+              "nodes": {
+                "13": {
+                  "Circle": {
+                    "center": [
+                      0.5,
+                      0.47
+                    ],
+                    "radius": 0.012,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        0.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "14": {
+                  "Particles": {
+                    "rate": 6.0,
+                    "life": 85.0,
+                    "life_var": 0.4,
+                    "speed": 4.0,
+                    "speed_var": 0.6,
+                    "direction": -1.5707964,
+                    "spread": 0.6,
+                    "gravity": -0.045,
+                    "wind": 0.02,
+                    "drag": 0.02,
+                    "size": 3.0,
+                    "size_end": 1.0,
+                    "fade": true,
+                    "start": -90.0,
+                    "seed": 4.0
+                  }
+                },
+                "15": {
+                  "Circle": {
+                    "center": [
+                      0.0,
+                      0.0
+                    ],
+                    "radius": 0.0007,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        0.55,
+                        0.18,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "16": {
+                  "Instance": {
+                    "scale": 1.0,
+                    "rotation": 0.0,
+                    "inherit_cd": false,
+                    "pivot": "Origin"
+                  }
+                },
+                "17": {
+                  "Light": {
+                    "strength": 6.0,
+                    "tint": [
+                      1.0,
+                      0.42,
+                      0.1
+                    ],
+                    "occlude": false
+                  }
+                },
+                "18": {
+                  "Rectangle": {
+                    "center": [
+                      0.5,
+                      0.478
+                    ],
+                    "size": [
+                      0.08,
+                      0.034
+                    ],
+                    "corner": 0.012,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.35,
+                        0.33,
+                        0.32,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "19": {
+                  "Rectangle": {
+                    "center": [
+                      0.5,
+                      0.459
+                    ],
+                    "size": [
+                      0.06,
+                      0.008
+                    ],
+                    "corner": 0.006,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        1.0,
+                        0.35,
+                        0.08,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "20": {
+                  "Light": {
+                    "strength": 5.0,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": true
+                  }
+                },
+                "21": {
+                  "Rectangle": {
+                    "center": [
+                      0.12,
+                      0.36
+                    ],
+                    "size": [
+                      0.035,
+                      0.26
+                    ],
+                    "corner": 0.004,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.42,
+                        0.42,
+                        0.46,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "22": {
+                  "Rectangle": {
+                    "center": [
+                      0.27,
+                      0.36
+                    ],
+                    "size": [
+                      0.035,
+                      0.26
+                    ],
+                    "corner": 0.004,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.42,
+                        0.42,
+                        0.46,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "23": {
+                  "Rectangle": {
+                    "center": [
+                      0.73,
+                      0.36
+                    ],
+                    "size": [
+                      0.035,
+                      0.26
+                    ],
+                    "corner": 0.004,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.42,
+                        0.42,
+                        0.46,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "24": {
+                  "Rectangle": {
+                    "center": [
+                      0.88,
+                      0.36
+                    ],
+                    "size": [
+                      0.035,
+                      0.26
+                    ],
+                    "corner": 0.004,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.42,
+                        0.42,
+                        0.46,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "25": {
+                  "Rectangle": {
+                    "center": [
+                      0.5,
+                      0.52
+                    ],
+                    "size": [
+                      1.2,
+                      0.05
+                    ],
+                    "corner": 0.0,
+                    "rotation": 0.0,
+                    "style": {
+                      "fill": [
+                        0.3,
+                        0.29,
+                        0.3,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "26": {
+                  "Circle": {
+                    "center": [
+                      0.08,
+                      0.06
+                    ],
+                    "radius": 0.012,
+                    "style": {
+                      "fill": [
+                        0.6,
+                        0.75,
+                        1.0,
+                        1.0
+                      ],
+                      "stroke": [
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "width": 0.0,
+                      "rule": "NonZero",
+                      "grad": {
+                        "kind": "None",
+                        "stops": [],
+                        "lch": false,
+                        "to": [
+                          0.0,
+                          0.0,
+                          0.0,
+                          1.0
+                        ],
+                        "a": [
+                          0.3,
+                          0.2
+                        ],
+                        "b": [
+                          0.7,
+                          0.2
+                        ],
+                        "depth": 30.0
+                      },
+                      "emit": {
+                        "strength": 0.0,
+                        "tint": [
+                          1.0,
+                          1.0,
+                          1.0
+                        ],
+                        "clear": false
+                      }
+                    }
+                  }
+                },
+                "27": {
+                  "Light": {
+                    "strength": 1.5,
+                    "tint": [
+                      1.0,
+                      1.0,
+                      1.0
+                    ],
+                    "occlude": true
+                  }
+                },
+                "28": {
+                  "Merge": {
+                    "count": 10
+                  }
+                },
+                "29": "Output"
+              },
+              "edges": [
+                [
+                  [
+                    14,
+                    0
+                  ],
+                  13
+                ],
+                [
+                  [
+                    16,
+                    0
+                  ],
+                  15
+                ],
+                [
+                  [
+                    16,
+                    1
+                  ],
+                  14
+                ],
+                [
+                  [
+                    17,
+                    0
+                  ],
+                  14
+                ],
+                [
+                  [
+                    20,
+                    0
+                  ],
+                  19
+                ],
+                [
+                  [
+                    27,
+                    0
+                  ],
+                  26
+                ],
+                [
+                  [
+                    28,
+                    0
+                  ],
+                  25
+                ],
+                [
+                  [
+                    28,
+                    1
+                  ],
+                  21
+                ],
+                [
+                  [
+                    28,
+                    2
+                  ],
+                  22
+                ],
+                [
+                  [
+                    28,
+                    3
+                  ],
+                  23
+                ],
+                [
+                  [
+                    28,
+                    4
+                  ],
+                  24
+                ],
+                [
+                  [
+                    28,
+                    5
+                  ],
+                  27
+                ],
+                [
+                  [
+                    28,
+                    6
+                  ],
+                  17
+                ],
+                [
+                  [
+                    28,
+                    7
+                  ],
+                  18
+                ],
+                [
+                  [
+                    28,
+                    8
+                  ],
+                  20
+                ],
+                [
+                  [
+                    29,
+                    0
+                  ],
+                  28
+                ]
+              ],
+              "out": 29,
+              "layout": {
+                "13": [
+                  0.0,
+                  0.0
+                ],
+                "14": [
+                  190.0,
+                  0.0
+                ],
+                "15": [
+                  190.0,
+                  90.0
+                ],
+                "16": [
+                  380.0,
+                  0.0
+                ],
+                "17": [
+                  570.0,
+                  0.0
+                ],
+                "18": [
+                  0.0,
+                  180.0
+                ],
+                "19": [
+                  0.0,
+                  270.0
+                ],
+                "20": [
+                  190.0,
+                  270.0
+                ],
+                "21": [
+                  0.0,
+                  360.0
+                ],
+                "22": [
+                  0.0,
+                  450.0
+                ],
+                "23": [
+                  0.0,
+                  540.0
+                ],
+                "24": [
+                  0.0,
+                  630.0
+                ],
+                "25": [
+                  0.0,
+                  720.0
+                ],
+                "26": [
+                  0.0,
+                  810.0
+                ],
+                "27": [
+                  190.0,
+                  810.0
+                ],
+                "28": [
+                  760.0,
+                  270.0
+                ],
+                "29": [
+                  950.0,
+                  270.0
+                ]
+              },
+              "next_id": 30
+            },
+            "seed": 3.0,
+            "look": {
+              "light": true,
+              "intensity": 1.2,
+              "ambient": 0.01,
+              "air": 0.035,
+              "spacing": 3.0,
+              "sky": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "offset": 0.0,
+              "shadow": false,
+              "shadow_offset": [
+                8.0,
+                8.0
+              ],
+              "shadow_soft": 8.0,
+              "shadow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "glow": false,
+              "glow_size": 24.0,
+              "glow_color": [
+                1.0,
+                0.8,
+                0.3,
+                0.8
+              ],
+              "inner": false,
+              "inner_offset": [
+                4.0,
+                4.0
+              ],
+              "inner_soft": 6.0,
+              "inner_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.6
+              ],
+              "bevel": true,
+              "bevel_depth": 5.0,
+              "bevel_angle": 90.0,
+              "bevel_strength": 0.3,
+              "outline": false,
+              "outline_width": 4.0,
+              "outline_pos": 1.0,
+              "outline_color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ]
+            }
+          }
+        },
+        "pos": {
+          "x": 240.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "embers",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      },
+      "34": {
+        "kind": {
+          "Blend": {
+            "op": "Over",
+            "mix": 1.0,
+            "gain": [
+              1.0,
+              1.0
+            ]
+          }
+        },
+        "pos": {
+          "x": 360.0,
+          "y": 0.0
+        },
+        "disabled": false,
+        "size": 1.0,
+        "blend_res": null,
+        "anim": {},
+        "grade_sliders": false,
+        "ungang": [],
+        "ui_label": "",
+        "range": null,
+        "ui_cell": null,
+        "ui_span": null
+      }
+    },
+    "edges": [
+      [
+        34,
+        0,
+        33
+      ],
+      [
+        34,
+        1,
+        32
+      ]
+    ],
+    "edge_out": [],
+    "next_id": 35,
+    "view": 34,
+    "view_b": null,
+    "view_active_b": false,
+    "view_out": 0,
+    "view_b_out": 0,
+    "view_c": null,
+    "view_d": null,
+    "view2_active_d": false,
+    "view_c_out": 0,
+    "view_d_out": 0,
+    "view_pane": 0,
+    "patch": {
+      "mods": [],
+      "links": [],
+      "next": 0
+    },
+    "working": {
+      "primaries": "Ap1",
+      "curve": "Linear"
+    },
+    "node_status_min": "Alpha"
+  },
+  "canvas": null,
+  "range": [
+    1,
+    120
+  ],
+  "handles": [
+    0,
+    0
+  ],
+  "play_range": null,
+  "view_range": null,
+  "loop_span": "InOut",
+  "panel": [
+    1,
+    1
+  ],
+  "huds": [],
+  "activated": [],
+  "pinned_gizmos": [],
+  "prop_layouts": [],
+  "patch_tiles": []
+}

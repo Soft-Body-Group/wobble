@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wobble on WebGPU</title>
+<style>
+  :root {
+    --bg: #0e0f11; --panel: #17191c; --ink: #d8dade; --dim: #8a8f98;
+    --accent: #3fd0e0; --warn: #ff5a5a; --line: #26292e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-columns: 1fr 280px; grid-template-rows: auto 1fr auto; height: 100vh; }
+  header { grid-column: 1 / 3; padding: 10px 16px; border-bottom: 1px solid var(--line);
+    display: flex; gap: 12px; align-items: baseline; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header span { color: var(--dim); }
+  #stage { position: relative; min-width: 0; min-height: 0; }
+  canvas { width: 100%; height: 100%; display: block; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); padding: 12px 16px; overflow: auto; }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+    margin: 16px 0 8px; font-weight: 600; }
+  aside h2:first-child { margin-top: 0; }
+  label.row { display: grid; grid-template-columns: 80px 1fr 44px; gap: 8px; align-items: center; margin: 6px 0; }
+  label.row output { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  label.tog { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+  input[type=checkbox] { accent-color: var(--warn); }
+  aside p { color: var(--dim); margin: 6px 0; }
+  footer { grid-column: 1 / 3; padding: 6px 16px; border-top: 1px solid var(--line); color: var(--dim);
+    font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #err { position: absolute; inset: 0; display: none; place-items: center; padding: 24px; text-align: center; color: var(--warn); }
+  @media (max-width: 720px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 55vh auto auto; height: auto; }
+    header, footer { grid-column: 1; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header><h1>Wobble</h1><span id="adapter">starting WebGPU…</span></header>
+<div id="stage"><canvas id="view"></canvas><div id="err"></div></div>
+<aside>
+  <h2>Read → Grade → Transform → Blur → Glow</h2>
+  <label class="row">gain <input type="range" data-k="gain" min="0" max="4" step="0.01" value="1"><output></output></label>
+  <label class="row">saturation <input type="range" data-k="saturation" min="0" max="2" step="0.01" value="1.2"><output></output></label>
+  <label class="row">sway ° <input type="range" data-k="sway" min="0" max="20" step="0.1" value="4"><output></output></label>
+  <label class="row">blur <input type="range" data-k="blur" min="0" max="40" step="0.1" value="1.5"><output></output></label>
+  <label class="row">glow <input type="range" data-k="glow" min="0" max="3" step="0.01" value="0.8"><output></output></label>
+  <label class="row">threshold <input type="range" data-k="threshold" min="0" max="8" step="0.05" value="1.2"><output></output></label>
+  <label class="row">exposure <input type="range" data-k="exposure" min="-4" max="4" step="0.05" value="0"><output></output></label>
+  <h2>Bypass (recompiles)</h2>
+  <label class="tog"><input type="checkbox" data-k="bypass_grade"> Grade</label>
+  <label class="tog"><input type="checkbox" data-k="bypass_transform"> Transform</label>
+  <label class="tog"><input type="checkbox" data-k="bypass_blur"> Blur</label>
+  <label class="tog"><input type="checkbox" data-k="bypass_glow"> Glow</label>
+  <p>Sliders are uniform writes: no recompile. A bypass changes the graph's topology, so the fused shader is regenerated; the compile count shows it.</p>
+  <p><a href="../app/" style="color: var(--accent)">the full app →</a></p>
+</aside>
+<footer id="stats">…</footer>
+<script type="module">
+  import initWasm, { init, set, frame, resize } from "../pkg/web.js";
+  const $ = (s) => document.querySelector(s);
+  const canvas = $("#view");
+  const fail = (msg) => { const e = $("#err"); e.textContent = msg; e.style.display = "grid"; $("#adapter").textContent = "not running"; };
+  function fit() {
+    const r = canvas.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(r.width * d));
+    canvas.height = Math.max(1, Math.round(r.height * d));
+  }
+  try {
+    if (!navigator.gpu) throw new Error("This browser has no WebGPU. Try a recent Chrome, Edge or Safari.");
+    await initWasm();
+    fit();
+    $("#adapter").textContent = await init("view");
+  } catch (e) { fail(String(e.message || e)); throw e; }
+  new ResizeObserver(() => { fit(); resize(canvas.width, canvas.height); }).observe(canvas);
+  for (const el of document.querySelectorAll("input[data-k]")) {
+    const out = el.parentElement.querySelector("output");
+    const push = () => {
+      const v = el.type === "checkbox" ? (el.checked ? 1 : 0) : parseFloat(el.value);
+      if (out) out.textContent = v.toFixed(2);
+      set(el.dataset.k, v);
+    };
+    el.addEventListener("input", push);
+    push();
+  }
+  let last = performance.now(), frames = 0, fps = 0;
+  function tick(now) {
+    const line = frame(now);
+    frames++;
+    if (now - last > 500) { fps = frames * 1000 / (now - last); frames = 0; last = now; }
+    if (line) $("#stats").textContent = `${fps.toFixed(0)} fps · ${line}`;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

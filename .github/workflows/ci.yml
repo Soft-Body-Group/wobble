@@ -1,0 +1,165 @@
+name: CI
+
+# Runs on GitHub-hosted runners (Linux, macOS, Windows) for:
+#
+#  - a push to main and every pull request (docs-only ones excepted);
+#  - `workflow_dispatch`: the Actions tab, or `gh workflow run ci.yml`, to
+#    ask for a build of any branch; it uploads the binaries.
+#  - `workflow_call` from alpha.yml and release.yml: an alpha or a public
+#    build (a `v*` tag) only ships after this whole workflow has passed on
+#    the commit it ships.
+#
+# A newer run supersedes an older one for the same ref rather than queueing
+# behind it.
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '.agents/**'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.gitattributes'
+  pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '.agents/**'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.gitattributes'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The project's standard is a warning-free build; CI holds that line.
+  RUSTFLAGS: -D warnings
+  # The test build (dev profile) with full debug info, on top of the release
+  # build, ran the Linux runner out of disk ("No space left on device", the
+  # linker dying with SIGBUS). Line tables keep file:line in a failing
+  # test's backtrace at a fraction of the size.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  build:
+    name: build & test — ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should never hide the state of the others.
+      fail-fast: false
+      matrix:
+        include:
+          # GitHub-hosted runners only: a public repo runs strangers' pull
+          # requests, which must never reach a machine of ours.
+          - { os: ubuntu-latest,  name: linux,   bin: wobble }
+          - { os: macos-latest,   name: macos,   bin: wobble }
+          - { os: windows-latest, name: windows, bin: wobble.exe }
+    steps:
+      # The Linux runner ships ~20 GB of toolchains this project never uses;
+      # a release build plus a test build of the workspace needs the room.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      # x11-dl / xkbcommon-dl / wayland load at runtime, and rfd on Linux
+      # uses the XDG portal (no GTK in the dep graph), so this is a small
+      # link-time insurance set rather than a full desktop SDK. wgpu builds
+      # against the loader, not a driver: the runner has no GPU, and the
+      # unit tests do not need one.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libwayland-dev
+
+      - name: Build
+        run: cargo build --workspace --release
+
+      # Crashes the build on purpose, before any window exists: a panic and
+      # an abort everywhere; on Windows also an access violation through the
+      # exception filter (report + minidump + symbolised stack). Isolated
+      # outbox, nothing uploaded — see tools/crash_smoke.sh.
+      - name: Crash capture smoke test
+        shell: bash
+        timeout-minutes: 5
+        run: sh tools/crash_smoke.sh target/release/${{ matrix.bin }}
+
+      # Unit tests only: they are CPU-side (naga validation, decoders, graph
+      # evaluation, expression parsing). The --test-* UI suites drive a real
+      # window and GPU, so they stay a local step — see CLAUDE.md.
+      - name: Test
+        run: cargo test --workspace --no-fail-fast
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wobble-${{ matrix.name }}
+          path: target/release/${{ matrix.bin }}
+          retention-days: 1
+          if-no-files-found: error
+
+  # The OpenDRT view transform is GPLv3 and off by default. Kept compiling
+  # here so the feature cannot bit-rot; deliberately no artifact upload.
+  opendrt:
+    name: opendrt feature (GPLv3, check only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: opendrt
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libwayland-dev
+      # Package-qualified: a bare `--features opendrt` at the workspace root
+      # silently does nothing.
+      - run: cargo check -p app --features app/opendrt
+
+  clippy:
+    name: clippy (advisory)
+    runs-on: ubuntu-latest
+    # Advisory on purpose: the codebase holds a zero-rustc-warning bar, not
+    # a zero-clippy-lint one. Read it, do not be blocked by it.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libwayland-dev
+      # `colors` shares app files whose test blocks need the app crate
+      # (its bin is `test = false`), so it is linted without its tests.
+      - run: cargo clippy --workspace --all-targets --exclude colors
+        env:
+          RUSTFLAGS: ""
+      - run: cargo clippy -p colors
+        env:
+          RUSTFLAGS: ""

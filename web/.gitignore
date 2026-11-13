@@ -1,0 +1,5 @@
+# Build output (build.sh, build-app.sh) and local test media.
+www/pkg/
+www/app/wobble.js
+www/app/wobble_bg.wasm
+www/test-media/
