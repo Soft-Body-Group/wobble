@@ -9,6 +9,7 @@ mod r#box;
 mod browser;
 mod cachemeter;
 mod channels;
+mod click;
 mod colourkey;
 mod compose;
 mod cornerpin;
