@@ -4,6 +4,7 @@ mod anim;
 mod bake;
 mod bin;
 mod blender;
+mod blendnav;
 mod r#box;
 mod cachemeter;
 mod channels;
