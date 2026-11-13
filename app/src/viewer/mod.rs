@@ -6,3 +6,4 @@ mod sammie;
 mod textpath;
 mod camtrack;
 mod planar;
+mod tracker;
