@@ -12,6 +12,7 @@ mod frames;
 mod gizmokey;
 mod harp;
 mod inout;
+mod keymap;
 mod layer;
 mod paint;
 mod patchlive;
