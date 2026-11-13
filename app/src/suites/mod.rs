@@ -28,6 +28,7 @@ mod inout;
 mod keyer;
 mod keymap;
 mod layer;
+mod magnet;
 mod mblur;
 mod nodepack;
 mod noise;
