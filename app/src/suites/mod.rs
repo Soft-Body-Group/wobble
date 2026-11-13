@@ -45,6 +45,7 @@ mod subwob;
 mod tab;
 mod thumbs;
 mod viewlock;
+mod viewpie;
 mod viewswitch;
 mod zones;
 mod zoom;
