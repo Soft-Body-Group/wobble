@@ -21,3 +21,4 @@ mod spline;
 mod cornerpin;
 mod pathedit;
 mod transform;
+mod hudchips;
