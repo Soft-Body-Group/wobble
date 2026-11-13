@@ -18,6 +18,7 @@ mod patchlive;
 mod picker;
 mod range;
 mod record;
+mod region;
 mod shot;
 mod slice;
 mod subwob;
