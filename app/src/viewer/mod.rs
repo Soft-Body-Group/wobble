@@ -3,3 +3,4 @@
 mod huds;
 mod keyerhud;
 mod sammie;
+mod textpath;
