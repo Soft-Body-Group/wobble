@@ -2,6 +2,7 @@
 //! holding that suite's driver. main.rs only dispatches to them.
 mod compose;
 mod curveedit;
+mod dual;
 mod eyedrop;
 mod record;
 mod shot;
