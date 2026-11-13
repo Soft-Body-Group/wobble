@@ -36,6 +36,7 @@ mod slice;
 mod still;
 mod subwob;
 mod tab;
+mod thumbs;
 mod viewlock;
 mod viewswitch;
 mod zones;
