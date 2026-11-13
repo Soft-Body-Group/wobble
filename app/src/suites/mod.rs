@@ -35,6 +35,7 @@ mod paint;
 mod panelw;
 mod patchlive;
 mod picker;
+mod planar;
 mod plugin;
 mod precache;
 mod propspie;
