@@ -12,3 +12,4 @@ mod geohud;
 mod geoonion;
 mod geobrush;
 mod geoedit;
+mod geobones;
