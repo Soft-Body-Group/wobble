@@ -225,7 +225,7 @@ impl Gfx {
 
     pub(crate) fn ltxhdr_view(&self, node: u64) -> View {
         let dir = install_dir();
-        let mine = self.ltxhdr.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.ltxhdr.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -243,18 +243,18 @@ impl Gfx {
             let current = want.as_ref().is_some_and(|d| l.path == d.to_string_lossy());
             (l.seq.frames.len(), current)
         });
-        let fetch = self.ltxhdr.fetch.as_ref();
+        let fetch = self.jobs.ltxhdr.fetch.as_ref();
         View {
             dir: dir.to_string_lossy().into_owned(),
             installed: installed(&dir) || stand_in(),
             uv: uv().is_some(),
             installing: self
-                .ltxhdr
+                .jobs.ltxhdr
                 .install
                 .as_ref()
                 .filter(|i| i.result.is_none())
                 .map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.ltxhdr.install.as_ref().and_then(|i| i.result.clone()),
+            install_result: self.jobs.ltxhdr.install.as_ref().and_then(|i| i.result.clone()),
             weights: weights_ready(&models_dir()) || stand_in(),
             fetching: fetch
                 .filter(|f| f.result.is_none())
@@ -265,7 +265,7 @@ impl Gfx {
             has_input: self.egraph.input_of(node, 0).is_some(),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.ltxhdr.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.ltxhdr.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -273,7 +273,7 @@ impl Gfx {
         match a {
             Action::Run => self.ltxhdr_start(node),
             Action::Cancel => {
-                if let Some(r) = self.ltxhdr.run.take() {
+                if let Some(r) = self.jobs.ltxhdr.run.take() {
                     match r.phase {
                         Phase::Running { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -288,24 +288,24 @@ impl Gfx {
             Action::Install => self.ltxhdr_install(),
             Action::Fetch => self.ltxhdr_fetch(),
             Action::Dismiss => {
-                if self.ltxhdr.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.ltxhdr.run = None;
+                if self.jobs.ltxhdr.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.ltxhdr.run = None;
                 }
-                if self.ltxhdr.install.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.ltxhdr.install = None;
+                if self.jobs.ltxhdr.install.as_ref().is_some_and(|i| i.result.is_some()) {
+                    self.jobs.ltxhdr.install = None;
                 }
-                if self.ltxhdr.fetch.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.ltxhdr.fetch = None;
+                if self.jobs.ltxhdr.fetch.as_ref().is_some_and(|i| i.result.is_some()) {
+                    self.jobs.ltxhdr.fetch = None;
                 }
             }
         }
     }
 
     fn ltxhdr_fail(&mut self, node: u64, e: &str) {
-        match self.ltxhdr.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.ltxhdr.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
             None => {
-                self.ltxhdr.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] })
+                self.jobs.ltxhdr.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] })
             }
         }
     }
@@ -313,7 +313,7 @@ impl Gfx {
     /// `install…`: fetch the pinned checkout and build its environment, on
     /// a thread, its output streamed to the panel.
     fn ltxhdr_install(&mut self) {
-        if self.ltxhdr.install.as_ref().is_some_and(|i| i.result.is_none()) {
+        if self.jobs.ltxhdr.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
         let dir = install_dir();
@@ -322,12 +322,12 @@ impl Gfx {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (&dir, &tx);
-            self.ltxhdr.install = Some(job(rx, Some(Err("the tool runs as a process: not in the web build".into()))));
+            self.jobs.ltxhdr.install = Some(job(rx, Some(Err("the tool runs as a process: not in the web build".into()))));
             return;
         }
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
         let Some(uv) = uv() else {
-            self.ltxhdr.install = Some(job(rx, Some(Err(UV_MISSING.into()))));
+            self.jobs.ltxhdr.install = Some(job(rx, Some(Err(UV_MISSING.into()))));
             return;
         };
         let spawned = std::thread::Builder::new()
@@ -340,27 +340,27 @@ impl Gfx {
                 });
             })
             .is_ok();
-        self.ltxhdr.install = Some(job(rx, (!spawned).then_some(Err("could not start a thread".into()))));
+        self.jobs.ltxhdr.install = Some(job(rx, (!spawned).then_some(Err("could not start a thread".into()))));
     }
 
     /// `fetch weights…`: the driver's `--fetch`, as a process, with the
     /// user's own Hugging Face login.
     fn ltxhdr_fetch(&mut self) {
-        if self.ltxhdr.fetch.as_ref().is_some_and(|f| f.result.is_none()) {
+        if self.jobs.ltxhdr.fetch.as_ref().is_some_and(|f| f.result.is_none()) {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let mut job = Job { rx, log: vec![], progress: (0, 0), result: None };
         if !installed(&install_dir()) {
             job.result = Some(Err("install LTX-2 first: the fetch runs in its environment".into()));
-            self.ltxhdr.fetch = Some(job);
+            self.jobs.ltxhdr.fetch = Some(job);
             return;
         }
         let mut cmd = match command(&install_dir()) {
             Ok(c) => c,
             Err(e) => {
                 job.result = Some(Err(e));
-                self.ltxhdr.fetch = Some(job);
+                self.jobs.ltxhdr.fetch = Some(job);
                 return;
             }
         };
@@ -368,12 +368,12 @@ impl Gfx {
         if let Err(e) = spawn(cmd, tx, Arc::new(AtomicBool::new(false)), "ltxhdr-fetch") {
             job.result = Some(Err(e));
         }
-        self.ltxhdr.fetch = Some(job);
+        self.jobs.ltxhdr.fetch = Some(job);
     }
 
     /// The `run` click: adopt a result on disk, else render the input.
     fn ltxhdr_start(&mut self, node: u64) {
-        if self.ltxhdr.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.ltxhdr.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -389,7 +389,7 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.ltxhdr.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()), log: vec![] });
+            self.jobs.ltxhdr.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()), log: vec![] });
             return;
         }
         if !stand_in() {
@@ -400,7 +400,7 @@ impl Gfx {
                 return self.ltxhdr_fail(node, "the weights are not fetched: press fetch weights…");
             }
         }
-        self.ltxhdr.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render, log: vec![] });
+        self.jobs.ltxhdr.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render, log: vec![] });
         let size = self.node_resolution(input, &mut std::collections::HashSet::new());
         if let Err(e) = self.render_input_frames(node, input, dir, size, crate::BakeSink::LtxHdr) {
             self.ltxhdr_fail(node, &e);
@@ -409,7 +409,7 @@ impl Gfx {
 
     /// The bake loop finished rendering the input: run the tool.
     pub(crate) fn ltxhdr_render_finished(&mut self, node: u64) {
-        let Some(r) = self.ltxhdr.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.ltxhdr.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.ltxhdr_fail(node, "the node is gone");
@@ -441,7 +441,7 @@ impl Gfx {
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "ltxhdr") {
             return self.ltxhdr_fail(node, &e);
         }
-        if let Some(r) = self.ltxhdr.run.as_mut() {
+        if let Some(r) = self.jobs.ltxhdr.run.as_mut() {
             r.phase = Phase::Running { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -449,13 +449,13 @@ impl Gfx {
     /// Every redraw: drain the jobs' messages, catch a render that died,
     /// adopt a finished result.
     pub(crate) fn ltxhdr_poll(&mut self) {
-        if let Some(i) = self.ltxhdr.install.as_mut() {
+        if let Some(i) = self.jobs.ltxhdr.install.as_mut() {
             drain(i);
         }
-        if let Some(f) = self.ltxhdr.fetch.as_mut() {
+        if let Some(f) = self.jobs.ltxhdr.fetch.as_mut() {
             drain(f);
         }
-        let Some(r) = self.ltxhdr.run.as_mut() else { return };
+        let Some(r) = self.jobs.ltxhdr.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -745,7 +745,7 @@ impl Gfx {
                 _ => None,
             }
         };
-        let phase = |me: &Self| match me.ltxhdr.run.as_ref().map(|r| &r.phase) {
+        let phase = |me: &Self| match me.jobs.ltxhdr.run.as_ref().map(|r| &r.phase) {
             Some(Phase::Failed(e)) => Err(e.clone()),
             Some(Phase::Done(_)) => Ok(true),
             _ => Ok(false),

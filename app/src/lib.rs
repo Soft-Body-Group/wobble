@@ -5764,20 +5764,7 @@ struct Gfx {
     /// finishes (marks itself done, is adopted) only once these are zero.
     bake_writes: Arc<std::sync::atomic::AtomicUsize>,
     bake_write_err: Arc<std::sync::Mutex<Option<String>>>,
-    /// GenAI runs: capture, quote, the one job going, the account.
-    genai: genaiui::Runs,
-    corridor: corridorkey::Jobs,
-    sammie: sammie::Jobs,
-    flow: flowui::Jobs,
-    /// A Stabilize node's analysis (`stabilizeui`).
-    stab: stabilizeui::Jobs,
-    /// A CameraTrack node's solve (`camtrackui`).
-    camtrack: camtrackui::Jobs,
-    upscale: upscaleui::UpscaleJobs,
-    hdrcnn: hdrcnnui::HdrCnnJobs,
-    seedvr: seedvr::Jobs,
-    depth: depth::Jobs,
-    ltxhdr: ltxhdr::Jobs,
+    jobs: state::NodeJobs,
     render_play: Option<RenderPlay>,
     render_status: Option<String>,
     /// Running blob track, at most one at a time (the node it belongs to).
@@ -7898,17 +7885,19 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         graph_bake_origin: (0, 0),
         bake_writes: Default::default(),
         bake_write_err: Default::default(),
-        genai: Default::default(),
-        corridor: Default::default(),
-        sammie: Default::default(),
-        flow: Default::default(),
-        stab: Default::default(),
-        camtrack: Default::default(),
-        upscale: Default::default(),
-        hdrcnn: Default::default(),
-        seedvr: Default::default(),
-        depth: Default::default(),
-        ltxhdr: Default::default(),
+        jobs: state::NodeJobs {
+            genai: Default::default(),
+            corridor: Default::default(),
+            sammie: Default::default(),
+            flow: Default::default(),
+            stab: Default::default(),
+            camtrack: Default::default(),
+            upscale: Default::default(),
+            hdrcnn: Default::default(),
+            seedvr: Default::default(),
+            depth: Default::default(),
+            ltxhdr: Default::default(),
+        },
         render_play: None,
         render_status: None,
         track_job: None,
@@ -8965,7 +8954,7 @@ impl Gfx {
                     let loaded = self.loaded.get(id);
                     p.loaded = loaded.is_some();
                     p.start = loaded.and_then(|l| l.first_frame);
-                    (p.top, p.metric_take) = loaded.and_then(|l| self.depth.stats.get(&l.path).copied()).unwrap_or((1.0, false));
+                    (p.top, p.metric_take) = loaded.and_then(|l| self.jobs.depth.stats.get(&l.path).copied()).unwrap_or((1.0, false));
                 }
                 if let NodeKind::LtxHdr(p) = kind {
                     let loaded = self.loaded.get(id);
@@ -9105,7 +9094,7 @@ impl Gfx {
                 for row in owned.chunks(stride).take(h as usize) {
                     px.extend(row[..(w * 4) as usize].iter().map(|v| v.to_f32()));
                 }
-                self.genai.captured.push((bake.node, port, px, w, h));
+                self.jobs.genai.captured.push((bake.node, port, px, w, h));
                 bake.next += 1;
                 continue;
             }
@@ -9424,7 +9413,7 @@ impl Gfx {
                 let loaded = self.loaded.get(id);
                 p.loaded = loaded.is_some();
                 p.start = loaded.and_then(|l| l.first_frame);
-                (p.top, p.metric_take) = loaded.and_then(|l| self.depth.stats.get(&l.path).copied()).unwrap_or((1.0, false));
+                (p.top, p.metric_take) = loaded.and_then(|l| self.jobs.depth.stats.get(&l.path).copied()).unwrap_or((1.0, false));
             }
             if let NodeKind::LtxHdr(p) = kind {
                 let loaded = self.loaded.get(id);
@@ -12110,38 +12099,38 @@ impl Gfx {
         if self.track_job.is_some() {
             self.poll_track();
         }
-        if self.genai.run.is_some() || self.genai.cfg.relay_token.is_some() {
+        if self.jobs.genai.run.is_some() || self.jobs.genai.cfg.relay_token.is_some() {
             self.genai_poll();
         }
-        if self.corridor.run.is_some() || self.corridor.install.is_some() {
+        if self.jobs.corridor.run.is_some() || self.jobs.corridor.install.is_some() {
             self.corridor_poll();
         }
-        if self.sammie.run.is_some() || self.sammie.install.is_some() || self.sammie.edited.is_some() {
+        if self.jobs.sammie.run.is_some() || self.jobs.sammie.install.is_some() || self.jobs.sammie.edited.is_some() {
             self.sammie_poll();
         }
-        if self.flow.run.is_some() {
+        if self.jobs.flow.run.is_some() {
             self.flow_poll();
         }
-        if self.stab.run.is_some() {
+        if self.jobs.stab.run.is_some() {
             self.stab_poll();
         }
-        if self.camtrack.run.is_some() {
+        if self.jobs.camtrack.run.is_some() {
             self.ct_poll();
         }
         self.camtrack_sync();
-        if self.upscale.run.is_some() {
+        if self.jobs.upscale.run.is_some() {
             self.upscale_poll();
         }
-        if self.hdrcnn.run.is_some() {
+        if self.jobs.hdrcnn.run.is_some() {
             self.hdrcnn_poll();
         }
-        if self.seedvr.run.is_some() || self.seedvr.install.is_some() {
+        if self.jobs.seedvr.run.is_some() || self.jobs.seedvr.install.is_some() {
             self.seedvr_poll();
         }
-        if self.depth.run.is_some() || self.depth.install.is_some() {
+        if self.jobs.depth.run.is_some() || self.jobs.depth.install.is_some() {
             self.depth_poll();
         }
-        if self.ltxhdr.run.is_some() || self.ltxhdr.install.is_some() || self.ltxhdr.fetch.is_some() {
+        if self.jobs.ltxhdr.run.is_some() || self.jobs.ltxhdr.install.is_some() || self.jobs.ltxhdr.fetch.is_some() {
             self.ltxhdr_poll();
         }
         if self.planar_job.is_some() {

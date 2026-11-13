@@ -50,7 +50,7 @@ impl Gfx {
     }
 
     pub(crate) fn hdrcnn_view(&self, node: u64) -> View {
-        let mine = self.hdrcnn.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.hdrcnn.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -78,7 +78,7 @@ impl Gfx {
                 .is_some_and(|p| engine::models::ready_path(p.model.model_id()).is_ok()),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.hdrcnn.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.hdrcnn.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -86,7 +86,7 @@ impl Gfx {
         match a {
             Action::Analyse => self.hdrcnn_start(node),
             Action::Cancel => {
-                if let Some(r) = self.hdrcnn.run.take() {
+                if let Some(r) = self.jobs.hdrcnn.run.take() {
                     match r.phase {
                         Phase::Solving { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -99,24 +99,24 @@ impl Gfx {
                 }
             }
             Action::Dismiss => {
-                if self.hdrcnn.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.hdrcnn.run = None;
+                if self.jobs.hdrcnn.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.hdrcnn.run = None;
                 }
             }
         }
     }
 
     fn hdrcnn_fail(&mut self, node: u64, e: &str) {
-        match self.hdrcnn.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.hdrcnn.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.hdrcnn.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
+            None => self.jobs.hdrcnn.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
         }
     }
 
     /// The `render` click: adopt a result already on disk, else render the
     /// input.
     fn hdrcnn_start(&mut self, node: u64) {
-        if self.hdrcnn.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.hdrcnn.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -132,14 +132,14 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.hdrcnn.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()) });
+            self.jobs.hdrcnn.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()) });
             return;
         }
         let model = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.model).unwrap_or_default();
         if let Err(e) = engine::models::ready_path(model.model_id()) {
             return self.hdrcnn_fail(node, &format!("{e}"));
         }
-        self.hdrcnn.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+        self.jobs.hdrcnn.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
         let size = self.node_resolution(input, &mut std::collections::HashSet::new());
         if let Err(e) = self.render_input_frames(node, input, dir, size, crate::BakeSink::HdrCnn) {
             self.hdrcnn_fail(node, &e);
@@ -148,7 +148,7 @@ impl Gfx {
 
     /// The bake loop finished rendering the input: reconstruct on a worker.
     pub(crate) fn hdrcnn_render_finished(&mut self, node: u64) {
-        let Some(r) = self.hdrcnn.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.hdrcnn.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.hdrcnn_fail(node, "the node is gone");
@@ -178,7 +178,7 @@ impl Gfx {
         if let Err(e) = spawned {
             return self.hdrcnn_fail(node, &format!("could not start the worker: {e}"));
         }
-        if let Some(r) = self.hdrcnn.run.as_mut() {
+        if let Some(r) = self.jobs.hdrcnn.run.as_mut() {
             r.phase = Phase::Solving { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -186,7 +186,7 @@ impl Gfx {
     /// Every redraw: drain the worker, catch a render that died, adopt a
     /// finished result.
     pub(crate) fn hdrcnn_poll(&mut self) {
-        let Some(r) = self.hdrcnn.run.as_mut() else { return };
+        let Some(r) = self.jobs.hdrcnn.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -302,7 +302,7 @@ impl Gfx {
                 _ => None,
             }
         };
-        let phase = |me: &Self| match me.hdrcnn.run.as_ref().map(|r| &r.phase) {
+        let phase = |me: &Self| match me.jobs.hdrcnn.run.as_ref().map(|r| &r.phase) {
             Some(Phase::Failed(e)) => Err(e.clone()),
             Some(Phase::Done(_)) => Ok(true),
             _ => Ok(false),

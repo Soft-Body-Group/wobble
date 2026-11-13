@@ -327,7 +327,7 @@ impl Gfx {
 
     pub(crate) fn corridor_view(&self, node: u64) -> View {
         let dir = install_dir();
-        let mine = self.corridor.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.corridor.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Plate) | Some(Phase::Hint) => {
@@ -351,15 +351,15 @@ impl Gfx {
             dir: dir.to_string_lossy().into_owned(),
             installed: installed(&dir) || std::env::var_os("WOBBLE_CORRIDORKEY_CMD").is_some(),
             uv: uv().is_some(),
-            installing: self.corridor.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.corridor.install.as_ref().and_then(|i| i.result.clone()),
+            installing: self.jobs.corridor.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
+            install_result: self.jobs.corridor.install.as_ref().and_then(|i| i.result.clone()),
             state,
             log: mine.map(|r| r.log.clone()).unwrap_or_default(),
             has_input: self.egraph.input_of(node, 0).is_some(),
             has_hint: self.egraph.input_of(node, 1).is_some(),
             loaded,
             on_disk,
-            busy_elsewhere: self.corridor.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.corridor.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -367,7 +367,7 @@ impl Gfx {
         match a {
             Action::Key => self.corridor_start(node),
             Action::Cancel => {
-                if let Some(r) = self.corridor.run.take() {
+                if let Some(r) = self.jobs.corridor.run.take() {
                     match r.phase {
                         Phase::Keying { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Plate | Phase::Hint => {
@@ -381,11 +381,11 @@ impl Gfx {
             }
             Action::Install => self.corridor_install(),
             Action::Dismiss => {
-                if self.corridor.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.corridor.run = None;
+                if self.jobs.corridor.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.corridor.run = None;
                 }
-                if self.corridor.install.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.corridor.install = None;
+                if self.jobs.corridor.install.as_ref().is_some_and(|i| i.result.is_some()) {
+                    self.jobs.corridor.install = None;
                 }
             }
         }
@@ -394,7 +394,7 @@ impl Gfx {
     /// `install…`: clone the tool and build its environment, on a thread,
     /// its output streamed to the panel.
     fn corridor_install(&mut self) {
-        if self.corridor.install.as_ref().is_some_and(|i| i.result.is_none()) {
+        if self.jobs.corridor.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
         let dir = install_dir();
@@ -403,7 +403,7 @@ impl Gfx {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (&dir, &tx);
-            self.corridor.install = Some(Install {
+            self.jobs.corridor.install = Some(Install {
                 rx,
                 log: vec![],
                 result: Some(Err("the tool runs as a process: not in the web build".into())),
@@ -412,7 +412,7 @@ impl Gfx {
         }
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
         let Some(uv) = uv() else {
-            self.corridor.install = Some(Install {
+            self.jobs.corridor.install = Some(Install {
                 rx,
                 log: vec![],
                 result: Some(Err(UV_MISSING.into())),
@@ -467,7 +467,7 @@ impl Gfx {
                 });
             })
             .is_ok();
-        self.corridor.install = Some(Install {
+        self.jobs.corridor.install = Some(Install {
             rx,
             log: vec![],
             result: (!spawned).then_some(Err("could not start a thread".into())),
@@ -477,9 +477,9 @@ impl Gfx {
     /// The `key` click: adopt a finished run, else render the plate.
     fn corridor_start(&mut self, node: u64) {
         let fail = |me: &mut Self, e: &str| {
-            me.corridor.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] });
+            me.jobs.corridor.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] });
         };
-        if self.corridor.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.corridor.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -495,13 +495,13 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.corridor.run = Some(Run { node, dir, phase: Phase::Done("loaded the key on disk".into()), log: vec![] });
+            self.jobs.corridor.run = Some(Run { node, dir, phase: Phase::Done("loaded the key on disk".into()), log: vec![] });
             return;
         }
         if !installed(&install_dir()) && std::env::var_os("WOBBLE_CORRIDORKEY_CMD").is_none() {
             return fail(self, "CorridorKey is not installed: press install…");
         }
-        self.corridor.run = Some(Run { node, dir: dir.clone(), phase: Phase::Plate, log: vec![] });
+        self.jobs.corridor.run = Some(Run { node, dir: dir.clone(), phase: Phase::Plate, log: vec![] });
         if let Err(e) = self.corridor_render(node, input, 0, None) {
             fail(self, &e);
         }
@@ -510,7 +510,7 @@ impl Gfx {
     /// A `SubtreeBake` of `input` into `<dir>/Input` (port 0) or
     /// `<dir>/AlphaHint` (port 1); `hint` splices the stand-in key in.
     fn corridor_render(&mut self, node: u64, input: u64, port: usize, hint: Option<ScreenKeyParams>) -> Result<(), String> {
-        let Some(r) = self.corridor.run.as_ref().filter(|r| r.node == node) else { return Ok(()) };
+        let Some(r) = self.jobs.corridor.run.as_ref().filter(|r| r.node == node) else { return Ok(()) };
         let dir = r.dir.clone();
         let sub = dir.join(if port == 0 { "Input" } else { "AlphaHint" });
         std::fs::create_dir_all(&sub).map_err(|e| format!("{e}"))?;
@@ -555,7 +555,7 @@ impl Gfx {
 
     /// The bake loop finished rendering `port`: on to the hint, then the tool.
     pub(crate) fn corridor_render_finished(&mut self, node: u64, port: usize) {
-        let Some(r) = self.corridor.run.as_mut().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.corridor.run.as_mut().filter(|r| r.node == node) else { return };
         if port == 0 {
             r.phase = Phase::Hint;
             let screen = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.screen).unwrap_or_default();
@@ -597,13 +597,13 @@ impl Gfx {
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "corridorkey") {
             return self.corridor_fail(node, &e);
         }
-        if let Some(r) = self.corridor.run.as_mut() {
+        if let Some(r) = self.jobs.corridor.run.as_mut() {
             r.phase = Phase::Keying { rx, cancel, done: 0, total: 0 };
         }
     }
 
     fn corridor_fail(&mut self, node: u64, e: &str) {
-        if let Some(r) = self.corridor.run.as_mut().filter(|r| r.node == node) {
+        if let Some(r) = self.jobs.corridor.run.as_mut().filter(|r| r.node == node) {
             r.phase = Phase::Failed(e.to_string());
         }
     }
@@ -611,7 +611,7 @@ impl Gfx {
     /// Every redraw: drain the tool's messages, catch a render that died,
     /// adopt a finished key.
     pub(crate) fn corridor_poll(&mut self) {
-        if let Some(i) = self.corridor.install.as_mut() {
+        if let Some(i) = self.jobs.corridor.install.as_mut() {
             while let Ok(m) = i.rx.try_recv() {
                 match m {
                     Msg::Line(l) => push_log(&mut i.log, l),
@@ -621,7 +621,7 @@ impl Gfx {
                 }
             }
         }
-        let Some(r) = self.corridor.run.as_mut() else { return };
+        let Some(r) = self.jobs.corridor.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Plate | Phase::Hint) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -835,12 +835,12 @@ impl Gfx {
                 p.output = o;
             }
         };
-        let phase = |me: &Self| me.corridor.run.as_ref().map(|r| match &r.phase {
+        let phase = |me: &Self| me.jobs.corridor.run.as_ref().map(|r| match &r.phase {
             Phase::Done(_) => Ok(()),
             Phase::Failed(e) => Err(e.clone()),
             _ => Ok(()),
         });
-        let done = |me: &Self| matches!(me.corridor.run.as_ref().map(|r| &r.phase), Some(Phase::Done(_)));
+        let done = |me: &Self| matches!(me.jobs.corridor.run.as_ref().map(|r| &r.phase), Some(Phase::Done(_)));
         match t.stage {
             0 if self.playback.is_some() && self.displayed_total >= 2 => {
                 // Hermetic: the stand-in in place of the tool, so nothing
@@ -915,7 +915,7 @@ impl Gfx {
                     let old = self.loaded.get(&t.node).map(|l| l.path.clone());
                     self.corridor_action(t.node, Action::Dismiss);
                     self.corridor_action(t.node, Action::Key);
-                    if let Some(r) = &self.corridor.run {
+                    if let Some(r) = &self.jobs.corridor.run {
                         if Some(r.dir.join("Processed").to_string_lossy().into_owned()) == old {
                             fail("wiring a hint did not change the key's directory".into());
                         }
@@ -966,7 +966,7 @@ impl Gfx {
     }
 
     fn corridor_state_words(&self) -> String {
-        match self.corridor.run.as_ref().map(|r| &r.phase) {
+        match self.jobs.corridor.run.as_ref().map(|r| &r.phase) {
             None => "no run".into(),
             Some(Phase::Plate) => format!("plate, bake {}", self.graph_bake.is_some()),
             Some(Phase::Hint) => format!("hint, bake {}", self.graph_bake.is_some()),

@@ -437,7 +437,7 @@ impl Gfx {
 
     pub(crate) fn sammie_view(&self, node: u64) -> View {
         let dir = install_dir();
-        let mine = self.sammie.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.sammie.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Plate) => match &self.graph_bake {
@@ -457,14 +457,14 @@ impl Gfx {
             dir: dir.to_string_lossy().into_owned(),
             installed: installed(&dir) || stand_in(),
             uv: uv().is_some(),
-            installing: self.sammie.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.sammie.install.as_ref().and_then(|i| i.result.clone()),
+            installing: self.jobs.sammie.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
+            install_result: self.jobs.sammie.install.as_ref().and_then(|i| i.result.clone()),
             state,
             log: mine.map(|r| r.log.clone()).unwrap_or_default(),
             has_input: self.egraph.input_of(node, 0).is_some(),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.sammie.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.sammie.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             tick: self.timeline_pos as i64,
             preview: self.sammie_preview_state(node),
             previewing: mine.is_some_and(|r| r.preview.is_some() && r.active()),
@@ -476,7 +476,7 @@ impl Gfx {
             Action::Track => self.sammie_start(node),
             Action::Preview => self.sammie_preview(node),
             Action::Cancel => {
-                if let Some(r) = self.sammie.run.take() {
+                if let Some(r) = self.jobs.sammie.run.take() {
                     match r.phase {
                         Phase::Tracking { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Plate => {
@@ -490,11 +490,11 @@ impl Gfx {
             }
             Action::Install => self.sammie_install(),
             Action::Dismiss => {
-                if self.sammie.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.sammie.run = None;
+                if self.jobs.sammie.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.sammie.run = None;
                 }
-                if self.sammie.install.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.sammie.install = None;
+                if self.jobs.sammie.install.as_ref().is_some_and(|i| i.result.is_some()) {
+                    self.jobs.sammie.install = None;
                 }
             }
             Action::ClearFrame | Action::ClearAll => {
@@ -510,18 +510,18 @@ impl Gfx {
     /// `install…`: clone the tool and build its environment, on a thread,
     /// its output streamed to the panel.
     fn sammie_install(&mut self) {
-        if self.sammie.install.as_ref().is_some_and(|i| i.result.is_none()) {
+        if self.jobs.sammie.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
         let dir = install_dir();
         let (tx, rx) = std::sync::mpsc::channel();
         let failed = |e: &str| Install { rx: std::sync::mpsc::channel().1, log: vec![], result: Some(Err(e.into())) };
         if cfg!(target_arch = "wasm32") {
-            self.sammie.install = Some(failed("the tool runs as a process: not in the web build"));
+            self.jobs.sammie.install = Some(failed("the tool runs as a process: not in the web build"));
             return;
         }
         let Some(uv) = uv() else {
-            self.sammie.install = Some(failed(UV_MISSING));
+            self.jobs.sammie.install = Some(failed(UV_MISSING));
             return;
         };
         let extra = torch_extra();
@@ -553,7 +553,7 @@ impl Gfx {
                 });
             })
             .is_ok();
-        self.sammie.install = Some(Install {
+        self.jobs.sammie.install = Some(Install {
             rx,
             log: vec![],
             result: (!spawned).then_some(Err("could not start a thread".into())),
@@ -563,9 +563,9 @@ impl Gfx {
     /// The `track` click: adopt a finished run, else render the plate.
     fn sammie_start(&mut self, node: u64) {
         let fail = |me: &mut Self, e: &str| {
-            me.sammie.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![], nc: false, preview: None });
+            me.jobs.sammie.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![], nc: false, preview: None });
         };
-        if self.sammie.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.sammie.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         if cfg!(target_arch = "wasm32") {
@@ -585,7 +585,7 @@ impl Gfx {
         let out = dir.join("Matte");
         if engine::bakes::is_baked(&out) {
             self.sammie_load(node, &out, nc);
-            self.sammie.run = Some(Run { node, dir, phase: Phase::Done("loaded the matte on disk".into()), log: vec![], nc, preview: None });
+            self.jobs.sammie.run = Some(Run { node, dir, phase: Phase::Done("loaded the matte on disk".into()), log: vec![], nc, preview: None });
             return;
         }
         if !installed(&install_dir()) && !stand_in() {
@@ -597,7 +597,7 @@ impl Gfx {
         {
             return fail(self, &format!("{e}"));
         }
-        self.sammie.run = Some(Run { node, dir: dir.clone(), phase: Phase::Plate, log: vec![], nc, preview: None });
+        self.jobs.sammie.run = Some(Run { node, dir: dir.clone(), phase: Phase::Plate, log: vec![], nc, preview: None });
         let range = self.sammie_range(input);
         if let Err(e) = self.sammie_render(node, input, dir, range) {
             fail(self, &e);
@@ -649,7 +649,7 @@ impl Gfx {
     /// The bake loop finished the plate: run the tool (a track), or ask
     /// the segmenter (a preview).
     pub(crate) fn sammie_render_finished(&mut self, node: u64) {
-        let Some(r) = self.sammie.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.sammie.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.sammie_fail(node, "the node is gone");
@@ -667,7 +667,7 @@ impl Gfx {
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "sammie") {
             return self.sammie_fail(node, &e);
         }
-        if let Some(r) = self.sammie.run.as_mut() {
+        if let Some(r) = self.jobs.sammie.run.as_mut() {
             r.phase = Phase::Tracking { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -685,25 +685,25 @@ impl Gfx {
             "out": dir.join("Matte").join(&name),
             "points": serde_json::from_str::<serde_json::Value>(&points_json(&points)).map(|v| v["points"].clone()).unwrap_or_default(),
         });
-        let stale = self.sammie.server.as_ref().is_some_and(|s| s.model != p.model || !s.alive.load(Relaxed));
+        let stale = self.jobs.sammie.server.as_ref().is_some_and(|s| s.model != p.model || !s.alive.load(Relaxed));
         if stale {
-            self.sammie.server = None;
+            self.jobs.sammie.server = None;
         }
-        if self.sammie.server.is_none() {
+        if self.jobs.sammie.server.is_none() {
             match Server::start(p.model) {
-                Ok(s) => self.sammie.server = Some(s),
+                Ok(s) => self.jobs.sammie.server = Some(s),
                 Err(e) => return self.sammie_fail(node, &e),
             }
         }
-        let asked = self.sammie.server.as_mut().map(|s| s.ask(&req));
+        let asked = self.jobs.sammie.server.as_mut().map(|s| s.ask(&req));
         match asked {
             Some(Ok(rx)) => {
-                if let Some(r) = self.sammie.run.as_mut() {
+                if let Some(r) = self.jobs.sammie.run.as_mut() {
                     r.phase = Phase::Tracking { rx, cancel: Arc::new(AtomicBool::new(false)), done: 0, total: 0 };
                 }
             }
             Some(Err(e)) => {
-                self.sammie.server = None;
+                self.jobs.sammie.server = None;
                 self.sammie_fail(node, &e);
             }
             None => {}
@@ -722,7 +722,7 @@ impl Gfx {
     }
 
     fn sammie_fail(&mut self, node: u64, e: &str) {
-        if let Some(r) = self.sammie.run.as_mut().filter(|r| r.node == node) {
+        if let Some(r) = self.jobs.sammie.run.as_mut().filter(|r| r.node == node) {
             r.phase = Phase::Failed(e.to_string());
         }
     }
@@ -755,7 +755,7 @@ impl Gfx {
     }
 
     pub(crate) fn sammie_preview_state(&self, node: u64) -> PreviewState {
-        let Some(pv) = self.sammie.previews.get(&node) else { return PreviewState::None };
+        let Some(pv) = self.jobs.sammie.previews.get(&node) else { return PreviewState::None };
         match self.sammie_preview_dir(node, pv.tick) {
             Some((k, _)) if k == pv.key => PreviewState::Current(pv.tick, pv.coverage),
             _ => PreviewState::Stale(pv.tick),
@@ -764,13 +764,13 @@ impl Gfx {
 
     /// What the viewer overlays for `node` on frame `tick`.
     pub(crate) fn sammie_overlay(&self, node: u64, tick: i64) -> Option<(egui::TextureId, bool)> {
-        let pv = self.sammie.previews.get(&node).filter(|p| p.tick == tick)?;
+        let pv = self.jobs.sammie.previews.get(&node).filter(|p| p.tick == tick)?;
         Some((pv.tex.id(), matches!(self.sammie_preview_state(node), PreviewState::Current(..))))
     }
 
     /// A click on the viewer changed `node`'s points.
     pub(crate) fn sammie_edited(&mut self, node: u64) {
-        self.sammie.edited = Some((node, web_time::Instant::now()));
+        self.jobs.sammie.edited = Some((node, web_time::Instant::now()));
     }
 
     /// The `preview` click: the frame on screen, rendered alone and
@@ -778,9 +778,9 @@ impl Gfx {
     /// it shows is what the track starts from.
     fn sammie_preview(&mut self, node: u64) {
         let fail = |me: &mut Self, e: &str| {
-            me.sammie.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![], nc: false, preview: None });
+            me.jobs.sammie.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![], nc: false, preview: None });
         };
-        if self.sammie.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.sammie.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         if cfg!(target_arch = "wasm32") {
@@ -801,7 +801,7 @@ impl Gfx {
         let run = Run { node, dir: dir.clone(), phase: Phase::Plate, log: vec![], nc: false, preview: Some((tick, key)) };
         // Made before (an undo back to these clicks): show it again.
         if dir.join("Matte").join(crate::corridorkey::frame_name(tick as u64)).is_file() {
-            self.sammie.run = Some(Run { phase: Phase::Tracking { rx: done_now(), cancel: Arc::new(AtomicBool::new(false)), done: 0, total: 0 }, ..run });
+            self.jobs.sammie.run = Some(Run { phase: Phase::Tracking { rx: done_now(), cancel: Arc::new(AtomicBool::new(false)), done: 0, total: 0 }, ..run });
             return;
         }
         if !installed(&install_dir()) && !stand_in() {
@@ -813,7 +813,7 @@ impl Gfx {
         if let Err(e) = std::fs::create_dir_all(dir.join("Matte")).and_then(|_| std::fs::create_dir_all(frames.join("Input"))) {
             return fail(self, &format!("{e}"));
         }
-        self.sammie.run = Some(run);
+        self.jobs.sammie.run = Some(run);
         // The frame renders once (a rendered frame finishes at once).
         let t = tick.max(0) as u64;
         if let Err(e) = self.sammie_render(node, input, frames, (t, t + 1)) {
@@ -824,7 +824,7 @@ impl Gfx {
     /// Every redraw: drain the tool's messages, catch a render that died,
     /// adopt a finished matte.
     pub(crate) fn sammie_poll(&mut self) {
-        if let Some(i) = self.sammie.install.as_mut() {
+        if let Some(i) = self.jobs.sammie.install.as_mut() {
             while let Ok(m) = i.rx.try_recv() {
                 match m {
                     Msg::Line(l) => push_log(&mut i.log, l),
@@ -837,9 +837,9 @@ impl Gfx {
         // Auto preview: a click segments the frame on screen as soon as the
         // clicks have been still a moment (a point drag edits every frame),
         // and again after any click that landed while one was running.
-        if let Some((node, at)) = self.sammie.edited {
-            if at.elapsed().as_millis() >= 80 && !self.sammie.run.as_ref().is_some_and(|r| r.active()) {
-                self.sammie.edited = None;
+        if let Some((node, at)) = self.jobs.sammie.edited {
+            if at.elapsed().as_millis() >= 80 && !self.jobs.sammie.run.as_ref().is_some_and(|r| r.active()) {
+                self.jobs.sammie.edited = None;
                 let tick = self.timeline_pos as i64;
                 let auto = self.egraph.node(node).and_then(|n| params(&n.kind)).is_some_and(|p| {
                     p.auto_preview && p.points.iter().any(|q| q.frame == tick && q.positive)
@@ -850,7 +850,7 @@ impl Gfx {
                 }
             }
         }
-        let Some(r) = self.sammie.run.as_mut() else { return };
+        let Some(r) = self.jobs.sammie.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Plate) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the plate stopped rendering".into());
@@ -878,7 +878,7 @@ impl Gfx {
                 match preview_texture(&self.egui_ctx, &file, node) {
                     Ok((tex, coverage)) => {
                         r.phase = Phase::Done(format!("previewed frame {tick}: {:.1}% of the frame", coverage * 100.0));
-                        self.sammie.previews.insert(node, Preview { key, tick, tex, coverage });
+                        self.jobs.sammie.previews.insert(node, Preview { key, tick, tex, coverage });
                     }
                     Err(e) => r.phase = Phase::Failed(format!("reading the preview: {e}")),
                 }
@@ -1338,13 +1338,13 @@ impl Gfx {
             // The preview: the frame on screen, segmented from its clicks,
             // shown over the viewer — then a new click re-runs it on its
             // own, bigger.
-            70 | 73 => match self.sammie.run.as_ref().map(|r| &r.phase) {
+            70 | 73 => match self.jobs.sammie.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the preview failed: {e}")),
                 // Settled: nothing running and the preview made from the
                 // clicks as they are now (an auto preview of an earlier
                 // click may land first).
                 Some(Phase::Done(_))
-                    if self.sammie.edited.is_none()
+                    if self.jobs.sammie.edited.is_none()
                         && matches!(self.sammie_preview_state(t.node), PreviewState::Current(..)) =>
                 {
                     let tick = self.timeline_pos as i64;
@@ -1392,13 +1392,13 @@ impl Gfx {
                 // Stale until the auto preview re-runs by itself.
                 // (The stand-in can finish before this stage looks.)
                 let rerun = matches!(self.sammie_preview_state(t.node), PreviewState::Current(_, c) if c > 0.025);
-                if rerun || self.sammie.run.as_ref().is_some_and(|r| r.active()) {
+                if rerun || self.jobs.sammie.run.as_ref().is_some_and(|r| r.active()) {
                     next(&mut t, 73);
                 } else if t.since.elapsed().as_secs() > 5 {
                     fail(format!("a click after a preview did not re-run it ({:?})", self.sammie_preview_state(t.node)));
                 }
             }
-            8 => match self.sammie.run.as_ref().map(|r| &r.phase) {
+            8 => match self.jobs.sammie.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the track failed: {e}")),
                 Some(Phase::Done(_)) => {
                     if !self.loaded.contains_key(&t.node) {
@@ -1456,7 +1456,7 @@ impl Gfx {
                 if v.loaded.map(|l| l.1) != Some(false) {
                     fail(format!("a new click left the loaded matte {:?}, not stale", v.loaded));
                 }
-                if self.sammie.run.as_ref().is_some_and(|r| r.active()) {
+                if self.jobs.sammie.run.as_ref().is_some_and(|r| r.active()) {
                     fail("a new click started a run".into());
                 }
                 println!(

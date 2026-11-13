@@ -2106,27 +2106,27 @@ impl Gfx {
             }
             (NodeKind::CorridorKey(_), "key") => {
                 self.corridor_action(id, crate::corridorkey::Action::Key);
-                if let Some(crate::corridorkey::Phase::Failed(e)) = self.corridor.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::corridorkey::Phase::Failed(e)) = self.jobs.corridor.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::CorridorKey(_), "cancel") => self.corridor_action(id, crate::corridorkey::Action::Cancel),
             (NodeKind::Sammie(_), "track") => {
                 self.sammie_action(id, crate::sammie::Action::Track);
-                if let Some(crate::sammie::Phase::Failed(e)) = self.sammie.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::sammie::Phase::Failed(e)) = self.jobs.sammie.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::Sammie(_), "cancel") => self.sammie_action(id, crate::sammie::Action::Cancel),
             (NodeKind::Flow(_), "analyse") => {
                 self.flow_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.flow.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.flow.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::Rifetime(_) | NodeKind::FrameFix(_), "render") => {
                 self.flow_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.flow.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.flow.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
@@ -2134,42 +2134,42 @@ impl Gfx {
             (NodeKind::Flow(_), "cancel") => self.flow_action(id, crate::flowui::Action::Cancel),
             (NodeKind::Stabilize(_), "analyse") => {
                 self.stab_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.stab.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.stab.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::Stabilize(_), "cancel") => self.stab_action(id, crate::flowui::Action::Cancel),
             (NodeKind::CamTrack(_), "solve") => {
                 self.ct_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.camtrack.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.camtrack.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::CamTrack(_), "cancel") => self.ct_action(id, crate::flowui::Action::Cancel),
             (NodeKind::Upscale(_), "render") => {
                 self.upscale_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.upscale.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.upscale.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::Upscale(_), "cancel") => self.upscale_action(id, crate::flowui::Action::Cancel),
             (NodeKind::HdrCnn(_), "render") => {
                 self.hdrcnn_action(id, crate::flowui::Action::Analyse);
-                if let Some(crate::flowui::Phase::Failed(e)) = self.hdrcnn.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.hdrcnn.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::HdrCnn(_), "cancel") => self.hdrcnn_action(id, crate::flowui::Action::Cancel),
             (NodeKind::SeedVr(_), "render") => {
                 self.seedvr_action(id, crate::seedvr::Action::Run);
-                if let Some(crate::seedvr::Phase::Failed(e)) = self.seedvr.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::seedvr::Phase::Failed(e)) = self.jobs.seedvr.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
             (NodeKind::SeedVr(_), "cancel") => self.seedvr_action(id, crate::seedvr::Action::Cancel),
             (NodeKind::Depth(_), "render") => {
                 self.depth_action(id, crate::depth::Action::Run);
-                if let Some(crate::depth::Phase::Failed(e)) = self.depth.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::depth::Phase::Failed(e)) = self.jobs.depth.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
@@ -2178,7 +2178,7 @@ impl Gfx {
             // gated fetch stay clicks.
             (NodeKind::LtxHdr(_), "render") => {
                 self.ltxhdr_action(id, crate::ltxhdr::Action::Run);
-                if let Some(crate::ltxhdr::Phase::Failed(e)) = self.ltxhdr.run.as_ref().map(|r| &r.phase) {
+                if let Some(crate::ltxhdr::Phase::Failed(e)) = self.jobs.ltxhdr.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
                 }
             }
@@ -2232,66 +2232,66 @@ impl Gfx {
         if let Some((n, _)) = &self.planar_job {
             jobs.push(json!({ "node": n, "kind": "planar-track" }));
         }
-        if let Some(r) = self.corridor.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.corridor.run.as_ref().filter(|r| r.active()) {
             jobs.push(json!({ "node": r.node, "kind": "key" }));
         }
-        if let Some(r) = self.sammie.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.sammie.run.as_ref().filter(|r| r.active()) {
             jobs.push(json!({ "node": r.node, "kind": "roto-track" }));
         }
-        if let Some(r) = self.genai.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.genai.run.as_ref().filter(|r| r.active()) {
             jobs.push(json!({ "node": r.node, "kind": "genai" }));
         }
-        if let Some(r) = self.flow.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.flow.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "flow", "done": done, "total": total }));
         }
-        if let Some(r) = self.stab.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.stab.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "stabilize", "done": done, "total": total }));
         }
-        if let Some(r) = self.camtrack.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.camtrack.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
-            let kind = if self.camtrack.tracking { "camtrack-track" } else { "camtrack-solve" };
+            let kind = if self.jobs.camtrack.tracking { "camtrack-track" } else { "camtrack-solve" };
             jobs.push(json!({ "node": r.node, "kind": kind, "done": done, "total": total }));
         }
-        if let Some(r) = self.upscale.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.upscale.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "upscale", "done": done, "total": total }));
         }
-        if let Some(r) = self.hdrcnn.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.hdrcnn.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "hdrcnn", "done": done, "total": total }));
         }
-        if let Some(r) = self.seedvr.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.seedvr.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::seedvr::Phase::Running { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "seedvr", "done": done, "total": total }));
         }
-        if let Some(r) = self.depth.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.depth.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::depth::Phase::Running { done, total, .. } => (*done, *total),
                 _ => (0, 0),
             };
             jobs.push(json!({ "node": r.node, "kind": "depth", "done": done, "total": total }));
         }
-        if let Some(r) = self.ltxhdr.run.as_ref().filter(|r| r.active()) {
+        if let Some(r) = self.jobs.ltxhdr.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::ltxhdr::Phase::Running { done, total, .. } => (*done, *total),
                 _ => (0, 0),
@@ -2300,7 +2300,7 @@ impl Gfx {
         }
         let errors: Map<String, Value> =
             self.load_errors.iter().map(|(id, e)| (id.to_string(), json!(e))).collect();
-        let corridor = self.corridor.run.as_ref().map(|r| match &r.phase {
+        let corridor = self.jobs.corridor.run.as_ref().map(|r| match &r.phase {
             crate::corridorkey::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
             crate::corridorkey::Phase::Done(d) => json!({ "node": r.node, "done": d }),
             _ => json!({ "node": r.node, "running": true }),
@@ -2311,32 +2311,32 @@ impl Gfx {
             "status": self.render_status,
             "errors": errors,
             "key": corridor,
-            "flow": self.flow.run.as_ref().map(|r| match &r.phase {
+            "flow": self.jobs.flow.run.as_ref().map(|r| match &r.phase {
                 crate::flowui::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::flowui::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
-            "upscale": self.upscale.run.as_ref().map(|r| match &r.phase {
+            "upscale": self.jobs.upscale.run.as_ref().map(|r| match &r.phase {
                 crate::flowui::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::flowui::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
-            "seedvr": self.seedvr.run.as_ref().map(|r| match &r.phase {
+            "seedvr": self.jobs.seedvr.run.as_ref().map(|r| match &r.phase {
                 crate::seedvr::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::seedvr::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
-            "depth": self.depth.run.as_ref().map(|r| match &r.phase {
+            "depth": self.jobs.depth.run.as_ref().map(|r| match &r.phase {
                 crate::depth::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::depth::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
-            "ltxhdr": self.ltxhdr.run.as_ref().map(|r| match &r.phase {
+            "ltxhdr": self.jobs.ltxhdr.run.as_ref().map(|r| match &r.phase {
                 crate::ltxhdr::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::ltxhdr::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
-            "roto": self.sammie.run.as_ref().map(|r| match &r.phase {
+            "roto": self.jobs.sammie.run.as_ref().map(|r| match &r.phase {
                 crate::sammie::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::sammie::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),

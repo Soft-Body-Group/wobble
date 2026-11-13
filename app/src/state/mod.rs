@@ -24,3 +24,5 @@ mod curve;
 pub(crate) use curve::CurveEditState;
 mod help;
 pub(crate) use help::HelpState;
+mod jobs;
+pub(crate) use jobs::NodeJobs;
