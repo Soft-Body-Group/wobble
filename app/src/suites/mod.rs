@@ -26,6 +26,7 @@ mod plugin;
 mod range;
 mod record;
 mod region;
+mod scrubfid;
 mod scrubperf;
 mod shader;
 mod shot;
