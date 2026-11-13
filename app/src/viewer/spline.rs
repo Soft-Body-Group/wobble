@@ -179,16 +179,16 @@ impl Gfx {
             // One spline owns the point selection at a time — indices
             // mean nothing in another shape — and the owner keeps it
             // until it stops being selected.
-            if !selected.contains(&self.spline_sel_node.unwrap_or(u64::MAX)) {
-                self.spline_sel_node = Some(node);
-                self.spline_sel.clear();
+            if !selected.contains(&self.spline.sel_node.unwrap_or(u64::MAX)) {
+                self.spline.sel_node = Some(node);
+                self.spline.sel.clear();
             }
-            let group_ui = self.spline_sel_node == Some(node);
+            let group_ui = self.spline.sel_node == Some(node);
             // Indices mean nothing in another SHAPE either.
-            if group_ui && self.spline_sel_shape != shape_sel {
-                self.spline_sel_shape = shape_sel;
-                self.spline_sel.clear();
-                self.spline_sel_n = sp.points.len();
+            if group_ui && self.spline.sel_shape != shape_sel {
+                self.spline.sel_shape = shape_sel;
+                self.spline.sel.clear();
+                self.spline.sel_n = sp.points.len();
             }
             // The container's other shapes, faint; the one a click lands
             // on (near its outline) is picked instead of the canvas
@@ -218,13 +218,13 @@ impl Gfx {
                 if sp.mode == engine::graph::SplineMode::CatmullRom {
                     hud_key_list.push(key("K", "drag point: tension", egui::Key::K));
                 }
-                if !self.spline_sel.is_empty() {
+                if !self.spline.sel.is_empty() {
                     hud_key_list.push(key("E", "scale about click", egui::Key::E));
                     hud_key_list.push(key("R", "rotate: circle the click", egui::Key::R));
                     hud_key_list.push(key("T", "move pick", egui::Key::T));
                     hud_key_list.push(chord("alt", "drag point: feather"));
                 }
-                if self.spline_sel.len() >= 2 {
+                if self.spline.sel.len() >= 2 {
                     hud_key_list.push(key("D", "drag centre: pivot", egui::Key::D));
                     hud_key_list.push(chord("ctrl", "drag corner: distort"));
                     hud_key_list.push(chord("alt", "drag edge: from pivot"));
@@ -234,11 +234,11 @@ impl Gfx {
                 // The properties panel can add or drop points behind our
                 // back; a stale index would put the box round the wrong
                 // points, so a count change we did not make drops the pick.
-                if self.spline_sel_n != sp.points.len() {
-                    self.spline_sel.clear();
-                    self.spline_sel_n = sp.points.len();
+                if self.spline.sel_n != sp.points.len() {
+                    self.spline.sel.clear();
+                    self.spline.sel_n = sp.points.len();
                 }
-                self.spline_sel.retain(|k| *k < sp.points.len());
+                self.spline.sel.retain(|k| *k < sp.points.len());
             }
 
             // Adding or removing a point renumbers every per-point
@@ -254,10 +254,10 @@ impl Gfx {
             // box, no handle to find, any number of points. Horizontal
             // travel drives scale and rotate. Snapshotted at the press
             // and computed absolutely, so an animated shape keys cleanly.
-            if self.spline_temp.as_ref().is_some_and(|t| t.0 != node) {
-                self.spline_temp = None;
+            if self.spline.temp.as_ref().is_some_and(|t| t.0 != node) {
+                self.spline.temp = None;
             }
-            if group_ui && !self.spline_sel.is_empty() && self.spline_temp.is_none() {
+            if group_ui && !self.spline.sel.is_empty() && self.spline.temp.is_none() {
                 let held = ui.input(|i| {
                     [egui::Key::E, egui::Key::R, egui::Key::T]
                         .into_iter()
@@ -267,12 +267,12 @@ impl Gfx {
                     i.pointer.primary_pressed().then(|| i.pointer.press_origin()).flatten()
                 });
                 if let (Some(k), Some(o)) = (held, origin.filter(|o| rect.contains(*o))) {
-                    self.spline_temp = Some((
+                    self.spline.temp = Some((
                         node,
                         k,
                         o,
                         from_screen(o),
-                        self.spline_sel
+                        self.spline.sel
                             .iter()
                             .filter(|i| **i < sp.points.len())
                             .map(|i| {
@@ -283,7 +283,7 @@ impl Gfx {
                     ));
                 }
             }
-            let temp_live = self.spline_temp.is_some();
+            let temp_live = self.spline.temp.is_some();
 
             // Marquee: a plain background drag bands points (S held keeps
             // what was already picked). cmd/ctrl-drag is the pan and
@@ -297,21 +297,21 @@ impl Gfx {
                     if let (Some(o), Some(p)) =
                         (ui.input(|i| i.pointer.press_origin()), pointer_pos)
                     {
-                        self.spline_marquee = Some(egui::Rect::from_two_pos(o, p));
+                        self.spline.marquee = Some(egui::Rect::from_two_pos(o, p));
                     }
                 }
-                if let Some(mq) = self.spline_marquee {
+                if let Some(mq) = self.spline.marquee {
                     ink.rect(mq, 0.0, false, 1.0, 0.5, false);
                     if !banding {
                         if !ui.input(|i| i.key_down(egui::Key::S)) {
-                            self.spline_sel.clear();
+                            self.spline.sel.clear();
                         }
                         for (i, q) in sp.points.iter().enumerate() {
                             if mq.contains(to_scr(q.p)) {
-                                self.spline_sel.insert(i);
+                                self.spline.sel.insert(i);
                             }
                         }
-                        self.spline_marquee = None;
+                        self.spline.marquee = None;
                     }
                 }
             }
@@ -321,7 +321,7 @@ impl Gfx {
             // computed in the node's own pixel space and drawn through
             // the downstream chain, so the box deforms with the shape.
             let sel: Vec<usize> = if group_ui {
-                self.spline_sel.iter().copied().collect()
+                self.spline.sel.iter().copied().collect()
             } else {
                 Vec::new()
             };
@@ -346,7 +346,7 @@ impl Gfx {
                 // moves it); anything else rebuilds it from the bounds.
                 let now: Vec<egui::Vec2> = sel.iter().map(|k| px(sp.points[*k].p)).collect();
                 let mut quad = [lo, egui::vec2(hi.x, lo.y), hi, egui::vec2(lo.x, hi.y)];
-                if let Some((n, s, q, was)) = &self.spline_box {
+                if let Some((n, s, q, was)) = &self.spline.box_ {
                     if *n == node && *s == sel && was.len() == now.len() {
                         let d = now[0] - was[0];
                         if now.iter().zip(was).all(|(a, b)| (*a - *b - d).length() < 0.01) {
@@ -369,14 +369,14 @@ impl Gfx {
                 // rides every edit the points get, so it stays where it
                 // sits on the shape.
                 if self
-                    .spline_pivot
+                    .spline.pivot
                     .as_ref()
                     .is_some_and(|(n, s, _)| *n != node || *s != sel)
                 {
-                    self.spline_pivot = None;
+                    self.spline.pivot = None;
                 }
                 let mut pv = self
-                    .spline_pivot
+                    .spline.pivot
                     .as_ref()
                     .map(|(_, _, q)| px(*q))
                     .unwrap_or(c);
@@ -462,13 +462,13 @@ impl Gfx {
                         (-1, 1) => Some(3),
                         _ => None,
                     };
-                    if let (Some(ci), true) = (corner, ctrl || self.spline_distort.is_some()) {
+                    if let (Some(ci), true) = (corner, ctrl || self.spline.distort.is_some()) {
                         if rs.drag_started() && ctrl {
                             let origin = ui
                                 .input(|i| i.pointer.press_origin())
                                 .or(pointer_pos)
                                 .unwrap_or(hp);
-                            self.spline_distort = Some((
+                            self.spline.distort = Some((
                                 origin,
                                 quad0,
                                 ci,
@@ -479,15 +479,15 @@ impl Gfx {
                                     })
                                     .collect(),
                             ));
-                            self.spline_distort_pivot = pv0;
+                            self.spline.distort_pivot = pv0;
                         }
                         let live = self
-                            .spline_distort
+                            .spline.distort
                             .as_ref()
                             .is_some_and(|(_, _, dci, _)| *dci == ci);
                         if live && rs.dragged() {
                             if let (Some(p), Some((origin, q0, _, start))) =
-                                (pointer_pos, self.spline_distort.clone())
+                                (pointer_pos, self.spline.distort.clone())
                             {
                                 let mut q1 = q0;
                                 q1[ci] += from_screen(p) - from_screen(origin);
@@ -501,12 +501,12 @@ impl Gfx {
                                     sp.points[*i].h_in = nrm(warp(a + px(*hin)) - w);
                                     sp.points[*i].h_out = nrm(warp(a + px(*hout)) - w);
                                 }
-                                pv = warp(self.spline_distort_pivot);
+                                pv = warp(self.spline.distort_pivot);
                                 quad = q1;
                             }
                         }
                         if live && rs.drag_stopped() {
-                            self.spline_distort = None;
+                            self.spline.distort = None;
                         }
                         if live || ctrl {
                             continue;
@@ -599,8 +599,8 @@ impl Gfx {
                 }
                 // The pivot is kept once moved off the centre, and
                 // follows the box from then on.
-                if self.spline_pivot.is_some() || pivot_moved {
-                    self.spline_pivot = Some((node, sel.clone(), nrm(pv)));
+                if self.spline.pivot.is_some() || pivot_moved {
+                    self.spline.pivot = Some((node, sel.clone(), nrm(pv)));
                 }
                 box_quad = Some(quad);
             }
@@ -668,7 +668,7 @@ impl Gfx {
                         // Another shape of the container: pick it.
                         innards::select(ui.ctx(), node, k);
                     } else if !shift && !near_pt && group_ui && !temp_live {
-                        self.spline_sel.clear();
+                        self.spline.sel.clear();
                     }
                 }
             }
@@ -729,7 +729,7 @@ impl Gfx {
                     ui.id().with(("spline-pt", node, i)),
                     egui::Sense::click_and_drag(),
                 );
-                let picked = group_ui && self.spline_sel.contains(&i);
+                let picked = group_ui && self.spline.sel.contains(&i);
                 ink.circle_fill(hp, if picked { 5.0 } else { 4.0 }, 1.0, hr.hovered());
                 if picked {
                     ink.circle_stroke(hp, 8.5, 1.2, 0.9, hr.hovered());
@@ -742,23 +742,23 @@ impl Gfx {
                     // S toggles the point in the pick; a plain click
                     // makes it the whole pick.
                     if ui.input(|inp| inp.key_down(egui::Key::S)) {
-                        if !self.spline_sel.remove(&i) {
-                            self.spline_sel.insert(i);
+                        if !self.spline.sel.remove(&i) {
+                            self.spline.sel.insert(i);
                         }
                     } else {
-                        self.spline_sel.clear();
-                        self.spline_sel.insert(i);
+                        self.spline.sel.clear();
+                        self.spline.sel.insert(i);
                     }
                 }
                 if hr.drag_started() && !temp_live {
                     // Grabbing a point outside the pick makes it the
                     // pick: a drag moves what is under the cursor.
-                    if group_ui && !self.spline_sel.contains(&i) {
-                        self.spline_sel.clear();
-                        self.spline_sel.insert(i);
+                    if group_ui && !self.spline.sel.contains(&i) {
+                        self.spline.sel.clear();
+                        self.spline.sel.insert(i);
                     }
-                    let group: Vec<usize> = if group_ui && self.spline_sel.len() > 1 {
-                        self.spline_sel.iter().copied().filter(|k| *k < n_pts).collect()
+                    let group: Vec<usize> = if group_ui && self.spline.sel.len() > 1 {
+                        self.spline.sel.iter().copied().filter(|k| *k < n_pts).collect()
                     } else {
                         vec![i]
                     };
@@ -770,12 +770,12 @@ impl Gfx {
                         .input(|inp| inp.pointer.press_origin())
                         .or(pointer_pos)
                         .unwrap_or(hp);
-                    self.spline_tension0 = group
+                    self.spline.tension0 = group
                         .iter()
                         .filter(|k| **k < sp.points.len())
                         .map(|k| (*k, sp.points[*k].tension))
                         .collect();
-                    self.spline_drag = Some((
+                    self.spline.drag = Some((
                         origin,
                         group
                             .iter()
@@ -789,7 +789,7 @@ impl Gfx {
                 }
                 if hr.dragged() {
                     if let (Some(p), Some((origin, start))) =
-                        (pointer_pos, self.spline_drag.clone())
+                        (pointer_pos, self.spline.drag.clone())
                     {
                         let band_key = ui.input(|inp| {
                             [egui::Key::O, egui::Key::I]
@@ -801,7 +801,7 @@ impl Gfx {
                             // corner, left loosens; 200 screen px is the
                             // whole 0..1.
                             let dv = (p.x - origin.x) / 200.0;
-                            for (k, t0) in &self.spline_tension0 {
+                            for (k, t0) in &self.spline.tension0 {
                                 if let Some(q) = sp.points.get_mut(*k) {
                                     q.tension = (t0 + dv).clamp(-1.0, 1.0);
                                 }
@@ -837,12 +837,12 @@ impl Gfx {
                     }
                 }
                 if hr.drag_stopped() {
-                    self.spline_drag = None;
+                    self.spline.drag = None;
                 }
             }
             // The held-key edit lands LAST, so it wins over any widget the
             // press happened to land on.
-            if let Some((_, k, o, pv, start)) = self.spline_temp.clone() {
+            if let Some((_, k, o, pv, start)) = self.spline.temp.clone() {
                 let p = pointer_pos.unwrap_or(o);
                 let dx = p.x - o.x;
                 let n = |v: egui::Vec2| [v.x / owf, v.y / ydiv];
@@ -862,16 +862,16 @@ impl Gfx {
                     }
                 }
                 // The group box and its pivot ride the same map.
-                if self.spline_temp_box.is_none() {
+                if self.spline.temp_box.is_none() {
                     if let Some(q) = box_quad {
-                        let piv = self.spline_pivot.as_ref().map(|(_, _, q)| px(*q));
-                        self.spline_temp_box = Some((q, piv));
+                        let piv = self.spline.pivot.as_ref().map(|(_, _, q)| px(*q));
+                        self.spline.temp_box = Some((q, piv));
                     }
                 }
-                if let Some((q0, piv0)) = self.spline_temp_box {
+                if let Some((q0, piv0)) = self.spline.temp_box {
                     let m = |v: egui::Vec2| pv + lin(v - pv) + d;
                     box_quad = Some(q0.map(m));
-                    if let (Some(p0), Some((_, _, q))) = (piv0, self.spline_pivot.as_mut()) {
+                    if let (Some(p0), Some((_, _, q))) = (piv0, self.spline.pivot.as_mut()) {
                         *q = n(m(p0));
                     }
                 }
@@ -881,9 +881,9 @@ impl Gfx {
                 ink.seg(ps - egui::vec2(0.0, 7.0), ps + egui::vec2(0.0, 7.0), 1.2, 1.0, true);
                 ink.seg(o, p, 1.0, 0.5, false);
                 if !ui.input(|i| i.pointer.primary_down()) {
-                    self.spline_temp = None;
-                    self.spline_temp_box = None;
-                    self.spline_temp_rot = None;
+                    self.spline.temp = None;
+                    self.spline.temp_box = None;
+                    self.spline.temp_rot = None;
                 }
             }
             // Remember the box around where the pick now is, so the next
@@ -894,7 +894,7 @@ impl Gfx {
                     .filter_map(|k| sp.points.get(*k))
                     .map(|q| egui::vec2(q.p[0] * owf, q.p[1] * ydiv))
                     .collect();
-                self.spline_box = Some((node, sel.clone(), q, now));
+                self.spline.box_ = Some((node, sel.clone(), q, now));
             }
             if let Some(i) = remove {
                 sp.points.remove(i);
@@ -905,9 +905,9 @@ impl Gfx {
             // against moves with it.
             if group_ui {
                 if let Some(e) = struct_edit {
-                    remap_spline_sel(&mut self.spline_sel, e);
+                    remap_spline_sel(&mut self.spline.sel, e);
                 }
-                self.spline_sel_n = spw.points.len();
+                self.spline.sel_n = spw.points.len();
             }
 
             // Write back: point channels key like any other param when

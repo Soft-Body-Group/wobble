@@ -5837,46 +5837,7 @@ struct Gfx {
     /// Viewer 1 held on a node through dives (alt+1 in the graph, or the
     /// viewer bar's lock). See [`ViewLock`].
     view_lock: Option<ViewLock>,
-    /// Spline control points picked out for a group edit, by index, and
-    /// which spline they belong to. Indices, so they slide when points are
-    /// added or removed (`anim::spline_point_*` does the same to the curves).
-    /// A spline point drag, as it was at the press: the pointer position and
-    /// the picked points' (index, position, feather). Gizmo drags compute
-    /// ABSOLUTELY from this rather than summing per-frame deltas, because the
-    /// working copy they edit is re-derived from the animation curve every
-    /// frame — summed deltas would each be applied to the same base and only
-    /// the last would survive.
-    spline_drag: Option<(egui::Pos2, Vec<(usize, [f32; 2], f32, f32)>)>,
-    /// Each dragged point's tension when the drag began (K-drag).
-    spline_tension0: Vec<(usize, f32)>,
-    /// The group box's pivot, moved off the box centre by a D-drag on its
-    /// circle (the Transform gizmo's gesture): (node, the pick it was set
-    /// for, NORMALIZED authored position). Rotate and alt-scale turn about
-    /// it; a different pick or node drops it back to the centre.
-    spline_pivot: Option<(u64, Vec<usize>, [f32; 2])>,
-    /// A ctrl-drag on a group box CORNER, as it was at the press: the
-    /// pointer, the box's four corners (authored px, TL TR BR BL), which
-    /// corner, and each picked point's (index, p, h_in, h_out). Absolute
-    /// from the press, like `spline_drag`, so an animated shape keys cleanly.
-    spline_distort: Option<(egui::Pos2, [egui::Vec2; 4], usize, Vec<(usize, [f32; 2], [f32; 2], [f32; 2])>)>,
-    /// Where the pivot was when the distort pressed (authored px).
-    spline_distort_pivot: egui::Vec2,
-    /// The group box as the last edit left it: (node, pick, the quad in
-    /// authored px TL TR BR BL, the picked points it was left around). A
-    /// distort bends it and a rotate turns it; it is rebuilt from the
-    /// bounds when the pick changes or the points move some other way.
-    spline_box: Option<(u64, Vec<usize>, [egui::Vec2; 4], Vec<egui::Vec2>)>,
-    /// A held-key edit of the point pick (E scale, R rotate, T translate),
-    /// as it was at the press: node, which key, the pointer, the TEMPORARY
-    /// pivot (authored px — wherever the press landed), and each picked
-    /// point's (index, p, h_in, h_out). Absolute from the press.
-    spline_temp: Option<(u64, egui::Key, egui::Pos2, egui::Vec2, Vec<(usize, [f32; 2], [f32; 2], [f32; 2])>)>,
-    /// The group box and pivot as the held-key edit found them, so the
-    /// edit carries them too (taken on its first frame).
-    spline_temp_box: Option<([egui::Vec2; 4], Option<egui::Vec2>)>,
-    /// R's turn so far: (the cursor's last angle round the pivot, the
-    /// unwrapped total). Set once the cursor has left the pivot.
-    spline_temp_rot: Option<(f32, f32)>,
+    spline: state::SplineUiState,
     /// The CornerPin whose pins are picked, and which of its four are.
     /// One pin node owns the pick at a time, like `spline_sel_node`.
     pin_sel: Option<(u64, [bool; 4])>,
@@ -5889,15 +5850,6 @@ struct Gfx {
     pin_marquee: Option<egui::Rect>,
     /// Where the pin box's rotate knob was drawn last (for the suite).
     pin_knob: Option<egui::Pos2>,
-    spline_sel: std::collections::BTreeSet<usize>,
-    spline_sel_node: Option<u64>,
-    /// Point count the pick was made against; a change we did not make
-    /// (the properties +/- buttons) invalidates every index in it.
-    spline_sel_n: usize,
-    /// Which shape of a roto container the point pick belongs to.
-    spline_sel_shape: usize,
-    /// The live band while a background drag is marquee-selecting points.
-    spline_marquee: Option<egui::Rect>,
     brush: state::BrushState,
     /// A GraphBake the Paint panel just inserted, and how many redraws to
     /// wait before starting it — the rig has to rebuild around the new
@@ -8102,25 +8054,27 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         view_alpha: false,
         view_channel: None,
         view_lock: None,
-        spline_sel: Default::default(),
-        spline_drag: None,
-        spline_tension0: Vec::new(),
-        spline_pivot: None,
-        spline_distort: None,
-        spline_distort_pivot: egui::Vec2::ZERO,
-        spline_box: None,
-        spline_temp: None,
-        spline_temp_box: None,
-        spline_temp_rot: None,
+        spline: state::SplineUiState {
+            sel: Default::default(),
+            drag: None,
+            tension0: Vec::new(),
+            pivot: None,
+            distort: None,
+            distort_pivot: egui::Vec2::ZERO,
+            box_: None,
+            temp: None,
+            temp_box: None,
+            temp_rot: None,
+            sel_node: None,
+            sel_n: 0,
+            sel_shape: 0,
+            marquee: None,
+        },
         pin_sel: None,
         pin_from: Default::default(),
         pin_grab: None,
         pin_marquee: None,
         pin_knob: None,
-        spline_sel_node: None,
-        spline_sel_n: 0,
-        spline_sel_shape: 0,
-        spline_marquee: None,
         brush: state::BrushState {
             radius: 40.0,
             soft: 0.6,
@@ -15639,7 +15593,7 @@ impl Gfx {
                 // Over the viewer too: the player's in/out, or viewing a
                 // Load its own. Not while roto points are picked (O / I
                 // held feather them).
-                let over_load_view = self.spline_sel.is_empty()
+                let over_load_view = self.spline.sel.is_empty()
                     && ptr.is_some_and(|p| self.viewer_rect.contains(p));
                 if (over_timeline || over_load_view || keymap::scrub_key_down())
                     && !ctx.egui_wants_keyboard_input()
@@ -15655,9 +15609,9 @@ impl Gfx {
                     }
                 }
             }
-            let roto_r = !self.spline_sel.is_empty()
+            let roto_r = !self.spline.sel.is_empty()
                 && ctx.input(|i| i.key_down(egui::Key::R))
-                && self.spline_sel_node.is_some_and(|n| self.selected.contains(&n));
+                && self.spline.sel_node.is_some_and(|n| self.selected.contains(&n));
             if !roto_r && ctx.input(|i| keymap::pressed(i, Act::FrameView)) {
                 let over_viewer = self.viewer_mode == ViewerMode::Full
                     || (self.viewer_mode == ViewerMode::Normal
@@ -18593,7 +18547,7 @@ impl Gfx {
     fn spline_temp_turn(&mut self, v: egui::Vec2, screen: egui::Vec2) -> (f32, f32) {
         if screen.length() >= 12.0 {
             let a = v.angle();
-            self.spline_temp_rot = Some(match self.spline_temp_rot {
+            self.spline.temp_rot = Some(match self.spline.temp_rot {
                 None => (a, 0.0),
                 Some((last, total)) => {
                     use std::f32::consts::{PI, TAU};
@@ -18607,7 +18561,7 @@ impl Gfx {
                 }
             });
         }
-        self.spline_temp_rot.map(|(_, t)| t).unwrap_or(0.0).sin_cos()
+        self.spline.temp_rot.map(|(_, t)| t).unwrap_or(0.0).sin_cos()
     }
 
     /// The colour a node chose for its viewer HUD (`ENode::hud_color`),
@@ -25897,8 +25851,8 @@ impl Gfx {
                                 node,
                                 wired,
                                 working,
-                                self.spline_sel_node,
-                                &self.spline_sel,
+                                self.spline.sel_node,
+                                &self.spline.sel,
                             ) {
                             hud_drag_out = Some(h);
                         }
@@ -25934,8 +25888,8 @@ impl Gfx {
                                 merge_before: &merge_before,
                                 physics_live,
                                 physics_status,
-                                spline_sel_node: self.spline_sel_node,
-                                spline_sel: &self.spline_sel,
+                                spline_sel_node: self.spline.sel_node,
+                                spline_sel: &self.spline.sel,
                                 geo_edit_req: &mut geo_edit_req,
                                 merge_edit: &mut merge_edit,
                                 physics_cancel_req: &mut physics_cancel_req,
@@ -25953,8 +25907,8 @@ impl Gfx {
                                 f,
                                 node,
                                 wired,
-                                self.spline_sel_node,
-                                &self.spline_sel,
+                                self.spline.sel_node,
+                                &self.spline.sel,
                             ) {
                             hud_drag_out = Some(h);
                         }
@@ -25990,8 +25944,8 @@ impl Gfx {
                                 cur_t,
                                 node,
                                 node_px,
-                                spline_sel_node: self.spline_sel_node,
-                                spline_sel: &self.spline_sel,
+                                spline_sel_node: self.spline.sel_node,
+                                spline_sel: &self.spline.sel,
                                 roto_click: &mut roto_click,
                                 softcrop_req: &mut softcrop_req,
                             }) {

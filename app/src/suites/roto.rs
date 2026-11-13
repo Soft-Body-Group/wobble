@@ -28,7 +28,7 @@ impl Gfx {
                     sp.points.len(),
                     sp.more.iter().map(|m| m.points.len()).collect::<Vec<_>>(),
                     innards::selected(&self.egui_ctx, sid, sp.shape_count()) + 1,
-                    self.spline_sel,
+                    self.spline.sel,
                     self.selected,
                     self.test.rect
                 ),

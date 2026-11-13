@@ -6,3 +6,5 @@ mod brush;
 pub(crate) use brush::BrushState;
 mod geo;
 pub(crate) use geo::GeoUiState;
+mod spline;
+pub(crate) use spline::SplineUiState;

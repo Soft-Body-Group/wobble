@@ -92,7 +92,7 @@ impl Gfx {
         // The group box as the gizmo last drew it (TL TR BR BL, screen) —
         // it turns and bends with the pick, so it is not the points' bounds.
         let quad_scr = |s: &Self| -> Option<[egui::Pos2; 4]> {
-            let (n, _, q, _) = s.spline_box.as_ref()?;
+            let (n, _, q, _) = s.spline.box_.as_ref()?;
             if *n != sid {
                 return None;
             }
@@ -388,10 +388,10 @@ impl Gfx {
             }
             20 => next = 21, // settle
             21 => {
-                if self.spline_sel.len() != 3 {
+                if self.spline.sel.len() != 3 {
                     println!(
                         "SPLINE TEST FAIL: marquee picked {:?}, wanted all 3",
-                        self.spline_sel
+                        self.spline.sel
                     );
                     std::process::exit(1);
                 }
@@ -458,10 +458,10 @@ impl Gfx {
                 }
                 // The pick slid with the removal, so the two survivors are
                 // still picked and the rotate knob is still up.
-                if self.spline_sel.len() != 2 {
+                if self.spline.sel.len() != 2 {
                     println!(
                         "SPLINE TEST FAIL: removal left the pick as {:?}",
-                        self.spline_sel
+                        self.spline.sel
                     );
                     std::process::exit(1);
                 }
@@ -534,7 +534,7 @@ impl Gfx {
             205 => {
                 let Some((_, _, c)) = bounds(self) else { return };
                 let r = self.test.rect;
-                let pv = self.spline_pivot.as_ref().map(|(_, _, q)| {
+                let pv = self.spline.pivot.as_ref().map(|(_, _, q)| {
                     egui::pos2(r.min.x + q[0] * r.width(), r.min.y + q[1] * r.height())
                 });
                 let want = egui::pos2(stash[0], stash[1]) + egui::vec2(30.0, 20.0);
@@ -633,7 +633,7 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                if self.spline_distort.is_some() {
+                if self.spline.distort.is_some() {
                     println!("SPLINE TEST FAIL: the distort outlived its drag");
                     std::process::exit(1);
                 }
@@ -717,16 +717,16 @@ impl Gfx {
                     }
                 };
                 let (wa, wb) = (want(a0), want(b0));
-                if (a - wa).length() > 2.0 || (b - wb).length() > 2.0 || self.spline_temp.is_some() {
+                if (a - wa).length() > 2.0 || (b - wb).length() > 2.0 || self.spline.temp.is_some() {
                     println!(
                         "SPLINE TEST FAIL: held-key edit (stage {stage}) put the pick at \
                          {a:?} {b:?}, wanted {wa:?} {wb:?} (live after release: {})",
-                        self.spline_temp.is_some()
+                        self.spline.temp.is_some()
                     );
                     std::process::exit(1);
                 }
-                if self.spline_sel.len() != 2 {
-                    println!("SPLINE TEST FAIL: held-key edit changed the pick to {:?}", self.spline_sel);
+                if self.spline.sel.len() != 2 {
+                    println!("SPLINE TEST FAIL: held-key edit changed the pick to {:?}", self.spline.sel);
                     std::process::exit(1);
                 }
                 next = match stage {
@@ -794,7 +794,7 @@ impl Gfx {
                         q.feather,
                         q.bias,
                         b0 + s * (q.feather - f0),
-                        self.spline_sel,
+                        self.spline.sel,
                         sp.points.iter().map(|q| q.p).collect::<Vec<_>>(),
                         self.test.spline_press
                     );
@@ -844,7 +844,7 @@ impl Gfx {
                         sp.falloff = 1.0;
                     }
                 }
-                self.spline_sel.clear();
+                self.spline.sel.clear();
                 next = 35;
             }
             35 => {
