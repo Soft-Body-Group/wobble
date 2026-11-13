@@ -142,7 +142,7 @@ impl Panels<Pane> for Gfx {
     fn raw_input(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput, _tabs: &[Pane]) {
         let tab = keymap::take_search(ctx, raw);
         self.node_editor.tab_open_request = tab;
-        self.patch_ui.tab_request = tab;
+        self.patch.ui.tab_request = tab;
     }
 
     fn begin(&mut self, ui: &mut Ui) {

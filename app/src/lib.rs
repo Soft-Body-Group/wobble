@@ -5923,35 +5923,9 @@ struct Gfx {
     /// A window layout picked in the layouts menu, applied in
     /// `about_to_wait` where windows can be made.
     dock_pending: Option<dockui::dock::Layout<dockui::Pane, dockui::Role>>,
-    /// Patch bay (the detached properties window): grid cell + whole-tile
-    /// span per panel. Geometry is remembered while a panel is closed.
-    patch_cell: std::collections::BTreeMap<u64, [i32; 2]>,
-    /// The footprint each panel was placed for, so a node whose span
-    /// changes (a resized tool) gets a fresh cell instead of overlapping.
-    patch_span: std::collections::BTreeMap<u64, [u8; 2]>,
-    /// In-flight patch drag: (node, grab offset).
-    patch_drag: Option<(u64, egui::Vec2)>,
-    /// Link mode: the patch bay hides widgets and exposes every float value
-    /// as in/out jacks for expression wiring.
-    patch_link_mode: bool,
+    patch: state::PatchState,
     /// A cable mid-drag.
     wire_drag: Option<WireDrag>,
-    /// Canvas-relative spot the add-value-node menu was opened at.
-    patch_menu_pos: egui::Vec2,
-    /// Everything else the patch canvas remembers between frames —
-    /// selection, slicer trail, marquee, search palette. See `patchbay`.
-    patch_ui: patchbay::PatchUi,
-    /// The patch canvas's own view, exactly like `NodeEditor`'s: a free 2D
-    /// pan in screen points with NO bounds, so you can push the arrangement
-    /// off into empty space the way you can in the graph. (The docked
-    /// properties strip is a strip and keeps its scroll area.)
-    patch_pan: egui::Vec2,
-    /// Houdini-style dolly in flight: alt + right-drag zooms about this
-    /// press point.
-    patch_zoom_anchor: Option<egui::Pos2>,
-    /// A pan is in flight. Held as state so the gesture survives the pointer
-    /// crossing a panel or leaving the canvas, as it does in the graph.
-    patch_panning: bool,
     /// Per-Read NVMe residency, probed off-thread and refreshed on a timer
     /// (each probe stats every frame file, so it never runs inline).
     disk_probe: std::collections::BTreeMap<u64, DiskProbe>,
@@ -8092,13 +8066,17 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         edit_close_prompt: false,
         quit_now: false,
         dock_pending: None,
-        patch_cell: Default::default(),
-        patch_span: Default::default(),
-        patch_drag: None,
-        patch_link_mode: false,
-        patch_pan: egui::Vec2::ZERO,
-        patch_zoom_anchor: None,
-        patch_panning: false,
+        patch: state::PatchState {
+            cell: Default::default(),
+            span: Default::default(),
+            drag: None,
+            link_mode: false,
+            pan: egui::Vec2::ZERO,
+            zoom_anchor: None,
+            panning: false,
+            ui: Default::default(),
+            menu_pos: egui::Vec2::ZERO,
+        },
         disk_probe: Default::default(),
         reads_uncached: Default::default(),
         reads_cached: Default::default(),
@@ -8108,8 +8086,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         disk_probe_rx: disk_probe_rx,
         disk_probe_tx,
         wire_drag: None,
-        patch_ui: Default::default(),
-        patch_menu_pos: egui::Vec2::ZERO,
         docks: Some(docks),
         ui_gpu,
         dock_drawing_main: false,
@@ -10173,7 +10149,7 @@ impl Gfx {
             pinned_gizmos: &self.gizmo_pinned,
             prop_layouts: &self.prop.layouts,
             patch_tiles: self
-                .patch_cell
+                .patch.cell
                 .iter()
                 .map(|(n, c)| (*n, *c, self.patch_span_of(*n)))
                 .collect(),
@@ -10240,7 +10216,7 @@ impl Gfx {
         self.prop.order = s.activated;
         self.gizmo_pinned = s.pinned_gizmos;
         self.prop.layouts = s.prop_layouts;
-        self.patch_cell =
+        self.patch.cell =
             s.patch_tiles.iter().map(|(n, c, sp)| (*n, self.migrate_cell(*n, *c, *sp))).collect();
         self.selected.clear();
         // Opening a file starts from nothing. Swapping the shot under an
@@ -12695,7 +12671,7 @@ impl Gfx {
             let tab_pressed = keymap::take_search(&self.egui_ctx, &mut raw_input);
             self.node_editor.tab_open_request = tab_pressed;
             // Both canvases get the flag; only the hovered one consumes it.
-            self.patch_ui.tab_request = tab_pressed;
+            self.patch.ui.tab_request = tab_pressed;
             let raw_input = raw_input;
             let egui_ctx = self.egui_ctx.clone();
             theme::sync(&egui_ctx);
@@ -15701,9 +15677,9 @@ impl Gfx {
         // ctx sees no pointer at all — ask the canvas directly, or a cable
         // drag records a step every frame.
         if !ctx.input(|i| i.pointer.any_down())
-            && !self.patch_ui.gesture_live()
+            && !self.patch.ui.gesture_live()
             && self.wire_drag.is_none()
-            && self.patch_drag.is_none()
+            && self.patch.drag.is_none()
             && self.egraph != self.undo_last
         {
             self.undo_stack.push(self.undo_last.clone());
@@ -20173,9 +20149,9 @@ impl Gfx {
                         .last()
                         .is_some_and(|d| matches!(d.kind, DiveKind::Noise | DiveKind::Geo | DiveKind::Sdf));
                     if in_noise {
-                        self.patch_link_mode = false;
+                        self.patch.link_mode = false;
                     }
-                    let on = self.patch_link_mode;
+                    let on = self.patch.link_mode;
                     if !in_noise && ui
                         .selectable_label(on, "patch")
                         .on_hover_text(
@@ -20187,9 +20163,9 @@ impl Gfx {
                         )
                         .clicked()
                     {
-                        self.patch_link_mode = !on;
+                        self.patch.link_mode = !on;
                     }
-                    if self.patch_link_mode {
+                    if self.patch.link_mode {
                         // rgb triples: one port and one three-strand cable,
                         // or the real per-lane wiring underneath.
                         let ex = self.prefs.expand_rgb.unwrap_or(false);
@@ -20208,7 +20184,7 @@ impl Gfx {
                     }
                     ui.separator();
                     self.prop_layout_bar(ui);
-                    if self.patch_link_mode {
+                    if self.patch.link_mode {
                         ui.weak(
                             "· drag out -> in (magnets) · drop on bare grid to add a node \
                              · Tab: value nodes · ctrl-drag: slice · hover a cable for its \
@@ -20319,7 +20295,7 @@ impl Gfx {
         // it — the miss here is what made Tab dead in a detached graph.
         let tab_pressed = keymap::take_search(&pane.egui_ctx, &mut raw_input);
         self.node_editor.tab_open_request = tab_pressed;
-        self.patch_ui.tab_request = tab_pressed;
+        self.patch.ui.tab_request = tab_pressed;
         let raw_input = raw_input;
         let kind = pane.kind;
         let ctx = pane.egui_ctx.clone();
@@ -20480,7 +20456,7 @@ impl Gfx {
                         None => drv.is_some(),
                     };
                     if let Some(g) = group {
-                        self.patch_ui.note_rgb_port(node, g.lanes);
+                        self.patch.ui.note_rgb_port(node, g.lanes);
                     }
                     ui.horizontal(|ui| {
                         patchbay::jack(
@@ -20538,7 +20514,7 @@ impl Gfx {
         sockets: &mut patchbay::Sockets,
     ) {
         patchbay::mods_ui(
-            &mut self.patch_ui,
+            &mut self.patch.ui,
             ui,
             &mut self.egraph,
             &mut self.wire_drag,
@@ -20560,7 +20536,7 @@ impl Gfx {
         origin: egui::Pos2,
     ) {
         patchbay::cables_ui(
-            &mut self.patch_ui,
+            &mut self.patch.ui,
             ui,
             &mut self.egraph,
             &mut self.wire_drag,
@@ -23258,8 +23234,8 @@ impl Gfx {
     /// moving the pan. `before` is the zoom the current pan was built for.
     /// Same arithmetic as the node graph's zoom-about-cursor.
     fn patch_zoom_about(&mut self, at: egui::Pos2, view: egui::Rect, before: f32) {
-        self.patch_pan =
-            patchbay::zoom_about(self.patch_pan, view.min, at, before, self.prop.zoom);
+        self.patch.pan =
+            patchbay::zoom_about(self.patch.pan, view.min, at, before, self.prop.zoom);
     }
 
     /// A panel's footprint in grid CELLS (`widgets::CELLS_PER_TILE` per
@@ -23321,7 +23297,7 @@ impl Gfx {
                 l.nodes.into_iter().filter(|n| self.egraph.node(*n).is_some()).collect();
             for (n, c, sp) in l.patch {
                 let c = self.migrate_cell(n, c, sp);
-                self.patch_cell.insert(n, c);
+                self.patch.cell.insert(n, c);
             }
         }
         if let Some(i) = delete {
@@ -23346,7 +23322,7 @@ impl Gfx {
                     .prop.order
                     .iter()
                     .filter_map(|n| {
-                        Some((*n, *self.patch_cell.get(n)?, self.patch_span_of(*n)))
+                        Some((*n, *self.patch.cell.get(n)?, self.patch_span_of(*n)))
                     })
                     .collect(),
             };
@@ -23515,7 +23491,7 @@ impl Gfx {
         };
         let factor = wn.zoom;
         if patch && wn.pan != egui::Vec2::ZERO && ui.ui_contains_pointer() {
-            self.patch_pan += wn.pan;
+            self.patch.pan += wn.pan;
         }
         // A curve canvas under the pointer navigates itself with the same
         // wheel/pinch; zooming the grid too would do both at once.
@@ -23571,31 +23547,31 @@ impl Gfx {
             let nav_zoom = (sec && alt && !ctrl)
                 || (mid && ctrlish)
                 || (prim && alt && ctrlish);
-            if self.patch_zoom_anchor.is_none() && nav_zoom && over {
-                self.patch_zoom_anchor = ui.input(|i| i.pointer.press_origin());
+            if self.patch.zoom_anchor.is_none() && nav_zoom && over {
+                self.patch.zoom_anchor = ui.input(|i| i.pointer.press_origin());
             }
             if !(sec || mid || prim) {
-                self.patch_zoom_anchor = None;
+                self.patch.zoom_anchor = None;
             }
-            if let Some(a) = self.patch_zoom_anchor {
+            if let Some(a) = self.patch.zoom_anchor {
                 let before = self.prop.zoom;
                 self.set_prop_zoom(before * ((delta.x - delta.y) * 0.005).exp());
                 self.patch_zoom_about(a, view_rect, before);
             }
             // alt-drag or middle-drag pans, with no bounds of any kind —
             // unless ctrl turns the chord into the drag-zoom above.
-            if !self.patch_panning
+            if !self.patch.panning
                 && over
-                && self.patch_zoom_anchor.is_none()
+                && self.patch.zoom_anchor.is_none()
                 && ((alt && prim && !ctrlish) || (mid && !ctrlish))
             {
-                self.patch_panning = true;
+                self.patch.panning = true;
             }
             if !(prim || mid) {
-                self.patch_panning = false;
+                self.patch.panning = false;
             }
-            if self.patch_panning {
-                self.patch_pan += delta;
+            if self.patch.panning {
+                self.patch.pan += delta;
             }
         }
         // The strip's per-axis stretch: Blender's graph-editor chord
@@ -23757,13 +23733,13 @@ impl Gfx {
             // and a cell chosen for the old one would overlap its neighbours.
             for node in &order {
                 let span = self.patch_span_of(*node);
-                if self.patch_span.get(node) != Some(&span) {
-                    self.patch_cell.remove(node);
-                    self.patch_span.insert(*node, span);
+                if self.patch.span.get(node) != Some(&span) {
+                    self.patch.cell.remove(node);
+                    self.patch.span.insert(*node, span);
                 }
             }
             for node in &order {
-                if self.patch_cell.contains_key(node) {
+                if self.patch.cell.contains_key(node) {
                     continue;
                 }
                 let span = self.patch_span_of(*node);
@@ -23771,16 +23747,16 @@ impl Gfx {
                     .iter()
                     .filter(|n| *n != node)
                     .filter_map(|n| {
-                        Some((*self.patch_cell.get(n)?, self.patch_span_of(*n)))
+                        Some((*self.patch.cell.get(n)?, self.patch_span_of(*n)))
                     })
                     .collect();
-                self.patch_cell
+                self.patch.cell
                     .insert(*node, widgets::first_free_cell(span, &others, cols));
             }
         }
         let mut sockets: patchbay::Sockets = Vec::new();
         // Collapsed rgb ports are rebuilt from what the panels actually draw.
-        self.patch_ui.clear_ports();
+        self.patch.ui.clear_ports();
         // Live values for every patch cable: what each one CARRIES (hovering
         // a cable shows the number) and, for the ones that land on a channel,
         // what that channel therefore reads (rows go amber). One base build
@@ -23849,7 +23825,7 @@ impl Gfx {
             // The canvas carries its own pan; the strip takes the scroll
             // area's content origin as before.
             let origin = if patch {
-                view_rect.min + self.patch_pan
+                view_rect.min + self.patch.pan
             } else {
                 ui.next_widget_position()
             };
@@ -23871,13 +23847,13 @@ impl Gfx {
                 let cr = ui.allocate_rect(canvas, egui::Sense::click_and_drag());
                 // Double-click bare canvas resets the view, as in the graph.
                 if cr.double_clicked() {
-                    self.patch_pan = egui::Vec2::ZERO;
+                    self.patch.pan = egui::Vec2::ZERO;
                     self.set_prop_zoom(1.0);
                 }
-                if self.patch_link_mode {
-                    let mut menu_at = self.patch_menu_pos;
+                if self.patch.link_mode {
+                    let mut menu_at = self.patch.menu_pos;
                     patchbay::canvas_gestures(
-                        &mut self.patch_ui,
+                        &mut self.patch.ui,
                         ui,
                         &cr,
                         &mut self.egraph,
@@ -23885,7 +23861,7 @@ impl Gfx {
                         zoom,
                         &mut menu_at,
                     );
-                    self.patch_menu_pos = menu_at;
+                    self.patch.menu_pos = menu_at;
                 }
                 // Grid fills the VIEW and is phased to the origin, so it
                 // keeps going wherever you pan — there is no edge of the
@@ -24059,7 +24035,7 @@ impl Gfx {
                     ph = if is_tool && !vertical { fill } else { ph.min(fill) };
                 }
                 let prect = patch.then(|| {
-                    let c = self.patch_cell.get(&node).copied().unwrap_or([0, 0]);
+                    let c = self.patch.cell.get(&node).copied().unwrap_or([0, 0]);
                     egui::Rect::from_min_size(
                         origin
                             + egui::vec2(c[0] as f32 * pitch.x, c[1] as f32 * pitch.y),
@@ -24394,7 +24370,7 @@ impl Gfx {
                     // alt-drag is the canvas pan, never a panel move.
                     if hdrag.drag_started() && !alt {
                         if let Some(p) = hdrag.interact_pointer_pos() {
-                            self.patch_drag = Some((node, p - pr.min));
+                            self.patch.drag = Some((node, p - pr.min));
                         }
                     }
                 } else if hdrag.dragged() {
@@ -24403,7 +24379,7 @@ impl Gfx {
                     self.prop.selected =
                         if self.prop.selected == Some(node) { None } else { Some(node) };
                 }
-                if patch && self.patch_link_mode {
+                if patch && self.patch.link_mode {
                     self.link_panel_ui(ui, node, cur_t, &driven_vals, &mut sockets);
                 } else {
                 egui::ScrollArea::vertical()
@@ -26241,7 +26217,7 @@ impl Gfx {
             if !patch {
                 self.prop.panel_rects = panel_rects.clone();
             }
-            if patch && self.patch_link_mode {
+            if patch && self.patch.link_mode {
                 // Resting cables paint into this slot: OVER the panels they
                 // plug into (a patch cable lies across the rack, and jacks
                 // live inside the panels — under them the cables would be
@@ -26253,13 +26229,13 @@ impl Gfx {
                 // An off-canvas cable's chip was clicked: pin what it points
                 // at. The canvas can see that a jack is missing but not who
                 // is pinned, so the app does the pinning.
-                for n in self.patch_ui.take_summons() {
+                for n in self.patch.ui.take_summons() {
                     if self.egraph.node(n).is_some() && !self.prop.order.contains(&n) {
                         self.prop.order.push(n);
                     }
                 }
                 patchbay::search_ui(
-                    &mut self.patch_ui,
+                    &mut self.patch.ui,
                     ui,
                     &mut self.egraph,
                     origin,
@@ -26268,20 +26244,20 @@ impl Gfx {
             }
             if patch {
                 if !ui.input(|i| i.pointer.any_down()) {
-                    self.patch_drag = None;
+                    self.patch.drag = None;
                 }
                 let placed: Vec<(u64, [i32; 2], [u8; 2])> = self
                     .prop.order
                     .iter()
                     .filter_map(|n| {
-                        Some((*n, *self.patch_cell.get(n)?, self.patch_span_of(*n)))
+                        Some((*n, *self.patch.cell.get(n)?, self.patch_span_of(*n)))
                     })
                     .collect();
                 // Header drag slides a piece cell-to-cell; it only ever
                 // lands on free grid, so pieces can never overlap. Cells go
                 // negative freely — the canvas has no origin corner you can
                 // back into, any more than the graph does.
-                if let Some((id, grab)) = self.patch_drag {
+                if let Some((id, grab)) = self.patch.drag {
                     if let Some(p) = ui.ctx().pointer_latest_pos() {
                         let rel = p - grab - origin.to_vec2();
                         let want = [
@@ -26295,7 +26271,7 @@ impl Gfx {
                             .map(|(_, c, sp)| (*c, *sp))
                             .collect();
                         if !widgets::any_overlap(want, span, &others) {
-                            self.patch_cell.insert(id, want);
+                            self.patch.cell.insert(id, want);
                         }
                     }
                 }
