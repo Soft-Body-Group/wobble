@@ -10,6 +10,7 @@ mod eyedrop;
 mod frames;
 mod inout;
 mod layer;
+mod paint;
 mod range;
 mod record;
 mod shot;
