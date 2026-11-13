@@ -17,6 +17,7 @@ mod layer;
 mod paint;
 mod patchlive;
 mod picker;
+mod plugin;
 mod range;
 mod record;
 mod region;
