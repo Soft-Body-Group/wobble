@@ -4,6 +4,7 @@ mod compose;
 mod curveedit;
 mod dual;
 mod eyedrop;
+mod inout;
 mod layer;
 mod record;
 mod shot;
