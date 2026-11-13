@@ -93,6 +93,7 @@ pub mod extract;
 pub mod curve;
 pub mod noise;
 pub mod tracker;
+pub mod keyer;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.

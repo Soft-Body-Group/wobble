@@ -30624,27 +30624,17 @@ impl Gfx {
                         nodes::speed::panel(ui, sp, cur_t, extra_readers);
                     }
                     NodeKind::Keyer(kp) => {
-                        let mut sel =
-                            self.keyer.sel.get(&node).copied().unwrap_or(0);
-                        let out = keyerui::keyer_ui(
-                            ui,
-                            kp,
-                            &mut rcx,
-                            &mut sel,
-                            self.keyer.cloud.get(&node),
-                            viewing,
-                            zoom,
-                            working,
-                        );
-                        self.keyer.sel.insert(node, sel);
-                        if out.hud.is_some() {
-                            hud_drag_out = out.hud;
-                        }
-                        if out.want_cloud {
-                            self.keyer.want_cloud = Some(node);
-                        }
-                        if out.want_view {
-                            self.keyer.want_view = Some(node);
+                        if let Some(h) = nodes::keyer::panel(
+                                ui,
+                                &mut rcx,
+                                kp,
+                                node,
+                                viewing,
+                                working,
+                                zoom,
+                                &mut self.keyer,
+                            ) {
+                            hud_drag_out = Some(h);
                         }
                     }
                     NodeKind::Cryptomatte(cp) => {
