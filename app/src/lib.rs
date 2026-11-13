@@ -30252,53 +30252,9 @@ impl Gfx {
                         }
                     }
                     NodeKind::Grid(g) => {
-                        use anim::Channel::*;
-                        widgets::gen_format_row(ui, ("grid-format", node), &mut g.size, &mut g.inherit);
-                        let mut h = widgets::drags_linked(
-                            ui,
-                            &mut rcx,
-                            "spacing",
-                            {
-                                let [sx, sy] = &mut g.spacing;
-                                &mut [sx, sy]
-                            },
-                            0.5,
-                            (1.0, 512.0),
-                            &[GridSpacingX, GridSpacingY],
-                        );
-                        h = h.or(widgets::slider(
-                            ui,
-                            &mut rcx,
-                            "line",
-                            &mut g.width,
-                            0.0,
-                            32.0,
-                            &[GridWidth],
-                        ));
-                        h = h.or(widgets::drags(
-                            ui,
-                            &mut rcx,
-                            "offset",
-                            {
-                                let [ox, oy] = &mut g.offset;
-                                &mut [ox, oy]
-                            },
-                            0.5,
-                            (-256.0, 256.0),
-                            &[GridOffsetX, GridOffsetY],
-                        ));
-                        ui.horizontal(|ui| {
-                            ui.label("colours");
-                            let spec = pick_spec(working, true);
-                            colorpicker::button(ui, (node, "grid-line"), &mut g.line, spec)
-                                .on_hover_text("line");
-                            colorpicker::button(ui, (node, "grid-back"), &mut g.back, spec)
-                                .on_hover_text("background");
-                        });
-                        if h.is_some() {
-                            hud_drag_out = h;
+                        if let Some(h) = nodes::grid::panel(ui, &mut rcx, g, node, working) {
+                            hud_drag_out = Some(h);
                         }
-                        ui.weak("generated at its own format — a source, like a Load");
                     }
                     NodeKind::Reformat(rf) => {
                         ui.horizontal(|ui| {
