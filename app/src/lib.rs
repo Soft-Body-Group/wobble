@@ -11,6 +11,7 @@ mod appicon;
 mod assets;
 mod collect;
 mod stress;
+mod doc;
 mod suites;
 mod viewer;
 mod animnoise;
