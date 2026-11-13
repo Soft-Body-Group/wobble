@@ -61,6 +61,7 @@ mod tab;
 mod thumbs;
 mod track;
 mod track_ui;
+mod tv;
 mod viewlock;
 mod viewpie;
 mod viewswitch;
