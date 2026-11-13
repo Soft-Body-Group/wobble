@@ -47,6 +47,7 @@ mod precache;
 mod propspie;
 mod proxy;
 mod range;
+mod rc;
 mod record;
 mod region;
 mod rgb;
