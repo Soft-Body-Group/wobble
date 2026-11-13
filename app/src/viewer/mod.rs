@@ -15,3 +15,4 @@ mod geoedit;
 mod geobones;
 mod geotools;
 mod geogradient;
+mod geoxform;
