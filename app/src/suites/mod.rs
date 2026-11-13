@@ -56,6 +56,7 @@ mod subwob;
 mod tab;
 mod thumbs;
 mod track;
+mod track_ui;
 mod viewlock;
 mod viewpie;
 mod viewswitch;
