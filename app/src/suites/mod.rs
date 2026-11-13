@@ -29,6 +29,7 @@ mod patchlive;
 mod picker;
 mod plugin;
 mod precache;
+mod propspie;
 mod proxy;
 mod range;
 mod record;
