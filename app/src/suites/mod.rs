@@ -3,6 +3,7 @@
 mod compose;
 mod curveedit;
 mod eyedrop;
+mod record;
 mod shot;
 mod slice;
 mod subwob;
