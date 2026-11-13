@@ -30059,16 +30059,8 @@ impl Gfx {
                         );
                     }
                     NodeKind::Shader(sp) => {
-                        let h = shaderui::params_ui(
-                            ui,
-                            &mut rcx,
-                            node,
-                            sp,
-                            shader_dirty,
-                            &mut shader_req,
-                        );
-                        if h.is_some() {
-                            hud_drag_out = h;
+                        if let Some(h) = nodes::shader::panel(ui, &mut rcx, sp, node, shader_dirty, &mut shader_req) {
+                            hud_drag_out = Some(h);
                         }
                     }
                     NodeKind::Custom { type_id, params } => {
