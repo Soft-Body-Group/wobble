@@ -14,3 +14,4 @@ mod geobrush;
 mod geoedit;
 mod geobones;
 mod geotools;
+mod geogradient;
