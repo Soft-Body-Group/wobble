@@ -50,5 +50,6 @@ mod thumbs;
 mod viewlock;
 mod viewpie;
 mod viewswitch;
+mod write;
 mod zones;
 mod zoom;
