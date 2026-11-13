@@ -57,6 +57,7 @@ mod roto;
 mod scrub;
 mod scrubfid;
 mod scrubperf;
+mod seek;
 mod setup;
 mod shader;
 mod shot;
