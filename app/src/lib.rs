@@ -32538,14 +32538,16 @@ impl Gfx {
                         }
                     }
                     NodeKind::SdfNode(n) => {
-                        // The points picked in the viewer, for the tension row.
-                        let picked: Vec<usize> = if self.spline_sel_node == Some(node) {
-                            self.spline_sel.iter().copied().collect()
-                        } else {
-                            Vec::new()
-                        };
-                        let spec = pick_spec(working, true);
-                        if let Some(h) = sdfui::node_panel(ui, &mut rcx, node, n, &wired, &picked, spec) {
+                        if let Some(h) = nodes::sdfnode::panel(
+                                ui,
+                                &mut rcx,
+                                n,
+                                node,
+                                wired,
+                                working,
+                                self.spline_sel_node,
+                                &self.spline_sel,
+                            ) {
                             hud_drag_out = Some(h);
                         }
                     }
