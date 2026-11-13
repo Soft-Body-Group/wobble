@@ -1,6 +1,7 @@
 //! The `--test-*` suites: one file per suite, each an `impl Gfx` block
 //! holding that suite's driver. main.rs only dispatches to them.
 mod bake;
+mod r#box;
 mod compose;
 mod curveedit;
 mod curves;
