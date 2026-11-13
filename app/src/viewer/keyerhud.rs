@@ -19,10 +19,10 @@ impl Gfx {
         if let Some(kid) = self.egraph.active_view().filter(|id| {
             matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::Keyer(_)))
         }) {
-            if !self.hud_hidden.contains(&kid) && !self.prefs.hud_hide.unwrap_or(false) {
+            if !self.hud.hidden.contains(&kid) && !self.prefs.hud_hide.unwrap_or(false) {
                 let side = 156.0;
                 let off = *self
-                    .hud_pos
+                    .hud.pos
                     .entry(kid)
                     .or_insert(egui::vec2(avail.width() - side - 20.0, 16.0));
                 let hud = egui::Rect::from_min_size(
@@ -35,7 +35,7 @@ impl Gfx {
                     egui::Sense::click_and_drag(),
                 );
                 if drag.dragged() {
-                    if let Some(o) = self.hud_pos.get_mut(&kid) {
+                    if let Some(o) = self.hud.pos.get_mut(&kid) {
                         *o += drag.drag_delta();
                         o.x = o.x.clamp(4.0, (avail.width() - side - 4.0).max(4.0));
                         o.y = o.y.clamp(4.0, (avail.height() - side - 4.0).max(4.0));

@@ -268,8 +268,8 @@ impl Gfx {
                     let p = last + egui::vec2(6.0, 4.0);
                     raw.events.push(egui::Event::PointerMoved(p));
                     self.test.compose_at.1 = p;
-                    if self.hud_drag.is_some() {
-                        if !self.hud_drag.as_ref().is_some_and(|h| h.wheel && h.rgb && h.chans.len() == 3) {
+                    if self.hud.drag.is_some() {
+                        if !self.hud.drag.as_ref().is_some_and(|h| h.wheel && h.rgb && h.chans.len() == 3) {
                             fail("the pulled wheel is not marked as a wheel triple".into());
                         }
                         next = 10;

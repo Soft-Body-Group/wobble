@@ -5601,17 +5601,7 @@ struct Gfx {
     setup_browser: Option<setupbrowser::SetupBrowser>,
     /// The track import window (`trackimport`), for one node at a time.
     track_import: Option<trackimport::Win>,
-    /// Grade viewer-HUD positions (offset from image rect min), per-axis
-    /// control scale, and hidden set.
-    hud_pos: HashMap<u64, egui::Vec2>,
-    hud_scale: HashMap<u64, egui::Vec2>,
-    hud_hidden: std::collections::HashSet<u64>,
-    hud_luma: HashMap<u64, f32>,
-    /// HUDs that opted OUT of the frosted background (default = frosted).
-    hud_no_frost: std::collections::HashSet<u64>,
-    hud_ui_open: bool,
-    /// The viewer hotkey strip's words, 0 = tucked into their caps.
-    hud_keys_reveal: f32,
+    hud: state::HudState,
     /// The properties pie while its key is held: centre and what it acts on.
     props_pie: Option<(egui::Pos2, PropsTarget)>,
     props_pie_anim: (f32, f32),
@@ -6014,8 +6004,6 @@ struct Gfx {
     gizmo_pinned: Vec<u64>,
     /// Floating on-viewer sliders (ctrl-drag a row out of the panel).
     huds: Vec<widgets::HudSlider>,
-    /// A HUD spawn in flight (following the cursor until release).
-    hud_drag: Option<widgets::HudSlider>,
     /// Shader-node code buffers and which one's window is open.
     shader_editors: shaderui::Editors,
     /// Cost + licence taint for the graph, recomputed once a frame: which
@@ -6137,8 +6125,6 @@ struct Gfx {
     inactive_slots: std::collections::HashSet<usize>,
     /// Where the popped-out layer window laid out last frame (--test-layer).
     last_layer_window: Option<egui::Rect>,
-    /// --test-click hud-off phase: translate.x before the inert drag.
-    hud_off_tx0: f32,
     /// Width of the first properties panel laid out last frame — the zoom
     /// suite reads it.
     last_panel_w: f32,
@@ -7652,13 +7638,17 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         setup_error: None,
         setup_browser: None,
         track_import: None,
-        hud_pos: HashMap::new(),
-        hud_scale: HashMap::new(),
-        hud_hidden: std::collections::HashSet::new(),
-        hud_luma: HashMap::new(),
-        hud_no_frost: std::collections::HashSet::new(),
-        hud_ui_open: false,
-        hud_keys_reveal: 0.0,
+        hud: state::HudState {
+            pos: HashMap::new(),
+            scale: HashMap::new(),
+            hidden: std::collections::HashSet::new(),
+            luma: HashMap::new(),
+            no_frost: std::collections::HashSet::new(),
+            ui_open: false,
+            keys_reveal: 0.0,
+            drag: None,
+            off_tx0: 0.0,
+        },
         props_pie: None,
         props_pie_anim: (0.0, 0.0),
         viewer_pie: None,
@@ -8109,7 +8099,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         testing: opts.headless(),
         gizmo_pinned: Vec::new(),
         huds: Vec::new(),
-        hud_drag: None,
         shader_editors: Default::default(),
         cost_flow: Default::default(),
         api: api_port.and_then(apiserve::ApiServe::start),
@@ -8160,7 +8149,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         precache: None,
         inactive_slots: Default::default(),
         last_layer_window: None,
-        hud_off_tx0: 0.0,
         last_panel_w: 0.0,
         zoom_font_1x: 0.0,
         last_panel_x: 0.0,
@@ -16076,7 +16064,7 @@ impl Gfx {
                                 anim,
                                 ekind: &ekind,
                                 t: cur_t,
-                                hud_live: self.hud_drag.is_some(),
+                                hud_live: self.hud.drag.is_some(),
                                 driven: Vec::new(),
                             };
                             result = Some(layerui::window(
@@ -16130,7 +16118,7 @@ impl Gfx {
                             None => {}
                         }
                         if o.hud.is_some() {
-                            self.hud_drag = o.hud;
+                            self.hud.drag = o.hud;
                         }
                     }
                 }
@@ -16725,7 +16713,7 @@ impl Gfx {
                 save_prefs(&self.prefs);
             }
         }
-        if self.hud_ui_open {
+        if self.hud.ui_open {
             let mut open = true;
             let ctx2 = ctx.clone();
             egui::Window::new("hud style").open(&mut open).resizable(false).show(
@@ -16752,7 +16740,7 @@ impl Gfx {
                     ui.weak("per-HUD ~ button toggles frost on/off");
                 },
             );
-            self.hud_ui_open = open;
+            self.hud.ui_open = open;
         }
         self.setup_browser_ui(&ctx);
         self.track_import_ui(&ctx);
@@ -16830,7 +16818,7 @@ impl Gfx {
 
         // A HUD spawn in flight: ghost pill under the cursor; dropping on
         // the viewer commits it as a floating channel slider.
-        if let Some(h) = self.hud_drag.clone() {
+        if let Some(h) = self.hud.drag.clone() {
             let ptr = ctx.pointer_latest_pos();
             if let Some(p) = ptr {
                 let painter = ctx.layer_painter(egui::LayerId::new(
@@ -16870,7 +16858,7 @@ impl Gfx {
                         }
                     }
                 }
-                self.hud_drag = None;
+                self.hud.drag = None;
             }
         }
 
@@ -17440,7 +17428,7 @@ impl Gfx {
             }
             if ui.button("hud…").on_hover_text("frost blur / darken / opacity").clicked()
             {
-                self.hud_ui_open = !self.hud_ui_open;
+                self.hud.ui_open = !self.hud.ui_open;
             }
             // Manipulator mode: follow the selection, or only show
             // X-click pinned nodes.
@@ -18378,23 +18366,23 @@ impl Gfx {
             let strip = hudkeys::TopStrip::new(&painter, area, &items);
             let hot = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| {
                 strip.row().expand(6.0).contains(p)
-                    || (self.hud_keys_reveal > 0.3 && strip.fan(&painter).contains(p))
+                    || (self.hud.keys_reveal > 0.3 && strip.fan(&painter).contains(p))
             });
             let target = if hot { 1.0 } else { 0.0 };
             let dt = ui.input(|i| i.stable_dt).min(0.1);
-            self.hud_keys_reveal += (target - self.hud_keys_reveal) * (1.0 - (-dt * 12.0).exp());
-            if (target - self.hud_keys_reveal).abs() > 0.004 {
+            self.hud.keys_reveal += (target - self.hud.keys_reveal) * (1.0 - (-dt * 12.0).exp());
+            if (target - self.hud.keys_reveal).abs() > 0.004 {
                 ui.ctx().request_repaint();
             } else {
-                self.hud_keys_reveal = target;
+                self.hud.keys_reveal = target;
             }
-            let reveal = self.hud_keys_reveal;
+            let reveal = self.hud.keys_reveal;
             deferred.push(Box::new(move |pt: &egui::Painter| {
                 strip.draw_caps(pt);
                 strip.draw_words(pt, reveal);
             }));
         } else {
-            self.hud_keys_reveal = 0.0;
+            self.hud.keys_reveal = 0.0;
         }
 
         // Hand all collected marks to the per-pixel ink pipeline.
@@ -18547,11 +18535,11 @@ impl Gfx {
                 ));
             }
         }
-        for (&node, off) in &self.hud_pos {
-            if self.hud_hidden.contains(&node) {
+        for (&node, off) in &self.hud.pos {
+            if self.hud.hidden.contains(&node) {
                 continue;
             }
-            let scale = self.hud_scale.get(&node).copied().unwrap_or(egui::vec2(1.0, 1.0));
+            let scale = self.hud.scale.get(&node).copied().unwrap_or(egui::vec2(1.0, 1.0));
             // HUDs anchor to the viewer panel (window-locked), not the image.
             centers.push((
                 node,
@@ -18624,7 +18612,7 @@ impl Gfx {
                     }
                 }
                 let luma = (sum / n.max(1) as f64) as f32;
-                self.hud_luma.insert(p.node, luma);
+                self.hud.luma.insert(p.node, luma);
                 done.push(i);
             }
         }
@@ -23593,7 +23581,7 @@ impl Gfx {
         }
         let zoom = self.prop.zoom;
         let order = self.prop.order.clone();
-        let hud_live = self.hud_drag.is_some();
+        let hud_live = self.hud.drag.is_some();
         let mut hud_drag_out: Option<widgets::HudSlider> = None;
         // The properties panel holds a mutable borrow of the node it is
         // drawing, so a Shader row asking for its code window (or for a
@@ -25099,7 +25087,7 @@ impl Gfx {
                                 viewing,
                                 working,
                                 zoom,
-                                hud_hidden: &mut self.hud_hidden,
+                                hud_hidden: &mut self.hud.hidden,
                             }) {
                             hud_drag_out = Some(h);
                         }
@@ -26311,7 +26299,7 @@ impl Gfx {
             self.curve_rect = None;
         }
         if hud_drag_out.is_some() {
-            self.hud_drag = hud_drag_out;
+            self.hud.drag = hud_drag_out;
         }
         match shader_req {
             Some(shaderui::Req::Edit(id)) => self.shader_editors.open = Some(id),

@@ -214,7 +214,7 @@ impl Gfx {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
                 };
-                self.hud_off_tx0 = tx0;
+                self.hud.off_tx0 = tx0;
                 let c = {
                     let r = self.image_rect;
                     egui::pos2(
@@ -254,7 +254,7 @@ impl Gfx {
                     Some(NodeKind::Transform(t)) => t.translate[0],
                     _ => 0.0,
                 };
-                let moved = (tx - self.hud_off_tx0).abs();
+                let moved = (tx - self.hud.off_tx0).abs();
                 if moved > 0.5 {
                     println!(
                         "HUD OFF TEST FAIL: hidden gizmo still dragged (moved {moved:.1})"

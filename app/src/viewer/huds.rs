@@ -37,12 +37,12 @@ impl Gfx {
             };
             let before_g = gw.clone();
             let g = &mut gw;
-            if self.hud_hidden.contains(&node) {
+            if self.hud.hidden.contains(&node) {
                 continue;
             }
             let default_off = egui::vec2(16.0, 16.0 + hud_index as f32 * 150.0);
             hud_index += 1;
-            let scale = *self.hud_scale.entry(node).or_insert(egui::vec2(1.0, 1.0));
+            let scale = *self.hud.scale.entry(node).or_insert(egui::vec2(1.0, 1.0));
             // Same gesture vocabulary as the properties rgb slider: G
             // inverts the gang while held, S/D/F arm the colour axes.
             let mods = rgbslider::Mods::read(ui);
@@ -58,13 +58,13 @@ impl Gfx {
             // Window-locked: the offset is relative to the viewer panel, not
             // the image, so the HUD holds its screen position while the
             // canvas pans/zooms under it. Clamped to stay reachable.
-            let off = self.hud_pos.entry(node).or_insert(default_off);
+            let off = self.hud.pos.entry(node).or_insert(default_off);
             off.x = off.x.clamp(4.0, (avail.width() - w - 8.0).max(4.0));
             off.y = off.y.clamp(4.0, (avail.height() - h - 8.0).max(4.0));
             let origin = avail.min + *off;
             // Frosted panel behind the whole HUD (old-iOS heavy blur),
             // per-HUD toggle in the header.
-            let frosted = !self.hud_no_frost.contains(&node);
+            let frosted = !self.hud.no_frost.contains(&node);
             if frosted {
                 ink.frost(
                     egui::Rect::from_min_size(
@@ -90,7 +90,7 @@ impl Gfx {
             // Layout stretches with hud_scale; fonts/handles stay
             // constant (like node labels under editor zoom).
             let fsz = 1.0f32;
-            let dark_bg = self.hud_luma.get(&node).copied().unwrap_or(0.0) <= 0.45;
+            let dark_bg = self.hud.luma.get(&node).copied().unwrap_or(0.0) <= 0.45;
             // Frosted: fixed tones (the panel normalizes the bg).
             // Otherwise match the ink shader's luma-adaptive greys.
             let (mono, anti) = if frosted {
@@ -164,15 +164,15 @@ impl Gfx {
                 .clicked()
             {
                 if frosted {
-                    self.hud_no_frost.insert(node);
+                    self.hud.no_frost.insert(node);
                 } else {
-                    self.hud_no_frost.remove(&node);
+                    self.hud.no_frost.remove(&node);
                 }
             }
             let header = egui::Rect::from_min_size(origin, egui::vec2(w - 78.0, header_h));
             let hg = ui.interact(header, ui.id().with(("hud-grip", node)), egui::Sense::drag());
             if hg.dragged() && !hg.drag_started() {
-                *self.hud_pos.get_mut(&node).unwrap() += hg.drag_delta();
+                *self.hud.pos.get_mut(&node).unwrap() += hg.drag_delta();
             }
 
             let grect = egui::Rect::from_center_size(
@@ -229,7 +229,7 @@ impl Gfx {
                 .interact(hide_r, ui.id().with(("hud-hide", node)), egui::Sense::click())
                 .clicked()
             {
-                self.hud_hidden.insert(node);
+                self.hud.hidden.insert(node);
             }
 
             // Lift and offset live around zero (additive); gamma and
@@ -450,7 +450,7 @@ impl Gfx {
                 ink.seg(rh + egui::vec2(-4.0, 0.0), rh + egui::vec2(0.0, -4.0), 1.5, 1.0, rr.hovered());
             }
             if rr.dragged() && !rr.drag_started() {
-                let sc = self.hud_scale.get_mut(&node).unwrap();
+                let sc = self.hud.scale.get_mut(&node).unwrap();
                 let d = rr.drag_delta();
                 if ui.input(|i| i.modifiers.alt) {
                     // Alt: uniform.

@@ -16,3 +16,5 @@ mod patch;
 pub(crate) use patch::PatchState;
 mod layer;
 pub(crate) use layer::LayerUiState;
+mod hud;
+pub(crate) use hud::HudState;
