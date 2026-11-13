@@ -19,6 +19,7 @@ mod gizmokey;
 mod grow;
 mod harp;
 mod inout;
+mod keyer;
 mod keymap;
 mod layer;
 mod paint;
