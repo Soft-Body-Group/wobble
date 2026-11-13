@@ -5613,9 +5613,7 @@ struct Gfx {
     /// The prefs… window (app-wide, `~/.wobble/prefs.json`) and the
     /// globals… window (this setup's own settings) — `settingsui`.
     prefs_ui_open: bool,
-    /// First launch, after the welcome + consent windows: pick the SSD
-    /// cache (`settingsui::cache_setup_window`); the quick start waits on it.
-    cache_setup_open: bool,
+    cache: state::CacheUiState,
     globals_ui_open: bool,
     /// The colour… window (`colorprefs`).
     colour_ui_open: bool,
@@ -5709,7 +5707,6 @@ struct Gfx {
     load_errors: HashMap<u64, String>,
     ring_slots: usize,
     ahead: u64,
-    cache_bytes: usize,
     /// The memory profile in force (`memprofile`) and, for a discrete
     /// card, each staging ring's pinned ceiling. `budgets()` combines them
     /// with `cache_bytes` for every sizing site.
@@ -5717,13 +5714,7 @@ struct Gfx {
     pinned_bytes: u64,
 
     prefs: Prefs,
-    /// True when --cache-dir overrode prefs (UI edits then don't persist).
-    cache_dir_cli: bool,
     disk_cache: Option<Arc<DiskCache>>,
-    /// Why the NVMe tier is off, when a dir IS set but unusable (an
-    /// unwritable volume — a Time Machine backup drive, say — fails with a
-    /// bare EPERM that otherwise only reaches stderr).
-    cache_dir_err: Option<String>,
     /// Whole-comp proxy scale: 1.0 = full res, 0.5 = half. Halves the
     /// canvas, every format, every stage and the reader textures; proxy
     /// frames cache lazily under their own NVMe keys.
@@ -5731,14 +5722,6 @@ struct Gfx {
     /// The proxy scale the Bakes were last adopted for: when `proxy` moves
     /// off it, `readopt_graph_bakes` swaps each Bake to what suits the mode.
     bakes_proxy: f32,
-    /// --cache-gb was given: the UI edits prefs but this session's budget
-    /// stays the flag's.
-    cache_gb_cli: bool,
-    /// NVMe benchmark in flight / last result.
-    cache_bench_rx: Option<std::sync::mpsc::Receiver<anyhow::Result<engine::diskcache::Bench>>>,
-    cache_bench: Option<engine::diskcache::Bench>,
-    /// Why the last benchmark failed — shown in the window, not only logged.
-    cache_bench_err: Option<String>,
     /// The Models window: what ML weights are cached, and the buttons that
     /// fetch them.
     models_ui_open: bool,
@@ -7655,8 +7638,17 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         viewer_pie_anim: (0.0, 0.0),
         props_keys_reveal: 0.0,
         prefs_ui_open: false,
-        // WOBBLE_SHOW_CONSENT=cache: the window under a suite, for a look.
-        cache_setup_open: std::env::var("WOBBLE_SHOW_CONSENT").as_deref() == Ok("cache"),
+        cache: state::CacheUiState {
+            // WOBBLE_SHOW_CONSENT=cache: the window under a suite, for a look.
+            setup_open: std::env::var("WOBBLE_SHOW_CONSENT").as_deref() == Ok("cache"),
+            bytes: cache_budget_bytes(opts.cache_gb.or(prefs.ram_budget_gb), mem_kind),
+            dir_cli: cache_dir_cli,
+            dir_err: cache_dir_err,
+            gb_cli: opts.cache_gb.is_some(),
+            bench_rx: None,
+            bench: None,
+            bench_err: None,
+        },
         globals_ui_open: false,
         colour_ui_open: false,
         tilt: Default::default(),
@@ -7883,19 +7875,12 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         load_errors: HashMap::new(),
         ring_slots: opts.slots,
         ahead: opts.ahead,
-        cache_bytes: cache_budget_bytes(opts.cache_gb.or(prefs.ram_budget_gb), mem_kind),
         mem_kind,
         pinned_bytes: pinned_budget_bytes(prefs.pinned_budget_gb),
         prefs,
-        cache_dir_cli,
         disk_cache,
-        cache_dir_err,
         proxy: 1.0,
         bakes_proxy: 1.0,
-        cache_gb_cli: opts.cache_gb.is_some(),
-        cache_bench_rx: None,
-        cache_bench: None,
-        cache_bench_err: None,
         models_ui_open: false,
         models_needed: Vec::new(),
         feedback: report::Feedback::new(
@@ -10403,7 +10388,7 @@ impl Gfx {
     fn budgets(&self) -> memprofile::Budgets {
         memprofile::Budgets {
             kind: self.mem_kind,
-            ram_bytes: self.cache_bytes,
+            ram_bytes: self.cache.bytes,
             pinned_bytes: self.pinned_bytes,
             all_reads_in_ram: self
                 .prefs
@@ -16434,7 +16419,7 @@ impl Gfx {
         if !fullscreen {
             report::feature_gate(&ctx, &mut self.feedback);
             report::what_is_wobble(&ctx, &mut self.feedback);
-            if self.cache_setup_open && self.cache_setup_window(&ctx) {
+            if self.cache.setup_open && self.cache_setup_window(&ctx) {
                 open_url(QUICKSTART_URL);
             }
         }
@@ -18693,11 +18678,11 @@ impl Gfx {
                 }
             }
         });
-        self.cache_dir_err = err;
+        self.cache.dir_err = err;
         self.render_bake = None;
         self.release_render_cache();
         self.playback_dirty = true;
-        if !self.cache_dir_cli {
+        if !self.cache.dir_cli {
             save_prefs(&self.prefs);
         }
     }
@@ -18709,8 +18694,8 @@ impl Gfx {
             self.prefs.memory_profile.unwrap_or_default(),
             self.ctx.adapter.get_info().device_type,
         );
-        if !self.cache_gb_cli {
-            self.cache_bytes = cache_budget_bytes(self.prefs.ram_budget_gb, self.mem_kind);
+        if !self.cache.gb_cli {
+            self.cache.bytes = cache_budget_bytes(self.prefs.ram_budget_gb, self.mem_kind);
         }
         self.pinned_bytes = pinned_budget_bytes(self.prefs.pinned_budget_gb);
         self.render_bake = None;
@@ -18849,7 +18834,7 @@ impl Gfx {
         const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
         self.memory_profile_ui(ui);
         let auto = self.prefs.ram_budget_gb.is_none();
-        let mut gb = self.cache_bytes as f64 / GIB;
+        let mut gb = self.cache.bytes as f64 / GIB;
         let mut apply: Option<Option<f64>> = None; // Some(None) = back to auto
         ui.horizontal(|ui| {
             ui.label("RAM budget");
@@ -18874,8 +18859,8 @@ impl Gfx {
         });
         if let Some(pick) = apply {
             self.prefs.ram_budget_gb = pick;
-            if !self.cache_gb_cli {
-                self.cache_bytes = cache_budget_bytes(pick, self.mem_kind);
+            if !self.cache.gb_cli {
+                self.cache.bytes = cache_budget_bytes(pick, self.mem_kind);
                 // Live: the playing rig takes the new ceiling now, not on
                 // the next rebuild.
                 let ram = self.ram_tier_budget();
@@ -18885,7 +18870,7 @@ impl Gfx {
             }
             save_prefs(&self.prefs);
         }
-        if self.cache_gb_cli {
+        if self.cache.gb_cli {
             ui.weak("--cache-gb set this session — the edit saves but applies next launch");
         }
         ui.horizontal(|ui| {
@@ -18931,7 +18916,7 @@ impl Gfx {
                 self.apply_cache_dir();
             }
         });
-        if self.cache_dir_cli {
+        if self.cache.dir_cli {
             ui.weak("(set by --cache-dir this session — edits won't persist)");
         }
         let mut gb = self.prefs.disk_budget_gb.unwrap_or(64.0);
@@ -18945,7 +18930,7 @@ impl Gfx {
                 if let Some(d) = &self.disk_cache {
                     d.set_budget((gb * 1024.0 * 1024.0 * 1024.0) as u64);
                 }
-                if !self.cache_dir_cli {
+                if !self.cache.dir_cli {
                     save_prefs(&self.prefs);
                 }
             }
@@ -18968,17 +18953,17 @@ impl Gfx {
                 }
                 // Volume benchmark: the number that answers "can this drive
                 // feed playback" — cold reads on macOS, real frame format.
-                if let Some(rx) = &self.cache_bench_rx {
+                if let Some(rx) = &self.cache.bench_rx {
                     match rx.try_recv() {
                         Ok(res) => {
                             match res {
-                                Ok(b) => self.cache_bench = Some(b),
+                                Ok(b) => self.cache.bench = Some(b),
                                 Err(e) => {
                                     log::warn!("cache benchmark failed: {e:#}");
-                                    self.cache_bench_err = Some(format!("{e:#}"));
+                                    self.cache.bench_err = Some(format!("{e:#}"));
                                 }
                             }
-                            self.cache_bench_rx = None;
+                            self.cache.bench_rx = None;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {
                             ui.horizontal(|ui| {
@@ -18987,11 +18972,11 @@ impl Gfx {
                             });
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            self.cache_bench_rx = None;
+                            self.cache.bench_rx = None;
                         }
                     }
                 }
-                if self.cache_bench_rx.is_none() && ui.button("benchmark volume").clicked()
+                if self.cache.bench_rx.is_none() && ui.button("benchmark volume").clicked()
                 {
                     let root = bench_root;
                     let (w, h) = self.comp.output_size().unwrap_or((1920, 1080));
@@ -19000,19 +18985,19 @@ impl Gfx {
                     let frame = (info.row_stride_f16() * h as usize * 2) as u64;
                     let frames = (1_500_000_000 / frame.max(1)).clamp(16, 96) as u32;
                     let (tx, rx) = std::sync::mpsc::channel();
-                    self.cache_bench_rx = Some(rx);
-                    self.cache_bench = None;
-                    self.cache_bench_err = None;
+                    self.cache.bench_rx = Some(rx);
+                    self.cache.bench = None;
+                    self.cache.bench_err = None;
                     std::thread::spawn(move || {
                         let res = engine::diskcache::DiskCache::new(&root, u64::MAX / 4)
                             .and_then(|c| c.benchmark(info, frames));
                         let _ = tx.send(res);
                     });
                 }
-                if let Some(e) = &self.cache_bench_err {
+                if let Some(e) = &self.cache.bench_err {
                     ui.colored_label(theme::error(), format!("benchmark failed: {e}"));
                 }
-                if let Some(b) = &self.cache_bench {
+                if let Some(b) = &self.cache.bench {
                     let fps = |bps: f64| bps / (b.bytes as f64 / b.frames as f64);
                     ui.monospace(format!(
                         "write {:.2} GB/s ({:.0} fps)  read {:.2} GB/s ({:.0} fps)",
@@ -19028,7 +19013,7 @@ impl Gfx {
                     ));
                 }
             }
-            None => match &self.cache_dir_err {
+            None => match &self.cache.dir_err {
                 Some(e) => {
                     ui.colored_label(
                         theme::error(),
@@ -26415,13 +26400,13 @@ impl Gfx {
                         bytes as f64 / 1e9
                     ));
                     let need = pb.player.loop_working_set_bytes();
-                    if need > self.cache_bytes as u64 {
+                    if need > self.cache.bytes as u64 {
                         ui.colored_label(
                             theme::error(),
                             format!(
                                 "loop needs {:.1} GB, budget {:.1} GB — partial cache; raise --cache-gb",
                                 need as f64 / 1e9,
-                                self.cache_bytes as f64 / 1e9
+                                self.cache.bytes as f64 / 1e9
                             ),
                         );
                     }

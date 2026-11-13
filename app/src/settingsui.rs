@@ -280,7 +280,7 @@ impl Gfx {
     /// First launch: offer a cache directory on the system drive (the
     /// user's home), unless one is set already.
     pub(crate) fn cache_setup_begin(&mut self) {
-        self.cache_setup_open = true;
+        self.cache.setup_open = true;
     }
 
     /// The first-run cache window: the message, the drive's free space and
@@ -338,7 +338,7 @@ impl Gfx {
                 ui.horizontal(|ui| {
                     if ui.button(egui::RichText::new("use this").strong()).clicked() {
                         self.apply_cache_dir();
-                        done = self.cache_dir_err.is_none();
+                        done = self.cache.dir_err.is_none();
                     }
                     if ui.button("later").on_hover_text("no SSD cache for now — prefs ➡ cache sets one").clicked() {
                         // The suggestion was never applied: leave no trace.
@@ -347,13 +347,13 @@ impl Gfx {
                         }
                         done = true;
                     }
-                    if let Some(e) = &self.cache_dir_err {
+                    if let Some(e) = &self.cache.dir_err {
                         ui.colored_label(theme::error(), e);
                     }
                 });
             });
         if done {
-            self.cache_setup_open = false;
+            self.cache.setup_open = false;
         }
         done
     }

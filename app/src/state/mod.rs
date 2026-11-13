@@ -18,3 +18,5 @@ mod layer;
 pub(crate) use layer::LayerUiState;
 mod hud;
 pub(crate) use hud::HudState;
+mod cache;
+pub(crate) use cache::CacheUiState;
