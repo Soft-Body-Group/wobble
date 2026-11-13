@@ -26,6 +26,7 @@ mod keymap;
 mod layer;
 mod mblur;
 mod nodepack;
+mod noise;
 mod paint;
 mod panelw;
 mod patchlive;
