@@ -23,3 +23,4 @@ mod pathedit;
 mod transform;
 mod hudchips;
 mod hudsliders;
+mod cryptopick;
