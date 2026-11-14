@@ -323,7 +323,7 @@ dependencies = [
  "rayon",
  "rfd",
  "rustc-demangle",
- "sequitur 0.2.0 (git+https://github.com/Soft-Body-Group/sequitur.git?rev=d09a43def095b1aa8283b277c727fb15d8f59179)",
+ "sequitur",
  "serde",
  "serde_json",
  "sha2",
@@ -4127,6 +4127,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 [[package]]
 name = "seq"
 version = "0.1.0"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ebd8d0076b8a1b262099ad542d7d2496d6eea682#ebd8d0076b8a1b262099ad542d7d2496d6eea682"
 dependencies = [
  "base64 0.22.1",
  "egui",
@@ -4144,12 +4145,13 @@ dependencies = [
 [[package]]
 name = "seq-core"
 version = "0.1.0"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ebd8d0076b8a1b262099ad542d7d2496d6eea682#ebd8d0076b8a1b262099ad542d7d2496d6eea682"
 dependencies = [
  "base64 0.22.1",
  "dunce",
  "exr",
  "image",
- "sequitur 0.2.0",
+ "sequitur",
  "serde",
  "serde_json",
  "tauri-shim",
@@ -4160,18 +4162,11 @@ dependencies = [
 [[package]]
 name = "sequitur"
 version = "0.2.0"
+source = "git+https://github.com/Soft-Body-Group/sequitur.git?rev=d09a43def095b1aa8283b277c727fb15d8f59179#d09a43def095b1aa8283b277c727fb15d8f59179"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
  "trash",
-]
-
-[[package]]
-name = "sequitur"
-version = "0.2.0"
-source = "git+https://github.com/Soft-Body-Group/sequitur.git?rev=d09a43def095b1aa8283b277c727fb15d8f59179#d09a43def095b1aa8283b277c727fb15d8f59179"
-dependencies = [
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -4534,6 +4529,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tauri-shim"
 version = "0.1.0"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ebd8d0076b8a1b262099ad542d7d2496d6eea682#ebd8d0076b8a1b262099ad542d7d2496d6eea682"
 dependencies = [
  "pollster 0.4.0",
  "tauri-shim-macros",
@@ -4543,6 +4539,7 @@ dependencies = [
 [[package]]
 name = "tauri-shim-macros"
 version = "0.1.0"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ebd8d0076b8a1b262099ad542d7d2496d6eea682#ebd8d0076b8a1b262099ad542d7d2496d6eea682"
 
 [[package]]
 name = "tempfile"

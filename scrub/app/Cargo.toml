@@ -16,8 +16,8 @@ api = { package = "scrub_api", path = "../api" }
 png.workspace = true
 base64 = "0.22"
 ab_glyph = "0.2"
-# The clip browser (seq_manip on imfram, a sibling checkout); the `clips` feature.
-seq = { path = "../../../seq_manip_imfram/seq", optional = true }
+# The clip browser (seq_manip on imfram); the `clips` feature.
+seq = { git = "https://github.com/Soft-Body-Group/seq_manip.git", rev = "ebd8d0076b8a1b262099ad542d7d2496d6eea682", optional = true }
 imfram.workspace = true
 wobble_app = { package = "app", path = "../../app", optional = true, features = ["movie"] }
 egui.workspace = true
@@ -41,8 +41,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 [features]
 default = ["clips"]
-# The clip browser pane: seq_manip's browser (needs ~/src/devl/seq_manip_imfram
-# and what it builds from: sequitur, sequence_manipulator). `--no-default-features`
+# The clip browser pane: seq_manip's browser (Soft-Body-Group/seq_manip,
+# fetched by git). `--no-default-features`
 # builds Scrub without it.
 clips = ["dep:seq"]
 # Experimental: apply a Wobble comp to a clip (docs/wobble-clips.md). Off by
