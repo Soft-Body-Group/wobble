@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+.DS_Store
+/testdata/*
+!/testdata/gen.sh
+!/testdata/colour/

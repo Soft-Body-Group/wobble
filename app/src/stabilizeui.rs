@@ -71,7 +71,7 @@ impl Gfx {
     }
 
     pub(crate) fn stab_view(&self, node: u64) -> View {
-        let mine = self.stab.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.stab.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -95,7 +95,7 @@ impl Gfx {
             weights: engine::models::ready_path("searaft-m").is_ok(),
             loaded,
             on_disk: key.is_some_and(|k| engine::bakes::is_baked(&self.stab_dir(k).join("Motion"))),
-            busy_elsewhere: self.stab.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.stab.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -103,7 +103,7 @@ impl Gfx {
         match a {
             Action::Analyse => self.stab_start(node),
             Action::Cancel => {
-                if let Some(r) = self.stab.run.take() {
+                if let Some(r) = self.jobs.stab.run.take() {
                     match r.phase {
                         Phase::Solving { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -116,23 +116,23 @@ impl Gfx {
                 }
             }
             Action::Dismiss => {
-                if self.stab.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.stab.run = None;
+                if self.jobs.stab.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.stab.run = None;
                 }
             }
         }
     }
 
     fn stab_fail(&mut self, node: u64, e: &str) {
-        match self.stab.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.stab.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.stab.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
+            None => self.jobs.stab.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
         }
     }
 
     /// The `analyse` click: adopt a path already on disk, else render.
     fn stab_start(&mut self, node: u64) {
-        if self.stab.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.stab.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -146,7 +146,7 @@ impl Gfx {
         };
         let dir = self.stab_dir(key);
         if engine::bakes::is_baked(&dir.join("Motion")) {
-            self.stab.run = Some(Run { node, dir: dir.clone(), phase: Phase::Done("loaded the analysis on disk".into()) });
+            self.jobs.stab.run = Some(Run { node, dir: dir.clone(), phase: Phase::Done("loaded the analysis on disk".into()) });
             if let Err(e) = self.stab_adopt(node, &dir, key) {
                 self.stab_fail(node, &e);
             }
@@ -155,8 +155,8 @@ impl Gfx {
         if let Err(e) = engine::models::ready_path("searaft-m") {
             return self.stab_fail(node, &format!("{e}"));
         }
-        self.stab.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
-        self.stab.matte = false;
+        self.jobs.stab.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+        self.jobs.stab.matte = false;
         if let Err(e) = self.stab_render(node, 0, dir) {
             self.stab_fail(node, &e);
         }
@@ -211,16 +211,16 @@ impl Gfx {
 
     /// The bake loop finished a render: the matte next, or the solve.
     pub(crate) fn stab_render_finished(&mut self, node: u64, port: usize) {
-        let Some(r) = self.stab.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.stab.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         if port == 0 && self.egraph.input_of(node, 1).is_some() {
-            self.stab.matte = true;
+            self.jobs.stab.matte = true;
             if let Err(e) = self.stab_render(node, 1, dir) {
                 self.stab_fail(node, &e);
             }
             return;
         }
-        self.stab.matte = false;
+        self.jobs.stab.matte = false;
         let Some(NodeKind::Stabilize(p)) = self.egraph.node(node).map(|n| n.kind.clone()) else {
             return self.stab_fail(node, "the node is gone");
         };
@@ -274,7 +274,7 @@ impl Gfx {
         if let Err(e) = spawned {
             return self.stab_fail(node, &format!("could not start the worker: {e}"));
         }
-        if let Some(r) = self.stab.run.as_mut() {
+        if let Some(r) = self.jobs.stab.run.as_mut() {
             r.phase = Phase::Solving { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -297,7 +297,7 @@ impl Gfx {
     /// Every redraw: drain the worker, catch a render that died, adopt a
     /// finished analysis.
     pub(crate) fn stab_poll(&mut self) {
-        let Some(r) = self.stab.run.as_mut() else { return };
+        let Some(r) = self.jobs.stab.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -375,7 +375,7 @@ impl Gfx {
     /// Stabilize with `reverse` puts the plate back. Waits are wall-clock.
     pub(crate) fn drive_test_stab(&mut self) {
         use engine::planar::{h_apply, h_mul};
-        let Some(mut t) = self.test_stab.take() else { return };
+        let Some(mut t) = self.test.stab.take() else { return };
         let fail = |m: String| -> ! {
             println!("STABILIZE TEST FAIL: {m}");
             std::process::exit(1);
@@ -458,7 +458,7 @@ impl Gfx {
                 self.stab_action(t.node, Action::Analyse);
                 next(&mut t, 2);
             }
-            2 => match self.stab.run.as_ref().map(|r| &r.phase) {
+            2 => match self.jobs.stab.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the analysis failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let Some(NodeKind::Stabilize(p)) = self.egraph.node(t.node).map(|n| n.kind.clone()) else {
@@ -503,7 +503,7 @@ impl Gfx {
                     if lock > 0.5 {
                         fail(format!("lock-off leaves {lock:.3} px of motion"));
                     }
-                    self.test_stab_lock = lock;
+                    self.test.stab_lock = lock;
                     if self.cost_flow.is_slow(t.node) && !self.cost_flow.uncached.contains(&0) {
                         fail("an analysed Stabilize is not cyan".into());
                     }
@@ -586,7 +586,7 @@ impl Gfx {
                         "lock-off holds the true camera to {:.3} px at every frame, the stabilised picture \
                          moves {stab:.4} where the plate moves {raw:.4}, and reverse puts the plate back \
                          ({back:.4}; the pins compose to identity within {ident:.1e} px)",
-                        self.test_stab_lock
+                        self.test.stab_lock
                     );
                     // A matte over the right half: its pixels leave the
                     // vote, the run is a new recipe, and the camera (which
@@ -605,7 +605,7 @@ impl Gfx {
                     next(&mut t, 8);
                 }
             }
-            8 => match self.stab.run.as_ref().map(|r| (&r.phase, r.dir.clone())) {
+            8 => match self.jobs.stab.run.as_ref().map(|r| (&r.phase, r.dir.clone())) {
                 Some((Phase::Failed(e), _)) => fail(format!("the matted analysis failed: {e}")),
                 Some((Phase::Done(_), dir)) => {
                     let mattes = std::fs::read_dir(dir.join("Matte")).map(|r| r.count()).unwrap_or(0);
@@ -645,6 +645,6 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_stab = Some(t);
+        self.test.stab = Some(t);
     }
 }

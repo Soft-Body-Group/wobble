@@ -1378,14 +1378,19 @@ size, and the wheel stays round. Both sizes are remembered between
 launches, and near a screen edge the picker comes up smaller rather than
 off screen.
 
-## Sensitivity keys: Z X C V
+## Sensitivity keys: Z X C V B N
 
-**Z, X, C and V are sensitivity modifiers.** Hold one over any draggable
-value — slider, number field, rgb lane, viewer gizmo — and the drag slows or
-speeds up: Z ×0.01, X ×0.1, C ×⅓, V ×3 (B ×10 and N ×30 carry the row on).
-This is foundational: **no other hotkey may use Z X C V** where values can be
-dragged. The one exception is the graph, which has no value drags — there Z
-and X pin a node's properties panels / viewer manipulators.
+**Z, X, C, V, B and N are sensitivity modifiers while you drag a value.**
+Hold one during a drag of a slider, number field, rgb lane or viewer gizmo
+and the drag slows or speeds up: Z ×0.01, X ×0.1, C ×⅓, V ×3, B ×10, N ×30.
+They do nothing else and swallow no key press, so outside a drag the same
+letters are free for ordinary hotkeys: in the graph Z and X pin a node's
+properties panels / viewer manipulators, B is swipe-blend and N renames; in
+the viewer B shows the blue channel.
+
+Viewer keys: `F` frames the image (Home too; with a Paint node selected, held
+`F` is the brush adjust instead), `R` / `G` / `B` show one channel as grey and
+`A` the alpha — the same key again goes back to rgb.
 
 Main keys: `Q` fullscreens the pane under the cursor, alone — the graph,
 the properties or the image (`Q` again or Esc puts the layout back), ⌘Q

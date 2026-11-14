@@ -171,7 +171,7 @@ impl Gfx {
     }
 
     pub(crate) fn flow_view(&self, node: u64) -> View {
-        let mine = self.flow.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.flow.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -196,7 +196,7 @@ impl Gfx {
             weights: self.egraph.node(node).is_some_and(|n| engine::models::ready_path(model_of(&n.kind)).is_ok()),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.flow.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.flow.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -204,7 +204,7 @@ impl Gfx {
         match a {
             Action::Analyse => self.flow_start(node),
             Action::Cancel => {
-                if let Some(r) = self.flow.run.take() {
+                if let Some(r) = self.jobs.flow.run.take() {
                     match r.phase {
                         Phase::Solving { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -217,24 +217,24 @@ impl Gfx {
                 }
             }
             Action::Dismiss => {
-                if self.flow.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.flow.run = None;
+                if self.jobs.flow.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.flow.run = None;
                 }
             }
         }
     }
 
     fn flow_fail(&mut self, node: u64, e: &str) {
-        match self.flow.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.flow.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.flow.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
+            None => self.jobs.flow.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
         }
     }
 
     /// The `analyse` click: adopt vectors already on disk, else render the
     /// input.
     fn flow_start(&mut self, node: u64) {
-        if self.flow.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.flow.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -251,14 +251,14 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.flow.run = Some(Run { node, dir, phase: Phase::Done("loaded what is on disk".into()) });
+            self.jobs.flow.run = Some(Run { node, dir, phase: Phase::Done("loaded what is on disk".into()) });
             return;
         }
         let model = model_of(&kind);
         if let Err(e) = engine::models::ready_path(model) {
             return self.flow_fail(node, &format!("{e}"));
         }
-        self.flow.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+        self.jobs.flow.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
         if let Err(e) = self.flow_render(node, input, dir) {
             self.flow_fail(node, &e);
         }
@@ -312,7 +312,7 @@ impl Gfx {
 
     /// The bake loop finished rendering the input: solve on a worker.
     pub(crate) fn flow_render_finished(&mut self, node: u64) {
-        let Some(r) = self.flow.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.flow.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(kind) = self.egraph.node(node).map(|n| n.kind.clone()) else {
             return self.flow_fail(node, "the node is gone");
@@ -381,7 +381,7 @@ impl Gfx {
         if let Err(e) = spawned {
             return self.flow_fail(node, &format!("could not start the worker: {e}"));
         }
-        if let Some(r) = self.flow.run.as_mut() {
+        if let Some(r) = self.jobs.flow.run.as_mut() {
             r.phase = Phase::Solving { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -389,7 +389,7 @@ impl Gfx {
     /// Every redraw: drain the worker, catch a render that died, adopt a
     /// finished solve.
     pub(crate) fn flow_poll(&mut self) {
-        let Some(r) = self.flow.run.as_mut() else { return };
+        let Some(r) = self.jobs.flow.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -412,7 +412,7 @@ impl Gfx {
         match end {
             Some(Ok(())) => {
                 let sub = self.egraph.node(node).map(|n| out_dir_name(&n.kind)).unwrap_or("Vectors");
-                let Some(r) = self.flow.run.as_mut() else { return };
+                let Some(r) = self.jobs.flow.run.as_mut() else { return };
                 let out = r.dir.join(sub);
                 r.phase = Phase::Done("done".into());
                 self.load_read(node, &out.to_string_lossy());
@@ -490,7 +490,7 @@ impl Gfx {
     /// Waits are wall-clock.
     pub(crate) fn drive_test_flow(&mut self) {
         use engine::planar::{h_apply, h_inv, h_mul, synth};
-        let Some(mut t) = self.test_flow.take() else { return };
+        let Some(mut t) = self.test.flow.take() else { return };
         let fail = |m: String| -> ! {
             println!("FLOW TEST FAIL: {m}");
             std::process::exit(1);
@@ -584,7 +584,7 @@ impl Gfx {
                 self.flow_action(t.node, Action::Analyse);
                 next(&mut t, 2);
             }
-            2 => match self.flow.run.as_ref().map(|r| &r.phase) {
+            2 => match self.jobs.flow.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the analysis failed: {e}")),
                 Some(Phase::Done(_)) => {
                     if !self.loaded.contains_key(&t.node) {
@@ -626,7 +626,7 @@ impl Gfx {
                         }
                         self.flow_action(t.node, Action::Dismiss);
                         next(&mut t, 1);
-                        self.test_flow = Some(t);
+                        self.test.flow = Some(t);
                         return;
                     }
                     // A VectorBlur over the plate, along those vectors.
@@ -670,7 +670,7 @@ impl Gfx {
                     next(&mut t, 7);
                 }
             }
-            7 => match self.flow.run.as_ref().filter(|r| r.node == t.retime).map(|r| &r.phase) {
+            7 => match self.jobs.flow.run.as_ref().filter(|r| r.node == t.retime).map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the retime failed: {e}")),
                 Some(Phase::Done(_)) => {
                     if !self.loaded.contains_key(&t.retime) {
@@ -727,11 +727,11 @@ impl Gfx {
                     self.flow_action(t.retime, Action::Dismiss);
                     self.flow_action(t.retime, Action::Analyse);
                     next(&mut t, 12);
-                    self.test_flow = Some(t);
+                    self.test.flow = Some(t);
                     return;
                 }
             }
-            12 => match self.flow.run.as_ref().filter(|r| r.node == t.retime).map(|r| &r.phase) {
+            12 => match self.jobs.flow.run.as_ref().filter(|r| r.node == t.retime).map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the curve retime failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let (r, _) = self.range_of(t.retime);
@@ -766,11 +766,11 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_flow = Some(t);
+        self.test.flow = Some(t);
     }
 
     fn flow_state_words(&self) -> String {
-        match self.flow.run.as_ref().map(|r| &r.phase) {
+        match self.jobs.flow.run.as_ref().map(|r| &r.phase) {
             None => "no run".into(),
             Some(Phase::Render) => format!("render, bake {}", self.graph_bake.is_some()),
             Some(Phase::Solving { done, total, .. }) => format!("solving {done}/{total}"),

@@ -174,7 +174,7 @@ spent a long stretch documented here as a deadlock it never had.
 **Under test the loop is unpaced, so a frame count is not a duration**: any suite waiting on real time must time out on an `Instant`. Suites also: are listed in `Options::any_test()` (hermetic, default prefs, never save prefs), aim at controls through `widgets::note_rect` and check the clip, anchor gestures to a settled layout and to the PRESS point, set `raw.modifiers` every frame of a chord, and gate on state, not throughput.
 
 Suites, what each covers, and the rules for writing one: [docs/claude/testing.md](docs/claude/testing.md).
-**Adding a suite** means registering the flag in SEVEN places in `main.rs` (see testing.md). **Adding a node / model / weights**: [docs/claude/recipes.md](docs/claude/recipes.md) — one `CATALOG` row per file with sha256 pinned, declare in `NodeKind::models()`, load only via `models::ready_path`, missing weights = passthrough, nothing downloads without a click; a built-in node is two files (`engine/src/nodes/<n>.rs`, `app/src/nodes/<n>.rs`) plus one-line arms, and the add menus come from `editor::node_catalog()` alone.
+**Adding a suite** means registering the flag in SEVEN places in `lib.rs` (see testing.md). **Adding a node / model / weights**: [docs/claude/recipes.md](docs/claude/recipes.md) — one `CATALOG` row per file with sha256 pinned, declare in `NodeKind::models()`, load only via `models::ready_path`, missing weights = passthrough, nothing downloads without a click; a built-in node is two files (`engine/src/nodes/<n>.rs`, `app/src/nodes/<n>.rs`) plus one-line arms, and the add menus come from `editor::node_catalog()` alone.
 Check wasm with `cargo check -p app --target wasm32-unknown-unknown` (no threads, no blocking, no `std::time`, no filesystem in a page — see testing.md).
 
 ## Invariants worth protecting (headlines)
@@ -237,7 +237,7 @@ Full text, with the why and the measurements: [docs/claude/invariants.md](docs/c
 - Never use orange in the UI.
 - Node names are placed, not just drawn.
 - A node too small to read as a shape TWINKLES.
-- Z X C V are the sensitivity (drag-rate) row — keep other hotkeys off them.
+- Z X C V B N are the sensitivity (drag-rate) row, and act ONLY during a value drag.
 - A single-letter hotkey belongs to the pane under the cursor.
 - Hotkeys are remappable: a new one is a `keymap::DEFS` row, never a raw `key_pressed`.
 - UI colours are theme slots: a new one is a `theme.rs` row, never a literal.
@@ -349,7 +349,15 @@ codegen prelude splices in), `nodes/` (one file per built-in node — see
 tagged EXR writer every subtree render lands through), `sdf.rs` (the SDF
 sub-graph: shapes as distances, ops, effects, compiled into the fused pass).
 
-`app/`: `main.rs` (shell, viewer, properties, suites — large), `editor.rs`
+`app/`: `lib.rs` (shell, viewer, properties — large, and known debt: see
+CONTRIBUTING.md; `main.rs` is only `app::run()`), `suites/` (one file per
+`--test-*` driver), `viewer/` (one file per viewer gizmo pass, each an
+`impl Gfx` block `viewer_ui` calls in order), `nodes/` (a node's panel,
+channels and glyph; a panel that borrows a lot from the properties pass
+takes it as its `Cx` struct), `state/` (`Gfx`'s fields grouped by
+subsystem: `self.test`, `self.brush`, `self.geo`, `self.prop`, …),
+`doc/` (the document model: `ENode`, the patch bay, `EditorGraph`;
+re-exported from `editor`), `editor.rs`
 (node graph, patch model), `widgets.rs` (tile/row widgets), `curves.rs`
 (curve editor), `wheels.rs` (grade wheels), `browser.rs` (sequence browser),
 `anim.rs` (channels, curves), `exprs.rs` (patch expression language),

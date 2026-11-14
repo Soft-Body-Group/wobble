@@ -1,6 +1,6 @@
 //! Mirror's app half: the panel, the glyph and the channel binding. The
 //! model and the WGSL are `engine::nodes::mirror`; the viewer handle (drag
-//! the line, turn it by its arrow) is in `main.rs` beside the Gradient's.
+//! the line, turn it by its arrow) is in `lib.rs` beside the Gradient's.
 
 use crate::anim::Channel;
 use crate::widgets::{self, HudSlider, RowCtx};

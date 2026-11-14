@@ -486,14 +486,17 @@ pub const DEFS: &[Def] = &[
         Binding::plain(Key::A),
         Exact,
     ),
-    // Shift, because plain R frames the view (and is the roto rotate
-    // gesture while held); again returns to rgb, like A.
+    // Plain letters, Nuke's: again returns to rgb, like A. Not in a 3D
+    // view (G / R are its manipulator), not while a roto or corner-pin
+    // pick is live (held R rotates it), and not in the graph overlay
+    // (the graph owns its letters there). B is also a drag-rate key, but
+    // that row only acts on a value being dragged, so they never meet.
     def(
         Act::ViewRed,
         "viewer.red",
         "show the red channel",
         Scope::Viewer,
-        Binding::shift(Key::R),
+        Binding::plain(Key::R),
         Exact,
     ),
     def(
@@ -501,7 +504,7 @@ pub const DEFS: &[Def] = &[
         "viewer.green",
         "show the green channel",
         Scope::Viewer,
-        Binding::shift(Key::G),
+        Binding::plain(Key::G),
         Exact,
     ),
     def(
@@ -509,7 +512,7 @@ pub const DEFS: &[Def] = &[
         "viewer.blue",
         "show the blue channel",
         Scope::Viewer,
-        Binding::shift(Key::B),
+        Binding::plain(Key::B),
         Exact,
     ),
     def(
@@ -528,12 +531,14 @@ pub const DEFS: &[Def] = &[
         Binding::shift(Key::P),
         Exact,
     ),
+    // F, Nuke's (R went to the red channel). With a Paint node selected
+    // held F is the brush adjust, so framing stands down there.
     def_also(
         Act::FrameView,
         "viewer.frame",
         "fit the image to the viewer",
         Scope::Viewer,
-        Binding::plain(Key::R),
+        Binding::plain(Key::F),
         Exact,
         Key::Home,
     ),
@@ -1804,17 +1809,19 @@ const FIXED: &[Fixed] = &[
     Fixed { how: "G", label: "3D view: move manipulator", key: Some(Key::G), mods: Modifiers::NONE },
     Fixed { how: "R", label: "3D view: rotate manipulator (Home frames there)", key: Some(Key::R), mods: Modifiers::NONE },
     Fixed { how: "S", label: "3D view: scale manipulator", key: Some(Key::S), mods: Modifiers::NONE },
-    // The drag-rate row. Held over any draggable value — slider, number
-    // field, rgb lane, viewer gizmo — these scale the throw. Fixed for the
+    // The drag-rate row. Held DURING a drag of a value — slider, number
+    // field, rgb lane, viewer gizmo — these scale the throw, and nothing
+    // else: they consume no press, so any pane may also bind them as
+    // ordinary keys (the graph has Z X B N, the viewer B). Fixed for the
     // same reason as the colour axes: they are one instrument spread over
     // six adjacent keys, and rebinding one of them alone breaks the row.
     // `rgbslider::RATE_KEYS` is the table; keep these labels in step.
-    Fixed { how: "hold Z", label: "drag rate ×0.01 (finest)", key: Some(Key::Z), mods: Modifiers::NONE },
-    Fixed { how: "hold X", label: "drag rate ×0.1", key: Some(Key::X), mods: Modifiers::NONE },
-    Fixed { how: "hold C", label: "drag rate ×1/3", key: Some(Key::C), mods: Modifiers::NONE },
-    Fixed { how: "hold V", label: "drag rate ×3", key: Some(Key::V), mods: Modifiers::NONE },
-    Fixed { how: "hold B", label: "drag rate ×10", key: Some(Key::B), mods: Modifiers::NONE },
-    Fixed { how: "hold N", label: "drag rate ×30 (coarsest)", key: Some(Key::N), mods: Modifiers::NONE },
+    Fixed { how: "hold Z while dragging", label: "drag rate ×0.01 (finest)", key: Some(Key::Z), mods: Modifiers::NONE },
+    Fixed { how: "hold X while dragging", label: "drag rate ×0.1", key: Some(Key::X), mods: Modifiers::NONE },
+    Fixed { how: "hold C while dragging", label: "drag rate ×1/3", key: Some(Key::C), mods: Modifiers::NONE },
+    Fixed { how: "hold V while dragging", label: "drag rate ×3", key: Some(Key::V), mods: Modifiers::NONE },
+    Fixed { how: "hold B while dragging", label: "drag rate ×10", key: Some(Key::B), mods: Modifiers::NONE },
+    Fixed { how: "hold N while dragging", label: "drag rate ×30 (coarsest)", key: Some(Key::N), mods: Modifiers::NONE },
 ];
 
 /// The dot and ring of a fixed command.

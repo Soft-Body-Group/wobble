@@ -268,7 +268,7 @@ impl crate::Gfx {
         match owner(&self.egraph, c) {
             Pick::Node(id) => self.reveal_node(id, reveal),
             Pick::Layer(stack, i) => {
-                self.layer_sel.insert(stack, i);
+                self.layer.sel.insert(stack, i);
                 self.reveal_node(stack, reveal);
             }
         }
@@ -319,7 +319,7 @@ impl crate::Gfx {
     /// properties, both both.
     pub(crate) fn drive_test_layerpick(&mut self, raw: &mut egui::RawInput) {
         use engine::graph::{BlendOp, GridParams, TransformParams};
-        let Some((stage, mut frames, [xf_fg, xf_bg])) = self.test_layerpick else { return };
+        let Some((stage, mut frames, [xf_fg, xf_bg])) = self.test.layerpick else { return };
         frames += 1;
         if frames > 900 {
             println!("LAYERPICK TEST FAIL: timeout at stage {stage}");
@@ -350,7 +350,7 @@ impl crate::Gfx {
         // What the last pick left: (selected, properties raised for it).
         let state = |s: &Self| {
             let sel = s.selected.first().copied();
-            (sel, sel.is_some() && s.props_visible && s.prop_order.first() == sel.as_ref())
+            (sel, sel.is_some() && s.props_visible && s.prop.order.first() == sel.as_ref())
         };
         let check = |s: &Self, what: &str, want: u64, props: bool| {
             let (sel, raised) = state(s);
@@ -395,9 +395,9 @@ impl crate::Gfx {
                 self.egraph.connect(top, 1, xf_bg);
                 self.egraph.view = Some(top);
                 self.selected = Vec::new();
-                self.prop_order.clear();
+                self.prop.order.clear();
                 self.props_visible = false;
-                self.test_layerpick = Some((1, 0, [xf_fg, xf_bg]));
+                self.test.layerpick = Some((1, 0, [xf_fg, xf_bg]));
                 return;
             }
             // Odd stages press, even stages release, and the stage after a
@@ -413,11 +413,11 @@ impl crate::Gfx {
                         ][k - 1];
                         check(self, what, want, props);
                         // Solo: the rack holds the clicked node alone.
-                        if props && self.prop_order != vec![want] {
+                        if props && self.prop.order != vec![want] {
                             println!(
                                 "LAYERPICK TEST FAIL: {what} did not solo the properties \
                                  (rack {:?})",
-                                self.prop_order
+                                self.prop.order
                             );
                             std::process::exit(1);
                         }
@@ -425,11 +425,11 @@ impl crate::Gfx {
                         // shift+cmd ADDS: both selected, both panels up,
                         // the new one in front.
                         let both_sel = self.selected.contains(&xf_fg) && self.selected.contains(&xf_bg);
-                        if !both_sel || self.prop_order != vec![xf_bg, xf_fg] {
+                        if !both_sel || self.prop.order != vec![xf_bg, xf_fg] {
                             println!(
                                 "LAYERPICK TEST FAIL: shift+cmd-click did not add \
                                  (selected {:?}, rack {:?})",
-                                self.selected, self.prop_order
+                                self.selected, self.prop.order
                             );
                             std::process::exit(1);
                         }
@@ -437,8 +437,8 @@ impl crate::Gfx {
                 }
                 match clicks.get(k) {
                     Some(&(at, m)) => {
-                        self.layer_grab = screen(self, at);
-                        click(raw, self.layer_grab, m, true);
+                        self.layer.grab = screen(self, at);
+                        click(raw, self.layer.grab, m, true);
                         next = stage + 1;
                     }
                     None => {
@@ -454,7 +454,7 @@ impl crate::Gfx {
             }
             2 | 4 | 6 | 8 if frames > 2 => {
                 let (_, m) = clicks[(stage as usize - 2) / 2];
-                click(raw, self.layer_grab, m, false);
+                click(raw, self.layer.grab, m, false);
                 next = stage + 1;
             }
             _ => {}
@@ -462,7 +462,7 @@ impl crate::Gfx {
         if next != stage {
             frames = 0;
         }
-        self.test_layerpick = Some((next, frames, [xf_fg, xf_bg]));
+        self.test.layerpick = Some((next, frames, [xf_fg, xf_bg]));
     }
 }
 

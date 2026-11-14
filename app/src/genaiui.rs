@@ -802,12 +802,12 @@ fn to_rec709(rgba: &mut [f32], working: engine::color::Colorspace) {
 
 impl Gfx {
     pub(crate) fn genai_view(&self, node: u64) -> View {
-        let cfg = &self.genai.cfg;
+        let cfg = &self.jobs.genai.cfg;
         let bill = match cfg.route {
             #[cfg(not(feature = "commerce"))]
             Route::Relay => Err("not available in this build".to_string()),
             #[cfg(feature = "commerce")]
-            Route::Relay => match (&cfg.relay_token, &self.genai.account) {
+            Route::Relay => match (&cfg.relay_token, &self.jobs.genai.account) {
                 (None, _) => Err("no wobble account on this machine: add a relay token under keys…".to_string()),
                 (Some(_), Account::Known(Ok((who, bal)))) => {
                     Ok(format!("wobble credits · {who} · {}", service::usd(*bal)))
@@ -820,7 +820,7 @@ impl Gfx {
                 None => Err("no fal key on this machine: set FAL_KEY or add one under keys…".to_string()),
             },
         };
-        let mine = self.genai.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.genai.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Capturing { .. }) => ViewState::Capturing,
@@ -853,7 +853,7 @@ impl Gfx {
             comfy_url: cfg.comfy_url.clone(),
             state,
             steps: mine.map(|r| r.steps.clone()).unwrap_or_default(),
-            busy_elsewhere: self.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             has_input: self.egraph.input_of(node, 0).is_some(),
             has_matte: self.egraph.input_of(node, 1).is_some(),
             prompt: self.genai_wired_prompt(node),
@@ -866,22 +866,22 @@ impl Gfx {
             Action::Prepare => self.genai_prepare(node),
             Action::Confirm => self.genai_confirm(node),
             Action::Cancel => {
-                if let Some(r) = self.genai.run.take() {
+                if let Some(r) = self.jobs.genai.run.take() {
                     if let Phase::Running { job } = &r.phase {
                         job.cancel();
                     }
                     if matches!(r.phase, Phase::Capturing { .. }) {
                         // The capture is a one-frame bake: drop it.
                         self.graph_bake = None;
-                        self.genai.captured.clear();
+                        self.jobs.genai.captured.clear();
                     }
                     // A running job's thread sees the cancel and cancels
                     // the remote request; nobody is listening for its end.
                 }
             }
             Action::Dismiss => {
-                if self.genai.run.as_ref().is_some_and(|r| !r.active()) {
-                    self.genai.run = None;
+                if self.jobs.genai.run.as_ref().is_some_and(|r| !r.active()) {
+                    self.jobs.genai.run = None;
                 }
             }
             Action::Show => self.genai_show(node),
@@ -911,17 +911,17 @@ impl Gfx {
                 let _ = config::update(|f| f.comfy_url = (!url.is_empty()).then_some(url));
                 self.genai_reload_config();
             }
-            Action::Refresh => self.genai.account = Account::Unknown,
+            Action::Refresh => self.jobs.genai.account = Account::Unknown,
         }
     }
 
     fn genai_reload_config(&mut self) {
-        self.genai.cfg = Config::load();
-        self.genai.account = Account::Unknown;
+        self.jobs.genai.cfg = Config::load();
+        self.jobs.genai.account = Account::Unknown;
     }
 
     fn genai_fail(&mut self, node: u64, pipeline: Pipeline, msg: impl Into<String>) {
-        self.genai.run = Some(Run {
+        self.jobs.genai.run = Some(Run {
             node,
             pipeline,
             tick: self.timeline_pos as i64,
@@ -931,7 +931,7 @@ impl Gfx {
     }
 
     fn genai_prepare(&mut self, node: u64) {
-        if self.genai.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.genai.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else { return };
@@ -951,7 +951,7 @@ impl Gfx {
             return self.genai_fail(node, pl, NO_VIDEO);
         }
         if pl.plan(out).unwrap().iter().any(|&i| pl.steps[i].op.is_remote()) {
-            if let Err(e) = self.genai.cfg.can_bill() {
+            if let Err(e) = self.jobs.genai.cfg.can_bill() {
                 return self.genai_fail(node, pl, e);
             }
         }
@@ -976,8 +976,8 @@ impl Gfx {
             return self.genai_fail(node, pl, "nothing is rendering yet");
         };
         let tick = self.timeline_pos as i64;
-        self.genai.captured.clear();
-        self.genai.run = Some(Run {
+        self.jobs.genai.captured.clear();
+        self.jobs.genai.run = Some(Run {
             node,
             pipeline: pl,
             tick,
@@ -989,7 +989,7 @@ impl Gfx {
 
     /// Render the next input the run needs, or move on to the plan.
     fn genai_capture_next(&mut self) {
-        let Some(r) = &self.genai.run else { return };
+        let Some(r) = &self.jobs.genai.run else { return };
         let Phase::Capturing { todo, .. } = &r.phase else { return };
         let (node, tick, next, pl) = (r.node, r.tick, todo.first().copied(), r.pipeline.clone());
         match next {
@@ -1040,8 +1040,8 @@ impl Gfx {
     /// The bake loop finished a capture: encode what it left and go on.
     pub(crate) fn genai_capture_finished(&mut self, node: u64) {
         let working = self.egraph.working;
-        let got = std::mem::take(&mut self.genai.captured);
-        let Some(r) = self.genai.run.as_mut().filter(|r| r.node == node) else { return };
+        let got = std::mem::take(&mut self.jobs.genai.captured);
+        let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
         let Phase::Capturing { inputs, todo } = &mut r.phase else { return };
         let Some(port) = todo.first().copied() else { return };
         let Some((_, _, mut px, w, h)) = got.into_iter().find(|c| c.0 == node && c.1 == port) else {
@@ -1075,7 +1075,7 @@ impl Gfx {
     /// Key the steps, find the cache, and either ask the price or — with
     /// nothing billed — run straight away.
     fn genai_plan(&mut self) {
-        let Some(r) = self.genai.run.as_mut() else { return };
+        let Some(r) = self.jobs.genai.run.as_mut() else { return };
         let Phase::Capturing { inputs, .. } = std::mem::replace(&mut r.phase, Phase::Failed(String::new())) else {
             return;
         };
@@ -1092,7 +1092,7 @@ impl Gfx {
                 r.pipeline.clone(),
                 plan,
                 inputs,
-                run::Services::from_config(&self.genai.cfg),
+                run::Services::from_config(&self.jobs.genai.cfg),
                 dir,
                 vec![],
             );
@@ -1101,7 +1101,7 @@ impl Gfx {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let (pl, pl2, ins) = (r.pipeline.clone(), plan.clone(), inputs.clone());
-        let cfg = self.genai.cfg.clone();
+        let cfg = self.jobs.genai.cfg.clone();
         let spawned = std::thread::Builder::new().name("genai-quote".into()).spawn(move || {
             let q = run::service_for(&cfg).and_then(|svc| {
                 run::quote(&pl, &pl2, &ins, svc.as_ref(), &genai::http::Http::new()).map_err(|e| format!("{e:#}"))
@@ -1116,13 +1116,13 @@ impl Gfx {
 
     fn genai_confirm(&mut self, node: u64) {
         let current = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.steps.clone());
-        let moved = match self.genai.run.as_ref().filter(|r| r.node == node) {
+        let moved = match self.jobs.genai.run.as_ref().filter(|r| r.node == node) {
             Some(Run { pipeline, phase: Phase::Ready { inputs, .. }, .. }) => {
                 self.genai_prompt_moved(node, pipeline, inputs)
             }
             _ => false,
         };
-        let Some(r) = self.genai.run.as_mut().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
         if moved || current.as_ref() != Some(&r.pipeline.steps) {
             return; // stale: the panel says so and disables the button
         }
@@ -1143,7 +1143,7 @@ impl Gfx {
             r.pipeline.clone(),
             plan,
             inputs,
-            run::Services::from_config(&self.genai.cfg),
+            run::Services::from_config(&self.jobs.genai.cfg),
             config::results_dir(),
             approved,
         );
@@ -1154,11 +1154,11 @@ impl Gfx {
     pub(crate) fn genai_poll(&mut self) {
         // The relay balance, fetched once per config change.
         #[cfg(feature = "commerce")]
-        if self.genai.cfg.route == Route::Relay && self.genai.cfg.relay_token.is_some() {
-            match &self.genai.account {
+        if self.jobs.genai.cfg.route == Route::Relay && self.jobs.genai.cfg.relay_token.is_some() {
+            match &self.jobs.genai.account {
                 Account::Unknown => {
                     let (tx, rx) = std::sync::mpsc::channel();
-                    let (base, tok) = (self.genai.cfg.relay_url.clone(), self.genai.cfg.relay_token.clone().unwrap().0);
+                    let (base, tok) = (self.jobs.genai.cfg.relay_url.clone(), self.jobs.genai.cfg.relay_token.clone().unwrap().0);
                     let ok = std::thread::Builder::new()
                         .name("genai-account".into())
                         .spawn(move || {
@@ -1169,21 +1169,21 @@ impl Gfx {
                             let _ = tx.send(r);
                         })
                         .is_ok();
-                    self.genai.account = if ok { Account::Fetching(rx) } else { Account::Known(Err("no network here".into())) };
+                    self.jobs.genai.account = if ok { Account::Fetching(rx) } else { Account::Known(Err("no network here".into())) };
                 }
                 Account::Fetching(rx) => {
                     if let Ok(r) = rx.try_recv() {
-                        self.genai.account = Account::Known(r);
+                        self.jobs.genai.account = Account::Known(r);
                     }
                 }
                 Account::Known(_) => {}
             }
         }
-        let Some(r) = self.genai.run.as_mut() else { return };
+        let Some(r) = self.jobs.genai.run.as_mut() else { return };
         let node = r.node;
         // A capture whose bake died (the input stopped rendering, the rig
         // was rebuilt) leaves no bake and nothing captured.
-        if matches!(r.phase, Phase::Capturing { .. }) && self.graph_bake.is_none() && self.genai.captured.is_empty() {
+        if matches!(r.phase, Phase::Capturing { .. }) && self.graph_bake.is_none() && self.jobs.genai.captured.is_empty() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input did not render".into());
             r.phase = Phase::Failed(why);
             return;
@@ -1237,8 +1237,8 @@ impl Gfx {
             }
             self.genai_show(node);
             // The relay balance moved.
-            if matches!(self.genai.cfg.route, Route::Relay) {
-                self.genai.account = Account::Unknown;
+            if matches!(self.jobs.genai.cfg.route, Route::Relay) {
+                self.jobs.genai.account = Account::Unknown;
             }
         }
     }
@@ -1439,7 +1439,7 @@ impl Gfx {
     /// and a second run of the unchanged pipeline is a cache hit that sends
     /// nothing and adds no take. Waits are wall-clock.
     pub(crate) fn drive_test_genai(&mut self) {
-        let Some(mut t) = self.test_genai.take() else { return };
+        let Some(mut t) = self.test.genai.take() else { return };
         let fail = |m: String| -> ! {
             println!("GENAI TEST FAIL: {m}");
             std::process::exit(1);
@@ -1487,7 +1487,7 @@ impl Gfx {
                 std::env::set_var("FAL_KEY", "test-key");
                 std::env::set_var("WOBBLE_GENAI_ROUTE", "own");
                 std::env::remove_var("WOBBLE_RELAY_TOKEN");
-                self.genai = Runs::default();
+                self.jobs.genai = Runs::default();
                 t.fake = Some(fake);
                 let read = self
                     .egraph
@@ -1520,7 +1520,7 @@ impl Gfx {
                     next(&mut t, 2);
                 }
             }
-            2 => match self.genai.run.as_ref().map(|r| &r.phase) {
+            2 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the local run failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let takes = self.egraph.node(t.node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
@@ -1554,7 +1554,7 @@ impl Gfx {
                     next(&mut t, 4);
                 }
             }
-            4 => match self.genai.run.as_ref().map(|r| &r.phase) {
+            4 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the remote prepare failed: {e}")),
                 Some(Phase::Ready { quote, inputs, .. }) => {
                     if inputs.prompt.as_deref() != Some("an 18% grey card") {
@@ -1573,7 +1573,7 @@ impl Gfx {
                 }
                 _ => {}
             },
-            5 => match self.genai.run.as_ref().map(|r| &r.phase) {
+            5 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the remote run failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let submits = t.fake.as_ref().unwrap().submits();
@@ -1600,7 +1600,7 @@ impl Gfx {
                     next(&mut t, 7);
                 }
             }
-            7 => match self.genai.run.as_ref().map(|r| &r.phase) {
+            7 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the cached re-run failed: {e}")),
                 Some(Phase::Ready { .. }) => fail("an unchanged pipeline asked to be paid for again".into()),
                 Some(Phase::Done(_)) => {
@@ -1625,11 +1625,11 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_genai = Some(t);
+        self.test.genai = Some(t);
     }
 
     fn genai_state_words(&self) -> String {
-        match self.genai.run.as_ref().map(|r| &r.phase) {
+        match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
             None => "none".into(),
             Some(Phase::Capturing { todo, .. }) => format!("capturing {todo:?}, bake {}", self.graph_bake.is_some()),
             Some(Phase::Quoting { .. }) => "quoting".into(),

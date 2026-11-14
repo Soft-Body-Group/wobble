@@ -1,0 +1,13 @@
+[package]
+name = "model"
+version = "0.1.0"
+edition = "2021"
+description = "Scrub's edit model: sequence, tracks, clips, three-point edits. No UI."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+colour = { path = "../colour" }
+
+[dev-dependencies]
+serde_json = "1"

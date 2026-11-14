@@ -92,7 +92,7 @@ impl Gfx {
     }
 
     pub(crate) fn ct_view(&self, node: u64) -> View {
-        let mine = self.camtrack.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.camtrack.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -122,7 +122,7 @@ impl Gfx {
             weights: engine::models::ready_path("searaft-m").is_ok(),
             loaded,
             on_disk,
-            busy_elsewhere: self.camtrack.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.camtrack.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -135,14 +135,14 @@ impl Gfx {
             }
             _ => None,
         };
-        crate::nodes::camtrack::Extra { tracking: self.camtrack.tracking, summary }
+        crate::nodes::camtrack::Extra { tracking: self.jobs.camtrack.tracking, summary }
     }
 
     pub(crate) fn ct_action(&mut self, node: u64, a: Action) {
         match a {
             Action::Analyse => self.ct_start(node),
             Action::Cancel => {
-                if let Some(r) = self.camtrack.run.take() {
+                if let Some(r) = self.jobs.camtrack.run.take() {
                     match r.phase {
                         Phase::Solving { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -155,24 +155,24 @@ impl Gfx {
                 }
             }
             Action::Dismiss => {
-                if self.camtrack.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.camtrack.run = None;
+                if self.jobs.camtrack.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.camtrack.run = None;
                 }
             }
         }
     }
 
     fn ct_fail(&mut self, node: u64, e: &str) {
-        match self.camtrack.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.camtrack.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.camtrack.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
+            None => self.jobs.camtrack.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
         }
     }
 
     /// The `solve` click: adopt a solve already on disk, else solve tracks
     /// already on disk, else render.
     fn ct_start(&mut self, node: u64) {
-        if self.camtrack.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.camtrack.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -187,22 +187,22 @@ impl Gfx {
         let dir = self.ct_dir(tracks_key);
         let sdir = Self::ct_solve_dir(&dir, solve_key);
         if engine::bakes::is_baked(&sdir) {
-            self.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Done("loaded the solve on disk".into()) });
+            self.jobs.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Done("loaded the solve on disk".into()) });
             if let Err(e) = self.ct_adopt(node, &sdir, solve_key) {
                 self.ct_fail(node, &e);
             }
             return;
         }
         if engine::bakes::is_baked(&dir.join("Tracks")) {
-            self.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+            self.jobs.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
             self.ct_spawn(node, dir);
             return;
         }
         if let Err(e) = engine::models::ready_path("searaft-m") {
             return self.ct_fail(node, &format!("{e}"));
         }
-        self.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
-        self.camtrack.matte = false;
+        self.jobs.camtrack.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+        self.jobs.camtrack.matte = false;
         if let Err(e) = self.ct_render(node, 0, dir) {
             self.ct_fail(node, &e);
         }
@@ -257,16 +257,16 @@ impl Gfx {
 
     /// The bake loop finished a render: the matte next, or the worker.
     pub(crate) fn ct_render_finished(&mut self, node: u64, port: usize) {
-        let Some(r) = self.camtrack.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.camtrack.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         if port == 0 && self.egraph.input_of(node, 1).is_some() {
-            self.camtrack.matte = true;
+            self.jobs.camtrack.matte = true;
             if let Err(e) = self.ct_render(node, 1, dir) {
                 self.ct_fail(node, &e);
             }
             return;
         }
-        self.camtrack.matte = false;
+        self.jobs.camtrack.matte = false;
         self.ct_spawn(node, dir);
     }
 
@@ -361,8 +361,8 @@ impl Gfx {
         if let Err(e) = spawned {
             return self.ct_fail(node, &format!("could not start the worker: {e}"));
         }
-        self.camtrack.tracking = !have_tracks;
-        if let Some(r) = self.camtrack.run.as_mut() {
+        self.jobs.camtrack.tracking = !have_tracks;
+        if let Some(r) = self.jobs.camtrack.run.as_mut() {
             r.phase = Phase::Solving { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -392,7 +392,7 @@ impl Gfx {
     /// Every redraw: drain the worker, catch a render that died, adopt a
     /// finished solve.
     pub(crate) fn ct_poll(&mut self) {
-        let Some(r) = self.camtrack.run.as_mut() else { return };
+        let Some(r) = self.jobs.camtrack.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -404,7 +404,7 @@ impl Gfx {
             while let Ok(m) = rx.try_recv() {
                 match m {
                     Msg::Frame(SOLVING_MARK, _) => {
-                        self.camtrack.tracking = false;
+                        self.jobs.camtrack.tracking = false;
                         *done = 0;
                         *total = 0;
                     }
@@ -446,7 +446,7 @@ impl Gfx {
             seen.push(*id);
             let now = (p.solve.clone(), p.scale, p.focal, p.aperture);
             let same = self
-                .camtrack
+                .jobs.camtrack
                 .synced
                 .get(id)
                 .is_some_and(|(s, sc, f, a)| s.ptr_eq(&now.0) && *sc == now.1 && *f == now.2 && *a == now.3);
@@ -454,12 +454,12 @@ impl Gfx {
                 continue;
             }
             engine::scene3d::set_tracker_solve(*id, p.solved().then(|| p.clone()));
-            self.camtrack.synced.insert(*id, now);
+            self.jobs.camtrack.synced.insert(*id, now);
         }
-        let gone: Vec<u64> = self.camtrack.synced.keys().copied().filter(|k| !seen.contains(k)).collect();
+        let gone: Vec<u64> = self.jobs.camtrack.synced.keys().copied().filter(|k| !seen.contains(k)).collect();
         for id in gone {
             engine::scene3d::set_tracker_solve(id, None);
-            self.camtrack.synced.remove(&id);
+            self.jobs.camtrack.synced.remove(&id);
         }
     }
 
@@ -630,7 +630,7 @@ impl Gfx {
     /// solve's, a lens change marks the solve STALE and a re-solve finds
     /// the tracks on disk (no render). Waits are wall-clock.
     pub(crate) fn drive_test_camtrack(&mut self) {
-        let Some(mut t) = self.test_camtrack.take() else { return };
+        let Some(mut t) = self.test.camtrack.take() else { return };
         let fail = |m: String| -> ! {
             println!("CAMTRACK TEST FAIL: {m}");
             std::process::exit(1);
@@ -707,7 +707,7 @@ impl Gfx {
                 self.ct_action(t.node, Action::Analyse);
                 next(&mut t, 2);
             }
-            2 => match self.camtrack.run.as_ref().map(|r| &r.phase) {
+            2 => match self.jobs.camtrack.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the solve failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let (rel, rot, _) = judge(self, &t);
@@ -762,17 +762,17 @@ impl Gfx {
                     }
                     self.ct_action(t.node, Action::Dismiss);
                     self.ct_action(t.node, Action::Analyse);
-                    if matches!(self.camtrack.run.as_ref().map(|r| &r.phase), Some(Phase::Render)) && self.graph_bake.is_some() {
+                    if matches!(self.jobs.camtrack.run.as_ref().map(|r| &r.phase), Some(Phase::Render)) && self.graph_bake.is_some() {
                         fail("a lens change re-rendered the input".into());
                     }
-                    if self.camtrack.tracking {
+                    if self.jobs.camtrack.tracking {
                         fail("a lens change re-tracked".into());
                     }
                     next(&mut t, 3);
                 }
                 _ => {}
             },
-            3 => match self.camtrack.run.as_ref().map(|r| &r.phase) {
+            3 => match self.jobs.camtrack.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the re-solve failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let (rel, rot, f) = judge(self, &t);
@@ -805,7 +805,7 @@ impl Gfx {
                 }
                 _ => {}
             },
-            4 => match self.camtrack.run.as_ref().map(|r| &r.phase) {
+            4 => match self.jobs.camtrack.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the guess failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let (rel, rot, f) = judge(self, &t);
@@ -896,6 +896,6 @@ impl Gfx {
             },
             _ => {}
         }
-        self.test_camtrack = Some(t);
+        self.test.camtrack = Some(t);
     }
 }

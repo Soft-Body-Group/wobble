@@ -8,7 +8,7 @@
 //! are decoupled like Blender's graph editor: ctrl+MMB (ctrl+alt+LMB)
 //! stretches time and value separately, alt+wheel zooms value alone.
 //!
-//! Owned by instance B (see .agents/board.md); the only main.rs footprint is
+//! Owned by instance B (see .agents/board.md); the only lib.rs footprint is
 //! `mod curves;`, one App field and the panel block.
 
 use crate::anim::{frame_id, id_frame, AnimCurve, Channel, Ease, EaseDir, Extend, FrameId, Interp, Key};

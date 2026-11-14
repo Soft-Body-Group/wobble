@@ -1,0 +1,16 @@
+[package]
+name = "scrub_api"
+version = "0.1.0"
+edition = "2021"
+description = "Scrub's scripting protocol: the method table, the local socket server the app runs, a blocking client, and the MCP bridge (scrub-mcp)"
+
+# Deliberately tiny: no media, no egui, no wgpu. Anything that speaks the
+# protocol — the MCP bridge, a test, a script written in Rust — links this
+# and nothing else.
+[dependencies]
+serde_json = "1"
+base64 = "0.22"
+
+[[bin]]
+name = "scrub-mcp"
+path = "src/bin/scrub-mcp.rs"

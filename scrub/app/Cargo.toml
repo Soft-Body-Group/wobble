@@ -1,0 +1,61 @@
+[package]
+name = "scrub_app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "scrub"
+path = "src/main.rs"
+
+[dependencies]
+media = { path = "../media" }
+model = { path = "../model" }
+colour = { path = "../colour" }
+api = { package = "scrub_api", path = "../api" }
+png.workspace = true
+base64 = "0.22"
+ab_glyph = "0.2"
+# The clip browser (seq_manip on imfram, a sibling checkout); the `clips` feature.
+seq = { path = "../../../seq_manip_imfram/seq", optional = true }
+imfram.workspace = true
+wobble_app = { package = "app", path = "../../app", optional = true, features = ["movie"] }
+egui.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+bytemuck.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+pollster.workspace = true
+cpal = "0.18"
+ffmpeg-next.workspace = true
+half.workspace = true
+lz4_flex = "0.11"
+rayon.workspace = true
+epaint_default_fonts = "0.36"
+gif = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[features]
+default = ["clips"]
+# The clip browser pane: seq_manip's browser (needs ~/src/devl/seq_manip_imfram
+# and what it builds from: sequitur, sequence_manipulator). `--no-default-features`
+# builds Scrub without it.
+clips = ["dep:seq"]
+# Experimental: apply a Wobble comp to a clip (docs/wobble-clips.md). Off by
+# default; also needs sequence > experimental > Wobble clips at run time.
+wobble = []
+# EXPERIMENT (branch exp/scrub-fold): wobble hosted in process (src/fold.rs).
+# Links wobble's app as a library: this build is GPL-3.0-or-later.
+fold = ["dep:wobble_app"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+# The recorder's AVAssetWriter wants a completion block.
+block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }

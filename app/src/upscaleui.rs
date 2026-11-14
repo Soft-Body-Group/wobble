@@ -62,7 +62,7 @@ impl Gfx {
     }
 
     pub(crate) fn upscale_view(&self, node: u64) -> View {
-        let mine = self.upscale.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.upscale.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -90,7 +90,7 @@ impl Gfx {
                 .is_some_and(|p| engine::upscale::weights_ready(p.model)),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.upscale.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.upscale.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -98,7 +98,7 @@ impl Gfx {
         match a {
             Action::Analyse => self.upscale_start(node),
             Action::Cancel => {
-                if let Some(r) = self.upscale.run.take() {
+                if let Some(r) = self.jobs.upscale.run.take() {
                     match r.phase {
                         Phase::Solving { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -111,24 +111,24 @@ impl Gfx {
                 }
             }
             Action::Dismiss => {
-                if self.upscale.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.upscale.run = None;
+                if self.jobs.upscale.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.upscale.run = None;
                 }
             }
         }
     }
 
     fn upscale_fail(&mut self, node: u64, e: &str) {
-        match self.upscale.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.upscale.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.upscale.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
+            None => self.jobs.upscale.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()) }),
         }
     }
 
     /// The `render` click: adopt a result already on disk, else render the
     /// input.
     fn upscale_start(&mut self, node: u64) {
-        if self.upscale.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.upscale.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -144,14 +144,14 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.upscale.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()) });
+            self.jobs.upscale.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()) });
             return;
         }
         let model = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.model).unwrap_or_default();
         if let Err(e) = engine::models::ready_path(model.model_id()) {
             return self.upscale_fail(node, &format!("{e}"));
         }
-        self.upscale.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
+        self.jobs.upscale.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
         let size = self.node_resolution(input, &mut std::collections::HashSet::new());
         if let Err(e) = self.render_input_frames(node, input, dir, size, crate::BakeSink::Upscale) {
             self.upscale_fail(node, &e);
@@ -202,7 +202,7 @@ impl Gfx {
 
     /// The bake loop finished rendering the input: upscale on a worker.
     pub(crate) fn upscale_render_finished(&mut self, node: u64) {
-        let Some(r) = self.upscale.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.upscale.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.upscale_fail(node, "the node is gone");
@@ -233,7 +233,7 @@ impl Gfx {
         if let Err(e) = spawned {
             return self.upscale_fail(node, &format!("could not start the worker: {e}"));
         }
-        if let Some(r) = self.upscale.run.as_mut() {
+        if let Some(r) = self.jobs.upscale.run.as_mut() {
             r.phase = Phase::Solving { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -241,7 +241,7 @@ impl Gfx {
     /// Every redraw: drain the worker, catch a render that died, adopt a
     /// finished result.
     pub(crate) fn upscale_poll(&mut self) {
-        let Some(r) = self.upscale.run.as_mut() else { return };
+        let Some(r) = self.jobs.upscale.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -335,7 +335,7 @@ impl Gfx {
     /// ITS format although the canvas is the larger loaded result. Waits are
     /// wall-clock.
     pub(crate) fn drive_test_upscale(&mut self) {
-        let Some(mut t) = self.test_upscale.take() else { return };
+        let Some(mut t) = self.test.upscale.take() else { return };
         let fail = |m: String| -> ! {
             println!("UPSCALE TEST FAIL: {m}");
             std::process::exit(1);
@@ -363,7 +363,7 @@ impl Gfx {
             }
         };
         let fmt = |me: &Self, n: u64| me.node_resolution(n, &mut std::collections::HashSet::new());
-        let phase = |me: &Self| match me.upscale.run.as_ref().map(|r| &r.phase) {
+        let phase = |me: &Self| match me.jobs.upscale.run.as_ref().map(|r| &r.phase) {
             Some(Phase::Failed(e)) => Err(e.clone()),
             Some(Phase::Done(_)) => Ok(true),
             _ => Ok(false),
@@ -491,6 +491,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_upscale = Some(t);
+        self.test.upscale = Some(t);
     }
 }

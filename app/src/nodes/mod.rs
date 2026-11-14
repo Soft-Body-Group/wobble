@@ -2,7 +2,7 @@
 //! glyph and its channel bindings. The engine half — params, WGSL, the
 //! facts the graph needs — is `engine::nodes`, one file with the same name.
 //!
-//! Same rule as there: `NodeKind` dispatches, and the arms in `main.rs`,
+//! Same rule as there: `NodeKind` dispatches, and the arms in `lib.rs`,
 //! `editor.rs`, `anim.rs`, `curves.rs` and `widgets.rs` are one-liners
 //! into here. The `Channel` variants themselves stay in `anim.rs` — one
 //! flat enum, because a channel's NAME is what a patch cable and a setup
@@ -71,6 +71,47 @@ pub mod vectorblur;
 pub mod vectorwarp;
 pub mod todata;
 pub mod torgba;
+pub mod switch;
+pub mod loopout;
+pub mod custom;
+pub mod breakout;
+pub mod recombine;
+pub mod channelselect;
+pub mod read;
+pub mod shader;
+pub mod tomatte;
+pub mod mult;
+pub mod grid;
+pub mod reformat;
+pub mod slip;
+pub mod timeremap;
+pub mod speed;
+pub mod lumakey;
+pub mod mattecombine;
+pub mod mix;
+pub mod extract;
+pub mod curve;
+pub mod noise;
+pub mod tracker;
+pub mod keyer;
+pub mod sdfnode;
+pub mod rangeremap;
+pub mod timerange;
+pub mod transform;
+pub mod cornerpin;
+pub mod blend;
+pub mod defocus;
+pub mod cryptomatte;
+pub mod layer;
+pub mod graphbake;
+pub mod softcropbake;
+pub mod field;
+pub mod geo;
+pub mod grade;
+pub mod spline;
+pub mod write;
+pub mod geonode;
+pub mod paint;
 
 /// Every channel a node module declares, in module order. `anim::ALL` holds
 /// the rest; the two together are the channel universe a setup can name.

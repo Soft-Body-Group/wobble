@@ -1,5 +1,7 @@
 [workspace]
-members = ["engine", "app", "colors", "api", "genai", "web", "blender_native", "geoplayer"]
+members = ["engine", "app", "colors", "api", "genai", "web", "blender_native", "geoplayer",
+    # Scrub, the video editor: its own binary (scrub/app, `scrub`).
+    "scrub/media", "scrub/model", "scrub/colour", "scrub/api", "scrub/app"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -19,6 +21,13 @@ crossbeam-channel = "0.5"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+# Scrub's (scrub/).
+png = "0.18"
+zune-jpeg = "0.5"
+# Movies. Only codec/format/scaling: no filter graph, resampler or devices.
+ffmpeg-next = { version = "9", default-features = false, features = ["codec", "format", "software-scaling", "software-resampling"] }
+# Same pin as app/Cargo.toml (a local [patch] may point both at a checkout).
+imfram = { git = "https://github.com/Soft-Body-Group/imfram.git", rev = "bb05a3aa980c0901d3870943bdbd330deec611d9" }
 
 [profile.release]
 debug = true
@@ -37,6 +46,13 @@ opt-level = 3
 [profile.dev.package.zune-inflate]
 opt-level = 3
 [profile.dev.package.half]
+opt-level = 3
+# Scrub's decode path.
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.media]
 opt-level = 3
 
 # egui-winit 0.36.2 does not compile for wasm32 (its dropped-file impl misses

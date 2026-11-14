@@ -2,7 +2,7 @@
 //! binding and the glyph. The params and the WGSL are
 //! `engine::nodes::lensflare`; the light's viewer handle (a sun, with the
 //! ghost axis and each ghost's place drawn) lives with the other gizmos in
-//! `main.rs`.
+//! `lib.rs`.
 //!
 //! Every number is `flare.<name>` on `Channel::Custom` (the Starfield's
 //! precedent), so the flat channel enum does not grow.

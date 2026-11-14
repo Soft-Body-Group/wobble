@@ -698,10 +698,12 @@
   each node on its own phase so a field of specks shimmers rather than
   pulsing in lockstep. The maturity pip fades out under it — at that size
   the dots are bigger than the node. `a_speck_twinkles` pins it.
-- **Z X C V are the sensitivity (drag-rate) row — keep other hotkeys off
-  them.** Held over any draggable value they scale the throw
-  (`rgbslider::RATE_KEYS`, with B/N). Only the graph, which drags no values,
-  may reuse Z/X (pin panels / gizmos). App keys: `Q` fullscreens the pane under the
+- **Z X C V B N are the sensitivity (drag-rate) row, and act ONLY during a
+  value drag.** Held while dragging a slider, field, rgb lane or gizmo they
+  scale the throw (`rgbslider::RATE_KEYS`); they consume no press, so any
+  pane may also bind them as ordinary keys (graph Z X B N, viewer B). What
+  must not happen is a pane binding one that ALSO drags values, since the
+  held key would both act and rescale. App keys: `Q` fullscreens the pane under the
   cursor ALONE (`ViewerMode::FullGraph` / `FullProps` / `Full`; the central
   panel draws that pane, and `graph_panel_rect` / `bottom_rect` follow it so
   hover-gated keys keep working), ⌘Q
@@ -749,7 +751,7 @@
   Deliberately NOT slots: anything that IS data — rgb lanes and tints,
   swatches and picker gradients, plugin manifest colours, user-picked
   region/backdrop colours, cryptomatte ids, band tints — and the viewer's
-  image-adaptive HUD ink (`ink.rs` and the main.rs greys that mirror it).
+  image-adaptive HUD ink (`ink.rs` and the lib.rs greys that mirror it).
   With nothing overridden every slot is its old literal, and
   `theme::tests::default_visuals_are_egui_dark` pins egui's look.
 

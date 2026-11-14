@@ -8,7 +8,7 @@
 //! reader). Consumers of the original Read move onto the rebuilt sum.
 //!
 //! The graph surgery is a pure function here (unit-testable); the dialog
-//! lives in main.rs.
+//! lives in lib.rs.
 
 use crate::editor::EditorGraph;
 use engine::graph::{BlendOp, ChannelSelectParams, NodeKind};

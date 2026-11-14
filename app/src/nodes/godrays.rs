@@ -1,6 +1,6 @@
 //! Godrays' app half: the source point, the ray sliders, an rgb tint row,
 //! the combine mode, and a sun-behind-a-ridge glyph. The source point's
-//! viewer handle lives with the other gizmos in `main.rs`.
+//! viewer handle lives with the other gizmos in `lib.rs`.
 
 use crate::anim::Channel;
 use crate::rgbslider::RgbSpec;

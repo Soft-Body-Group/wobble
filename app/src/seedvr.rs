@@ -187,7 +187,7 @@ impl Gfx {
 
     pub(crate) fn seedvr_view(&self, node: u64) -> View {
         let dir = install_dir();
-        let mine = self.seedvr.run.as_ref().filter(|r| r.node == node);
+        let mine = self.jobs.seedvr.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Render) => match &self.graph_bake {
@@ -207,14 +207,14 @@ impl Gfx {
             dir: dir.to_string_lossy().into_owned(),
             installed: installed(&dir) || std::env::var_os("WOBBLE_SEEDVR_CMD").is_some(),
             uv: uv().is_some(),
-            installing: self.seedvr.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.seedvr.install.as_ref().and_then(|i| i.result.clone()),
+            installing: self.jobs.seedvr.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
+            install_result: self.jobs.seedvr.install.as_ref().and_then(|i| i.result.clone()),
             state,
             log: mine.map(|r| r.log.clone()).unwrap_or_default(),
             has_input: self.egraph.input_of(node, 0).is_some(),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
-            busy_elsewhere: self.seedvr.run.as_ref().is_some_and(|r| r.node != node && r.active()),
+            busy_elsewhere: self.jobs.seedvr.run.as_ref().is_some_and(|r| r.node != node && r.active()),
         }
     }
 
@@ -222,7 +222,7 @@ impl Gfx {
         match a {
             Action::Run => self.seedvr_start(node),
             Action::Cancel => {
-                if let Some(r) = self.seedvr.run.take() {
+                if let Some(r) = self.jobs.seedvr.run.take() {
                     match r.phase {
                         Phase::Running { cancel, .. } => cancel.store(true, Relaxed),
                         Phase::Render => {
@@ -236,27 +236,27 @@ impl Gfx {
             }
             Action::Install => self.seedvr_install(),
             Action::Dismiss => {
-                if self.seedvr.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
-                    self.seedvr.run = None;
+                if self.jobs.seedvr.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
+                    self.jobs.seedvr.run = None;
                 }
-                if self.seedvr.install.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.seedvr.install = None;
+                if self.jobs.seedvr.install.as_ref().is_some_and(|i| i.result.is_some()) {
+                    self.jobs.seedvr.install = None;
                 }
             }
         }
     }
 
     fn seedvr_fail(&mut self, node: u64, e: &str) {
-        match self.seedvr.run.as_mut().filter(|r| r.node == node) {
+        match self.jobs.seedvr.run.as_mut().filter(|r| r.node == node) {
             Some(r) => r.phase = Phase::Failed(e.to_string()),
-            None => self.seedvr.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] }),
+            None => self.jobs.seedvr.run = Some(Run { node, dir: PathBuf::new(), phase: Phase::Failed(e.into()), log: vec![] }),
         }
     }
 
     /// `install…`: fetch the pinned CLI and build its environment, on a
     /// thread, its output streamed to the panel.
     fn seedvr_install(&mut self) {
-        if self.seedvr.install.as_ref().is_some_and(|i| i.result.is_none()) {
+        if self.jobs.seedvr.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
         let dir = install_dir();
@@ -264,12 +264,12 @@ impl Gfx {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (&dir, &tx);
-            self.seedvr.install = Some(Install { rx, log: vec![], result: Some(Err("the tool runs as a process: not in the web build".into())) });
+            self.jobs.seedvr.install = Some(Install { rx, log: vec![], result: Some(Err("the tool runs as a process: not in the web build".into())) });
             return;
         }
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
         let Some(uv) = uv() else {
-            self.seedvr.install = Some(Install { rx, log: vec![], result: Some(Err(UV_MISSING.into())) });
+            self.jobs.seedvr.install = Some(Install { rx, log: vec![], result: Some(Err(UV_MISSING.into())) });
             return;
         };
         let spawned = std::thread::Builder::new()
@@ -282,12 +282,12 @@ impl Gfx {
                 });
             })
             .is_ok();
-        self.seedvr.install = Some(Install { rx, log: vec![], result: (!spawned).then_some(Err("could not start a thread".into())) });
+        self.jobs.seedvr.install = Some(Install { rx, log: vec![], result: (!spawned).then_some(Err("could not start a thread".into())) });
     }
 
     /// The `run` click: adopt a result on disk, else render the input.
     fn seedvr_start(&mut self, node: u64) {
-        if self.seedvr.run.as_ref().is_some_and(|r| r.active()) {
+        if self.jobs.seedvr.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
         #[cfg(target_arch = "wasm32")]
@@ -303,13 +303,13 @@ impl Gfx {
         if engine::bakes::is_baked(&out) {
             self.load_read(node, &out.to_string_lossy());
             self.playback_dirty = true;
-            self.seedvr.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()), log: vec![] });
+            self.jobs.seedvr.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()), log: vec![] });
             return;
         }
         if !installed(&install_dir()) && std::env::var_os("WOBBLE_SEEDVR_CMD").is_none() {
             return self.seedvr_fail(node, "SeedVR2 is not installed: press install…");
         }
-        self.seedvr.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render, log: vec![] });
+        self.jobs.seedvr.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render, log: vec![] });
         let size = self.node_resolution(input, &mut std::collections::HashSet::new());
         if let Err(e) = self.render_input_frames(node, input, dir, size, crate::BakeSink::SeedVr) {
             self.seedvr_fail(node, &e);
@@ -318,7 +318,7 @@ impl Gfx {
 
     /// The bake loop finished rendering the input: run the tool.
     pub(crate) fn seedvr_render_finished(&mut self, node: u64) {
-        let Some(r) = self.seedvr.run.as_ref().filter(|r| r.node == node) else { return };
+        let Some(r) = self.jobs.seedvr.run.as_ref().filter(|r| r.node == node) else { return };
         let dir = r.dir.clone();
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.seedvr_fail(node, "the node is gone");
@@ -347,7 +347,7 @@ impl Gfx {
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "seedvr") {
             return self.seedvr_fail(node, &e);
         }
-        if let Some(r) = self.seedvr.run.as_mut() {
+        if let Some(r) = self.jobs.seedvr.run.as_mut() {
             r.phase = Phase::Running { rx, cancel, done: 0, total: 0 };
         }
     }
@@ -355,7 +355,7 @@ impl Gfx {
     /// Every redraw: drain the tool's messages, catch a render that died,
     /// adopt a finished result.
     pub(crate) fn seedvr_poll(&mut self) {
-        if let Some(i) = self.seedvr.install.as_mut() {
+        if let Some(i) = self.jobs.seedvr.install.as_mut() {
             while let Ok(m) = i.rx.try_recv() {
                 match m {
                     Msg::Line(l) => push_log(&mut i.log, l),
@@ -365,7 +365,7 @@ impl Gfx {
                 }
             }
         }
-        let Some(r) = self.seedvr.run.as_mut() else { return };
+        let Some(r) = self.jobs.seedvr.run.as_mut() else { return };
         let node = r.node;
         if matches!(r.phase, Phase::Render) && self.graph_bake.is_none() {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input stopped rendering".into());
@@ -566,7 +566,7 @@ impl Gfx {
     /// recipe: STALE until re-run, into a new directory. Waits are
     /// wall-clock.
     pub(crate) fn drive_test_seedvr(&mut self) {
-        let Some(mut t) = self.test_seedvr.take() else { return };
+        let Some(mut t) = self.test.seedvr.take() else { return };
         let fail = |m: String| -> ! {
             println!("SEEDVR TEST FAIL: {m}");
             std::process::exit(1);
@@ -596,7 +596,7 @@ impl Gfx {
                 _ => None,
             }
         };
-        let phase = |me: &Self| match me.seedvr.run.as_ref().map(|r| &r.phase) {
+        let phase = |me: &Self| match me.jobs.seedvr.run.as_ref().map(|r| &r.phase) {
             Some(Phase::Failed(e)) => Err(e.clone()),
             Some(Phase::Done(_)) => Ok(true),
             _ => Ok(false),
@@ -674,6 +674,6 @@ impl Gfx {
             }
             _ => {}
         }
-        self.test_seedvr = Some(t);
+        self.test.seedvr = Some(t);
     }
 }
