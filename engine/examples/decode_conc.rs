@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
                         if i >= n {
                             break;
                         }
-                        let mut fresh = Vec::new();
+                        let mut fresh: Vec<f16>;
                         let buf: &mut Vec<f16> = if reuse { &mut keep } else { fresh = vec![f16::ZERO; stride * info.height as usize]; &mut fresh };
                         dec.decode_into(&seq.frames[i], info, stride, buf).unwrap();
                         }
