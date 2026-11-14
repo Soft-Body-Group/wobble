@@ -85,6 +85,15 @@ pub const KEYS: &[HudKey] = &[
 ];
 
 pub fn style(ctx: &egui::Context) {
+    // Wobble's dark (imfram's `DARK` overrides: near-black background, dim
+    // borders, teal-grey buttons) rather than the core table's lighter
+    // defaults, so the two apps look like one. Overrides, so every linked
+    // slot (windows, fields, canvases) follows.
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dark = imfram::theme::DARK.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        imfram::theme::install(&dark);
+    });
     imfram::theme::sync(ctx);
     ctx.all_styles_mut(|s| s.animation_time /= 3.0);
 }
