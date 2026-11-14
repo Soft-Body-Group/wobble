@@ -88,8 +88,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libwayland-dev
 
+      # Scrub's media + app link a system FFmpeg; they build in the scrub
+      # job below so wobble's own build needs no non-Rust dependency.
       - name: Build
-        run: cargo build --workspace --release
+        run: cargo build --workspace --release --exclude media --exclude scrub_app
 
       # Crashes the build on purpose, before any window exists: a panic and
       # an abort everywhere; on Windows also an access violation through the
@@ -104,7 +106,7 @@ jobs:
       # evaluation, expression parsing). The --test-* UI suites drive a real
       # window and GPU, so they stay a local step — see CLAUDE.md.
       - name: Test
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --no-fail-fast --exclude media --exclude scrub_app
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
@@ -113,6 +115,24 @@ jobs:
           path: target/release/${{ matrix.bin }}
           retention-days: 1
           if-no-files-found: error
+
+  # Scrub (scrub/, bin `scrub`) decodes through a system FFmpeg via
+  # ffmpeg-next, so it gets its own job with Homebrew's.
+  scrub:
+    name: scrub (macos, system ffmpeg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: scrub
+      - name: Install FFmpeg
+        run: brew install ffmpeg pkg-config
+      - name: Build
+        run: cargo build --release -p scrub_app -p scrub_api
+      - name: Test
+        run: cargo test --no-fail-fast -p media -p model -p colour -p scrub_api -p scrub_app
 
   # The OpenDRT view transform is GPLv3 and off by default. Kept compiling
   # here so the feature cannot bit-rot; deliberately no artifact upload.
@@ -157,7 +177,7 @@ jobs:
             pkg-config libx11-dev libxkbcommon-dev libwayland-dev
       # `colors` shares app files whose test blocks need the app crate
       # (its bin is `test = false`), so it is linted without its tests.
-      - run: cargo clippy --workspace --all-targets --exclude colors
+      - run: cargo clippy --workspace --all-targets --exclude colors --exclude media --exclude scrub_app
         env:
           RUSTFLAGS: ""
       - run: cargo clippy -p colors
