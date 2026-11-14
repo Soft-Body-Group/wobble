@@ -5970,7 +5970,7 @@ mod node_pack_tests {
         // A new node: subfolder of the same name, four digits.
         let w = WriteParams { location: "renders".into(), name: "shot".into(), ..WriteParams::default() };
         assert!(w.subfolder && w.padding == 4 && w.path.is_empty());
-        assert_eq!(w.pattern(), "renders/shot/shot.####.exr");
+        assert_eq!(PathBuf::from(w.pattern()), PathBuf::from("renders/shot/shot.####.exr"));
         assert_eq!(w.resolve_frame(0), PathBuf::from("renders/shot/shot.1001.exr"));
         assert_eq!(w.dir(), PathBuf::from("renders/shot"));
         // No subfolder; padding is its own setting.
@@ -5978,9 +5978,9 @@ mod node_pack_tests {
         assert_eq!(flat.resolve_frame(2), PathBuf::from("renders/shot.000003.exr"));
         // A name is ONE name: separators and frame runs cannot sneak in.
         let odd = WriteParams { name: "a/b#".into(), ..w.clone() };
-        assert_eq!(odd.pattern(), "renders/a_b/a_b.####.exr");
+        assert_eq!(PathBuf::from(odd.pattern()), PathBuf::from("renders/a_b/a_b.####.exr"));
         let empty = WriteParams { name: "  ".into(), ..w.clone() };
-        assert_eq!(empty.pattern(), "renders/comp/comp.####.exr");
+        assert_eq!(PathBuf::from(empty.pattern()), PathBuf::from("renders/comp/comp.####.exr"));
         // Nowhere to write until there is a location.
         assert!(!WriteParams::default().is_set());
         assert!(w.is_set());
