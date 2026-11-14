@@ -1,0 +1,24 @@
+[package]
+name = "media"
+version = "0.1.0"
+edition = "2021"
+description = "Scrub's decode + cache layer: movies through FFmpeg, image sequences, a prefetching frame server. No UI."
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+half.workspace = true
+exr.workspace = true
+png.workspace = true
+zune-jpeg.workspace = true
+ffmpeg-next.workspace = true
+rayon.workspace = true
+bytemuck.workspace = true
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+anyhow.workspace = true
+env_logger.workspace = true

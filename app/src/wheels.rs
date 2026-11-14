@@ -474,7 +474,7 @@ mod tests {
                 ..Default::default()
             };
             let _ = ctx.run_ui(input, |ui| {
-                super::bound_wheel_ui(ui, "gain", v, -4.0, 8.0, 1.0);
+                super::bound_wheel_ui(ui, "gain", v, -4.0, 8.0, 1.0, true);
             });
         };
         frame(Vec::new(), &mut v);
@@ -571,15 +571,19 @@ pub fn bound_wheel_ui(
     lo: f32,
     hi: f32,
     scale: f32,
+    // A MULTIPLIER (gain, gamma: neutral at 1) or an OFFSET (lift, offset:
+    // neutral at 0). The wheel is drawn and dragged about its neutral, so
+    // an offset treated as a multiplier jumps on the first touch.
+    mult: bool,
 ) {
     let spec = WheelSpec {
         label: label.to_string(),
-        default: 1.0,
+        default: if mult { 1.0 } else { 0.0 },
         lo,
         hi,
         chroma_range: 0.35,
-        master_speed: 0.004,
-        arc_span: 2.0,
+        master_speed: if mult { 0.004 } else { 0.003 },
+        arc_span: if mult { 2.0 } else { 1.0 },
     };
     one_wheel(ui, &spec, v, Geo::new(scale.max(0.2)));
 }

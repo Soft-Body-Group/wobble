@@ -826,7 +826,7 @@ impl Gfx {
         self.redo_stack.clear();
     }
 
-    fn api_call(&mut self, method: &str, p: &Value) -> R {
+    pub(crate) fn api_call(&mut self, method: &str, p: &Value) -> R {
         match method {
             // A connection from this machine needs no code; a network one
             // was unlocked (or refused) before its calls got here.

@@ -116,11 +116,14 @@ pub enum ControlKind {
     Rgb,
     Wheel,
     Label,
+    /// Two values that go together (a scale, a translate, a size), in
+    /// their usual form: two drag fields and a ratio padlock on one row.
+    Pair,
 }
 
 impl ControlKind {
-    pub const ALL: [ControlKind; 4] =
-        [ControlKind::Slider, ControlKind::Rgb, ControlKind::Wheel, ControlKind::Label];
+    pub const ALL: [ControlKind; 5] =
+        [ControlKind::Slider, ControlKind::Rgb, ControlKind::Wheel, ControlKind::Label, ControlKind::Pair];
 
     pub fn type_id(self) -> &'static str {
         match self {
@@ -128,6 +131,7 @@ impl ControlKind {
             ControlKind::Rgb => "ui.rgb",
             ControlKind::Wheel => "ui.wheel",
             ControlKind::Label => "ui.label",
+            ControlKind::Pair => "ui.pair",
         }
     }
 
@@ -141,6 +145,7 @@ impl ControlKind {
             ControlKind::Rgb => "RGB Slider",
             ControlKind::Wheel => "Colour Wheel",
             ControlKind::Label => "Label",
+            ControlKind::Pair => "Drag Pair",
         }
     }
 
@@ -150,6 +155,7 @@ impl ControlKind {
         match self {
             ControlKind::Slider => &["value"],
             ControlKind::Rgb | ControlKind::Wheel => &["r", "g", "b"],
+            ControlKind::Pair => &["x", "y"],
             ControlKind::Label => &[],
         }
     }
@@ -160,7 +166,7 @@ impl ControlKind {
     pub fn span(self) -> [u8; 2] {
         let w = COLS_PER_TILE as u8;
         match self {
-            ControlKind::Slider | ControlKind::Label => [w, 1],
+            ControlKind::Slider | ControlKind::Label | ControlKind::Pair => [w, 1],
             // Row counts are DERIVED from what the instruments actually
             // measure, not hand-tuned: a cell one row short clips the widget
             // inside it, and nobody re-does this arithmetic after changing a

@@ -366,6 +366,10 @@ pub struct EditorGraph {
     /// takes exactly one wire, so that names the edge.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub hidden_wires: std::collections::BTreeSet<(u64, usize)>,
+    /// Nodes whose WHOLE properties panel the comp publishes to its host
+    /// (Scrub's wob controls, hosted.rs), under its own panel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_panels: Vec<u64>,
     /// Inside a 2dini: the z and blend set on a noodle, keyed (dst, input)
     /// like the hidden layer. A wire with nothing set is absent; one whose
     /// edge is gone is ignored (and dropped on the way to the engine).

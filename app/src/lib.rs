@@ -7,6 +7,7 @@
 //! ring sized to the largest plate, player over every loaded Read).
 
 mod anim;
+pub mod hosted;
 mod appicon;
 mod assets;
 mod collect;
@@ -3768,7 +3769,10 @@ fn tool_panel_ui(
         } else {
             n.ui_label.clone()
         };
-        ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| match k {
+        // Its OWN id: sibling scopes share one (egui's `Ui::id`), and every
+        // wheel's disc is `ui.id().with("disc")` — so on a panel with more
+        // than one, only the last took the pointer and all of them moved.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(r).id_salt(("panel-control", id)), |ui| match k {
             tools::ControlKind::Label => {
                 ui.label(&cap);
             }
@@ -3782,6 +3786,29 @@ fn tool_panel_ui(
                     widgets::drags(ui, cx, &cap, &mut [&mut v], 0.01, (lo, hi), &[ch])
                 };
                 params.insert(name, v);
+                if h.is_some() {
+                    out = h;
+                }
+            }
+            tools::ControlKind::Pair => {
+                let names = [tools::lane_param(id, k, 0), tools::lane_param(id, k, 1)];
+                let chans = [
+                    anim::Channel::Custom(anim::intern(&names[0])),
+                    anim::Channel::Custom(anim::intern(&names[1])),
+                ];
+                let mut a = tools::lane_value(params, &n.kind, k, 0, &names[0]);
+                let mut b = tools::lane_value(params, &n.kind, k, 1, &names[1]);
+                // The padlock: UI memory per control, starting as the
+                // control says (a scale comes in locked).
+                let lid = egui::Id::new(("panel-pair-lock", id));
+                let start = matches!(&n.kind, NodeKind::Custom { params: cp, .. } if cp.get("lock").copied().unwrap_or(0.0) > 0.5);
+                let mut locked = ui.data(|d| d.get_temp::<bool>(lid)).unwrap_or(start);
+                // Pixels step by one, ratios by a hundredth.
+                let speed = if hi - lo > 100.0 { 1.0 } else { 0.01 };
+                let h = widgets::drags_locked(ui, cx, &cap, &mut [&mut a, &mut b], speed, (lo, hi), &chans, &mut locked);
+                ui.data_mut(|d| d.insert_temp(lid, locked));
+                params.insert(names[0].clone(), a);
+                params.insert(names[1].clone(), b);
                 if h.is_some() {
                     out = h;
                 }
@@ -3803,7 +3830,17 @@ fn tool_panel_ui(
                     let fit = (r.width() / wheels::COL_W)
                         .min(r.height() / wheels::COL_H)
                         .clamp(0.2, 4.0);
-                    wheels::bound_wheel_ui(ui, &cap, &mut v, lo, hi, fit);
+                    // What it was made from says which it is; a wheel made
+                    // before that was recorded goes by its name.
+                    let wmult = match &n.kind {
+                        NodeKind::Custom { params: cp, .. } => cp.get("scale").map(|s| *s > 0.5),
+                        _ => None,
+                    }
+                    .unwrap_or_else(|| {
+                        let l = cap.to_lowercase();
+                        !(l.contains("lift") || l.contains("offset"))
+                    });
+                    wheels::bound_wheel_ui(ui, &cap, &mut v, lo, hi, fit, wmult);
                 } else {
                     let chans = [
                         anim::Channel::Custom(anim::intern(&names[0])),
@@ -4699,21 +4736,9 @@ struct Options {
     test_rendercache: bool,
 }
 
-/// The whole app: parse the command line, open the window, run the event
-/// loop. The `wobble` binary (main.rs) is this call and nothing else.
-pub fn run() -> anyhow::Result<()> {
-    // Same env / default-warn filter as the env_logger line this replaced,
-    // plus a ring buffer feeding crash + feedback reports (report.rs).
-    #[cfg(not(target_arch = "wasm32"))]
-    report::init_logging();
-    // In a page: the devtools console, panics included (webmain.rs).
-    #[cfg(target_arch = "wasm32")]
-    {
-        webmain::init();
-        webmain::install_movies();
-    }
-    let usage = "usage: compositor [seqA_dir] [seqB_dir] [setup.wbl] [--no-vsync] [--slots N] [--ahead N] [--cache-gb N] [--cache-dir DIR] [--view none|filmic|aces|opendrt] [--dump-after N out.png] [--play]";
-    let mut opts = Options {
+/// Every option at its default (what a launch with no arguments gets).
+fn base_options() -> Options {
+    Options {
         seq_a: None,
         seq_b: None,
         setup: None,
@@ -4831,7 +4856,24 @@ pub fn run() -> anyhow::Result<()> {
         with_cornerpin: false,
         test_play: false,
         with_blur: false,
-    };
+    }
+}
+
+/// The whole app: parse the command line, open the window, run the event
+/// loop. The `wobble` binary (main.rs) is this call and nothing else.
+pub fn run() -> anyhow::Result<()> {
+    // Same env / default-warn filter as the env_logger line this replaced,
+    // plus a ring buffer feeding crash + feedback reports (report.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    report::init_logging();
+    // In a page: the devtools console, panics included (webmain.rs).
+    #[cfg(target_arch = "wasm32")]
+    {
+        webmain::init();
+        webmain::install_movies();
+    }
+    let usage = "usage: compositor [seqA_dir] [seqB_dir] [setup.wbl] [--no-vsync] [--slots N] [--ahead N] [--cache-gb N] [--cache-dir DIR] [--view none|filmic|aces|opendrt] [--dump-after N out.png] [--play]";
+    let mut opts = base_options();
     let mut positional = Vec::new();
     let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
@@ -5556,6 +5598,8 @@ thread_local! {
 }
 
 struct Gfx {
+    /// EXPERIMENT (hosted.rs): drawn into another app's texture, fed its input.
+    hosted: Option<hosted::State>,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -5579,6 +5623,8 @@ struct Gfx {
     blit_hold: Blit,
     /// Dual view's other pane, live (see [`OtherPane`]).
     other_pane: Option<OtherPane>,
+    /// EXPERIMENT (hosted.rs): the output node's own render, for the host.
+    host_pane: Option<OtherPane>,
     /// The first-use notice for the live second pane is up.
     dual_notice: bool,
     timer: GpuTimer,
@@ -7527,6 +7573,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
     let mut docks = dockui::WobbleDocks::new("wobble", opts.any_test());
     docks.add_external(dockui::Role::Main, window.clone(), egui_ctx.clone(), dockui::layout());
     let mut g = Gfx {
+        hosted: None,
         window,
         surface,
         config,
@@ -7550,6 +7597,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         blit,
         blit_hold,
         other_pane: None,
+        host_pane: None,
         dual_notice: false,
         timer,
         decoder,
@@ -12411,11 +12459,11 @@ impl Gfx {
         // before a frame is acquired, because a held frame cannot be
         // reconfigured under.
         let want_copy = self.recorder.recording() || self.shot.wants_copy();
-        if want_copy != self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+        if self.hosted.is_none() && want_copy != self.config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
             self.config.usage.set(wgpu::TextureUsages::COPY_SRC, want_copy);
             self.surface.configure(&self.ctx.device, &self.config);
         }
-        let frame = match self.surface.get_current_texture() {
+        let frame = match if self.hosted.is_some() { wgpu::CurrentSurfaceTexture::Timeout } else { self.surface.get_current_texture() } {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
                 Some(t)
             }
@@ -12427,9 +12475,11 @@ impl Gfx {
             }
             _ => None, // Timeout / Occluded
         };
-        let surface_view = frame
-            .as_ref()
-            .map(|f| f.texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let surface_view = match &self.hosted {
+            // Hosted: the host's texture stands in for the swapchain.
+            Some(h) => h.target.as_ref().map(|t| t.1.clone()),
+            None => frame.as_ref().map(|f| f.texture.create_view(&wgpu::TextureViewDescriptor::default())),
+        };
 
         // --- egui pass (UI first so graph edits apply to this frame) ---
         // The UI pass normally rides the surface; under test it runs even
@@ -12445,6 +12495,9 @@ impl Gfx {
         let run_ui = surface_view.is_some() || self.testing || self.api.is_some() || apiserve::wants_network();
         let egui_frame = run_ui.then(|| {
             let mut raw_input = self.egui_state.take_egui_input(&self.window);
+            if let Some(h) = self.hosted.as_mut() {
+                h.feed(&mut raw_input);
+            }
             TEST_BEAT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if let Some(stage) = self.test.click {
                 self.drive_test_click(stage, &mut raw_input);
@@ -12620,6 +12673,9 @@ impl Gfx {
             if let Some(sw) = colorpicker::take_changed_swatches() {
                 self.prefs.picker_swatches = sw;
                 save_prefs(&self.prefs);
+            }
+            if let Some(h) = self.hosted.as_mut() {
+                h.cursor = full_output.platform_output.cursor_icon;
             }
             self.egui_state
                 .handle_platform_output(&self.window, std::mem::take(&mut full_output.platform_output));
@@ -12860,6 +12916,7 @@ impl Gfx {
         };
         self.snapshot_held_pane(&mut encoder);
         self.encode_other_pane(&mut encoder, tick, frame_set.is_some() && !cached_display);
+        self.encode_host_pane(&mut encoder, tick, frame_set.is_some() && !cached_display);
         self.encode_luma_probes(&mut encoder);
         if let (Some(tex), Some(out)) = (self.comp.output_texture(), self.comp.output_size())
         {
@@ -16807,7 +16864,7 @@ impl Gfx {
                 if let Some(p) = ptr {
                     // Inside a tool, onto its panel composer: the row
                     // becomes one of the tool's knobs, cabled to it.
-                    if self.layout_open && !self.dive.is_empty() && self.compose_area.contains(p) {
+                    if self.layout_open && (!self.dive.is_empty() || self.hosted.is_some()) && self.compose_area.contains(p) {
                         self.compose_drop(&h, p);
                     } else if self.viewer_rect.contains(p) {
                         let mut h = h;
@@ -16897,11 +16954,33 @@ impl Gfx {
             self.other_pane = None;
             return;
         }
+        self.encode_pane_of(false, encoder, tick, new_frame);
+    }
+
+    /// EXPERIMENT (hosted.rs): the comp's OUTPUT NODE (the node named
+    /// `hosted::OUT_NODE`) rendered for the host whatever the viewer is
+    /// pointed at, the way dual view renders its other pane. Nothing extra
+    /// runs while the viewer is on that node itself.
+    fn encode_host_pane(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64, new_frame: bool) {
+        if self.hosted.is_none() {
+            return;
+        }
+        self.encode_pane_of(true, encoder, tick, new_frame);
+    }
+
+    fn encode_pane_of(&mut self, host: bool, encoder: &mut wgpu::CommandEncoder, tick: u64, new_frame: bool) {
+        let mut slot = if host { self.host_pane.take() } else { self.other_pane.take() };
+        let mut same = false;
         let other = 1 - self.live_pane().min(1);
         let (mut graph, view) = {
             let preview = self.render_preview(tick);
             let src: &EditorGraph = preview.as_ref().unwrap_or(&self.egraph);
-            let (view, out) = if other == 0 {
+            let (view, out) = if host {
+                let out = hosted::out_node(src);
+                // The viewer already shows it: the main output is the answer.
+                same = out.is_some() && out.and_then(|v| src.resolve_dot(v)) == src.active_view().and_then(|v| src.resolve_dot(v)) && src.active_view_out() == 0;
+                (out.filter(|_| !same), 0)
+            } else if other == 0 {
                 (src.active_view(), src.active_view_out())
             } else {
                 (src.active_view2(), src.active_view2_out())
@@ -16915,9 +16994,18 @@ impl Gfx {
             }
             (g, view)
         };
+        if let Some(h) = self.hosted.as_mut().filter(|_| host) {
+            h.out_is_view = same;
+            h.has_out = same || view.is_some();
+        }
         let Some(view) = view else {
-            if let Some(o) = self.other_pane.as_mut() {
+            if let Some(o) = slot.as_mut() {
                 o.shown = false;
+            }
+            if host {
+                self.host_pane = slot;
+            } else {
+                self.other_pane = slot;
             }
             return;
         };
@@ -16931,7 +17019,7 @@ impl Gfx {
             .flatten()
             .or_else(|| self.comp.output_size())
             .map(|(w, h)| (w.clamp(16, 16384), h.clamp(16, 16384)));
-        let mut o = self.other_pane.take().unwrap_or_else(|| OtherPane {
+        let mut o = slot.take().unwrap_or_else(|| OtherPane {
             comp: Compositor::new(self.ctx.device.clone(), self.ctx.queue.clone(), 2),
             timer: GpuTimer::for_device(&self.ctx.device, &self.ctx.queue, false, false),
             last_graph: None,
@@ -16994,7 +17082,11 @@ impl Gfx {
         if changed {
             o.last_graph = Some(graph);
         }
-        self.other_pane = Some(o);
+        if host {
+            self.host_pane = Some(o);
+        } else {
+            self.other_pane = Some(o);
+        }
     }
 
     fn snapshot_held_pane(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -21916,6 +22008,10 @@ impl Gfx {
             if h.rgb && h.chans.len() == 3 {
                 let k = if h.wheel { tools::ControlKind::Wheel } else { tools::ControlKind::Rgb };
                 vec![(k, h.chans.clone(), h.label.clone())]
+            } else if h.chans.len() == 2 {
+                // A pair comes in as it is drawn on its node: two drag
+                // fields and a padlock, not two sliders.
+                vec![(tools::ControlKind::Pair, h.chans.clone(), h.label.clone())]
             } else {
                 h.chans
                     .iter()
@@ -21935,8 +22031,11 @@ impl Gfx {
             }
             params.insert("lo".into(), lo);
             params.insert("hi".into(), hi);
-            if k == tools::ControlKind::Rgb {
+            if k == tools::ControlKind::Rgb || k == tools::ControlKind::Wheel {
                 params.insert("scale".into(), if h.rgb_scale { 1.0 } else { 0.0 });
+            }
+            if k == tools::ControlKind::Pair {
+                params.insert("lock".into(), if h.label.to_lowercase().contains("scale") { 1.0 } else { 0.0 });
             }
             let id = self.egraph.add(
                 NodeKind::Custom { type_id: k.type_id().into(), params },
@@ -22067,6 +22166,37 @@ impl Gfx {
             let n = tools::ordered_controls(&self.egraph).len();
             ui.weak(format!("{n} control(s) · drag one to move it"));
         });
+        // EXPERIMENT (hosted.rs): a node's WHOLE panel, published as it is.
+        if self.hosted.is_some() && self.dive.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("whole panels");
+                if ui
+                    .button("+ selected node")
+                    .on_hover_text("publish the selected nodes' whole properties panels to Scrub, under these controls")
+                    .clicked()
+                {
+                    for id in self.selected.clone() {
+                        let ok = self.egraph.node(id).is_some_and(|n| tools::control_of(&n.kind).is_none());
+                        if ok && !self.egraph.host_panels.contains(&id) {
+                            self.egraph.host_panels.push(id);
+                        }
+                    }
+                }
+                let mut gone = None;
+                for id in self.egraph.host_panels.clone() {
+                    let Some(name) = self.egraph.node(id).map(editor::display_label) else {
+                        gone = Some(id);
+                        continue;
+                    };
+                    if ui.small_button(format!("{name} ×")).on_hover_text("stop publishing this panel").clicked() {
+                        gone = Some(id);
+                    }
+                }
+                if let Some(id) = gone {
+                    self.egraph.host_panels.retain(|x| *x != id);
+                }
+            });
+        }
 
         // Space first, interaction LAST (below): the widgets are drawn into
         // this same rect, and anything drawn after an interaction rect sits
@@ -22756,6 +22886,21 @@ impl Gfx {
                     if let Err(e) = self.dive_into(n) {
                         self.tool_error = Some(e);
                     }
+                }
+            }
+            // EXPERIMENT (hosted.rs): a comp hosted by Scrub publishes its
+            // own panel (its top-level control nodes), arranged with the
+            // same composer a subwob's is.
+            if self.hosted.is_some() {
+                if ui
+                    .small_button("panel")
+                    .on_hover_text("arrange this comp's controls into the panel Scrub shows for the clip")
+                    .clicked()
+                {
+                    self.layout_open = !self.layout_open;
+                }
+                if self.layout_open {
+                    self.tool_layout_ui(ui.ctx());
                 }
             }
             // A refused collapse says why here, above the graph it was
