@@ -15482,22 +15482,29 @@ impl Gfx {
                     self.view_channel = None;
                 }
             }
-            // shift+R/G/B over the viewer: that channel alone, as grey; the
-            // same key again goes back to rgb. Exclusive with A's alpha.
+            // R/G/B over the viewer: that channel alone, as grey; the same
+            // key again goes back to rgb. Exclusive with A's alpha. Not in
+            // the graph overlay (the graph's own R / G / B), not in a 3D
+            // view (G / R pick its manipulator), and not while a roto or
+            // corner-pin pick is live (held R rotates the pick).
+            let pick_live = !self.spline.sel.is_empty()
+                || self.pin.sel.is_some_and(|(_, s)| s.iter().any(|b| *b));
+            let chan_key = chan_key.filter(|c| !(*c == 0 && pick_live));
             if let Some(c) = chan_key {
-                let over_viewer = matches!(self.viewer_mode, ViewerMode::Full | ViewerMode::FullNodes)
+                let over_viewer = self.viewer_mode == ViewerMode::Full
                     || (self.viewer_mode == ViewerMode::Normal
                         && ptr.is_some_and(|p| self.viewer_rect.contains(p)));
-                if over_viewer {
+                if over_viewer && self.view3d_target().is_none() {
                     self.view_channel = if self.view_channel == Some(c) { None } else { Some(c) };
                     self.view_alpha = false;
                 }
             }
-            // R over the viewer: frame the image to fill it (the graph's own
-            // R — frame selected nodes — is hover-gated inside the editor;
-            // in the FullNodes overlay the graph owns R). Framing moved off
-            // F so the rgb sliders can hold F for their green<->magenta
-            // axis, and off M at the user's request; browse moved to B.
+            // F over the viewer: frame the image to fill it (Nuke's; R is
+            // the red channel now). In the FullNodes overlay the graph owns
+            // the letters. With a Paint node selected, held F is the brush
+            // adjust (Blender's), so framing stands down — Home still
+            // frames. The rgb sliders' held F (green<->magenta) cannot
+            // collide: a slider drag suspends this whole block.
             // Held with roto points picked, R is the rotate-about-the-click
             // gesture instead (Home still frames).
             // I / O: the playback in / out point at the playhead — over the
@@ -15524,10 +15531,15 @@ impl Gfx {
                     }
                 }
             }
-            let roto_r = !self.spline.sel.is_empty()
-                && ctx.input(|i| i.key_down(egui::Key::R))
-                && self.spline.sel_node.is_some_and(|n| self.selected.contains(&n));
-            if !roto_r && ctx.input(|i| keymap::pressed(i, Act::FrameView)) {
+            let painting = self
+                .selected
+                .iter()
+                .any(|id| matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::Paint(_))));
+            let frame_k = ctx.input(|i| {
+                keymap::pressed(i, Act::FrameView)
+                    && !(painting && keymap::down(i, Act::BrushAdjust) && !i.key_pressed(egui::Key::Home))
+            });
+            if frame_k {
                 let over_viewer = self.viewer_mode == ViewerMode::Full
                     || (self.viewer_mode == ViewerMode::Normal
                         && ptr.is_some_and(|p| self.viewer_rect.contains(p)));

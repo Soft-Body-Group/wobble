@@ -237,7 +237,7 @@ Full text, with the why and the measurements: [docs/claude/invariants.md](docs/c
 - Never use orange in the UI.
 - Node names are placed, not just drawn.
 - A node too small to read as a shape TWINKLES.
-- Z X C V are the sensitivity (drag-rate) row — keep other hotkeys off them.
+- Z X C V B N are the sensitivity (drag-rate) row, and act ONLY during a value drag.
 - A single-letter hotkey belongs to the pane under the cursor.
 - Hotkeys are remappable: a new one is a `keymap::DEFS` row, never a raw `key_pressed`.
 - UI colours are theme slots: a new one is a `theme.rs` row, never a literal.
