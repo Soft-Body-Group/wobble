@@ -1538,7 +1538,9 @@ fn idt_fn(cx: &mut EmitCx, node: NodeId) -> Option<String> {
     let input = match cx.graph.nodes.get(&node) {
         Some(NodeKind::Read { input, .. }) => *input,
         Some(NodeKind::Blender(p)) => p.effective_space(),
-        // Every model we call hands back display-referred sRGB.
+        // Every model we call hands back display-referred sRGB, except a
+        // depth or normals take: stored values, read as they are.
+        Some(NodeKind::GenAi(p)) if p.data() => crate::color::InputSpace::Working,
         Some(NodeKind::GenAi(_)) => {
             crate::color::InputSpace::Explicit(crate::color::Colorspace::SRGB)
         }

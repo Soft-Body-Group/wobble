@@ -43,6 +43,16 @@ pub enum Task {
     /// prompt + start frame -> a VIDEO (an mp4 take, played back as a
     /// movie). Offered only by a build that can decode one.
     ImageToVideo,
+    /// image -> its depth, as a grey picture of RAW values (a data take:
+    /// no sRGB transform on the way in). Relative, not metric.
+    Depth,
+    /// image -> its surface normals, RAW (`n * 0.5 + 0.5` in rgb, the
+    /// usual encoding), a data take like Depth.
+    Normals,
+    /// image -> its albedo (the lighting taken out), a picture.
+    Albedo,
+    /// prompt + image -> the image relit as the prompt says.
+    Relight,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -70,6 +80,23 @@ pub enum Dialect {
     /// size must hold at least 655,360 px. Billed by tokens, which fal's
     /// pricing API does not turn into a price, so it quotes as unknown.
     GptImage,
+    /// Microsoft MoGe (2 and 3): geometry from one image. We ask for the
+    /// normals variant, skip the mesh and point-cloud exports (time, and
+    /// files nobody reads), and take `normal_map`. Its `depth_map` is a
+    /// COLOURISED visualisation, so it is never offered as depth.
+    Moge,
+    /// Marigold v2: one endpoint, `prediction_type` picks depth, normals or
+    /// albedo; the result is `image`.
+    Marigold { prediction: &'static str },
+    /// fal's image preprocessors (Depth Anything v2, MiDaS): `image_url`
+    /// only. MiDaS hands back `depth_map` AND `normal_map`.
+    Preprocessor,
+    /// IC-Light v2: `prompt`, `image_url`, `seed`; the light's side goes in
+    /// extra (`initial_latent`: Left/Right/Top/Bottom).
+    IcLight,
+    /// fal's relighting app: `image_url` and a `lighting_style` from a
+    /// fixed list, read off the prompt ("golden hour" -> golden_hour).
+    LightingStyle,
 }
 
 impl Dialect {
@@ -90,7 +117,38 @@ impl Dialect {
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
-        matches!(self, Dialect::Flux | Dialect::Gemini)
+        matches!(self, Dialect::Flux | Dialect::Gemini | Dialect::IcLight)
+    }
+
+    /// The output field holding the picture, when it is not fal's usual
+    /// `images[0]` / `image`.
+    pub fn output_key(self, task: Task) -> Option<&'static str> {
+        match (self, task) {
+            (Dialect::Moge, _) => Some("normal_map"),
+            (Dialect::Preprocessor, Task::Normals) => Some("normal_map"),
+            (Dialect::Preprocessor, Task::Depth) => Some("depth_map"),
+            _ => None,
+        }
+    }
+
+    /// The relighting app's styles; a prompt naming one picks it.
+    pub const LIGHTING_STYLES: [&'static str; 18] = [
+        "natural", "studio", "golden_hour", "blue_hour", "dramatic", "soft", "hard", "backlight",
+        "side_light", "front_light", "rim_light", "sunset", "sunrise", "neon", "candlelight",
+        "moonlight", "spotlight", "ambient",
+    ];
+
+    /// The style a prompt names ("Golden hour, warm" -> golden_hour), else
+    /// natural.
+    pub fn lighting_style(prompt: &str) -> &'static str {
+        let p = prompt.to_ascii_lowercase().replace(['-', '_'], " ");
+        Self::LIGHTING_STYLES
+            .iter()
+            .copied()
+            .filter(|s| p.contains(&s.replace('_', " ")))
+            // "backlight" before "light": the longest name that matches.
+            .max_by_key(|s| s.len())
+            .unwrap_or("natural")
     }
 
     /// Nano Banana's `resolution` class for a megapixel budget.
@@ -359,6 +417,126 @@ pub const CATALOG: &[RemoteModel] = &[
         licence: "OpenAI via fal API terms (commercial use through the API)",
         about: "repaint the white of the matte from a prompt with GPT Image; billed by tokens, so no price up front",
     },
+    RemoteModel {
+        id: "fal/moge-3-normals",
+        label: "MoGe-3 Normals",
+        short: "moge-3",
+        service: Service::Fal,
+        endpoint: "microsoft/moge-3",
+        dialect: Dialect::Moge,
+        task: Task::Normals,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "surface normals from one picture, Microsoft's MoGe-3 (refined); raw n*0.5+0.5, no sRGB",
+    },
+    RemoteModel {
+        id: "fal/moge-2-normals",
+        label: "MoGe-2 Normals",
+        short: "moge-2",
+        service: Service::Fal,
+        endpoint: "microsoft/moge-2",
+        dialect: Dialect::Moge,
+        task: Task::Normals,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "surface normals from one picture, MoGe-2: cheaper than MoGe-3; raw n*0.5+0.5",
+    },
+    RemoteModel {
+        id: "fal/marigold-depth",
+        label: "Marigold Depth",
+        short: "marigold depth",
+        service: Service::Fal,
+        endpoint: "fal-ai/marigold-v2",
+        dialect: Dialect::Marigold { prediction: "depth" },
+        task: Task::Depth,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "relative depth from one picture (Marigold v2), as raw grey; a viewable PNG, 8-bit",
+    },
+    RemoteModel {
+        id: "fal/marigold-normals",
+        label: "Marigold Normals",
+        short: "marigold normals",
+        service: Service::Fal,
+        endpoint: "fal-ai/marigold-v2",
+        dialect: Dialect::Marigold { prediction: "normals" },
+        task: Task::Normals,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "surface normals from one picture (Marigold v2); raw, 8-bit",
+    },
+    RemoteModel {
+        id: "fal/marigold-albedo",
+        label: "Marigold Albedo",
+        short: "marigold albedo",
+        service: Service::Fal,
+        endpoint: "fal-ai/marigold-v2",
+        dialect: Dialect::Marigold { prediction: "albedo" },
+        task: Task::Albedo,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "the picture with its lighting taken out (Marigold v2): a base for relighting",
+    },
+    RemoteModel {
+        id: "fal/depth-anything-v2",
+        label: "Depth Anything v2",
+        short: "depth anything",
+        service: Service::Fal,
+        endpoint: "fal-ai/image-preprocessors/depth-anything/v2",
+        dialect: Dialect::Preprocessor,
+        task: Task::Depth,
+        commercial: false,
+        licence: "Depth Anything V2: Small is Apache-2.0, Base/Large CC-BY-NC-4.0; which fal runs is not stated",
+        about: "relative depth (near is bright) from one picture, raw grey; fal gives no price up front",
+    },
+    RemoteModel {
+        id: "fal/midas-depth",
+        label: "MiDaS Depth",
+        short: "midas depth",
+        service: Service::Fal,
+        endpoint: "fal-ai/image-preprocessors/midas",
+        dialect: Dialect::Preprocessor,
+        task: Task::Depth,
+        commercial: true,
+        licence: "MiDaS: MIT",
+        about: "relative depth (near is bright) from one picture, raw grey; fal gives no price up front",
+    },
+    RemoteModel {
+        id: "fal/midas-normals",
+        label: "MiDaS Normals",
+        short: "midas normals",
+        service: Service::Fal,
+        endpoint: "fal-ai/image-preprocessors/midas",
+        dialect: Dialect::Preprocessor,
+        task: Task::Normals,
+        commercial: true,
+        licence: "MiDaS: MIT",
+        about: "normals derived from MiDaS depth, raw; rougher than MoGe or Marigold; no price up front",
+    },
+    RemoteModel {
+        id: "fal/iclight-v2",
+        label: "IC-Light v2",
+        short: "ic-light",
+        service: Service::Fal,
+        endpoint: "fal-ai/iclight-v2",
+        dialect: Dialect::IcLight,
+        task: Task::Relight,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "relight a picture from a prompt (\"warm sunset light from the left\"); extra {\"initial_latent\": \"Left\"} sets the light's side",
+    },
+    RemoteModel {
+        id: "fal/relighting",
+        label: "Relighting",
+        short: "relighting",
+        service: Service::Fal,
+        endpoint: "fal-ai/image-apps-v2/relighting",
+        dialect: Dialect::LightingStyle,
+        task: Task::Relight,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "relight a picture to a named style: natural, studio, golden hour, blue hour, dramatic, rim light, neon, moonlight…; the prompt picks it",
+    },
 ];
 
 pub fn get(id: &str) -> Option<&'static RemoteModel> {
@@ -379,6 +557,10 @@ impl Task {
             Task::Upscale => "upscale",
             Task::Cutout => "cutout",
             Task::ImageToVideo => "image to video",
+            Task::Depth => "depth",
+            Task::Normals => "normals",
+            Task::Albedo => "albedo",
+            Task::Relight => "relight",
         }
     }
 
@@ -387,13 +569,23 @@ impl Task {
         matches!(self, Task::ImageToVideo)
     }
 
-    pub const ALL: [Task; 6] = [
+    /// Does this task hand back MEASUREMENTS rather than a picture? A data
+    /// take plays back as stored values, with no sRGB transform.
+    pub fn is_data(self) -> bool {
+        matches!(self, Task::Depth | Task::Normals)
+    }
+
+    pub const ALL: [Task; 10] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
         Task::Upscale,
         Task::Cutout,
         Task::ImageToVideo,
+        Task::Depth,
+        Task::Normals,
+        Task::Albedo,
+        Task::Relight,
     ];
 }
 

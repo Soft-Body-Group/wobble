@@ -148,6 +148,16 @@ pub fn poll<T>(cx: &Cx, mut step: impl FnMut() -> Result<Option<T>>) -> Result<T
 /// the URL, and whether the provider's safety filter flagged it (fal hands
 /// back a BLACK image in that case, still billed — worth saying).
 pub fn output_image(out: &Value) -> Option<(String, bool)> {
+    output_image_at(out, None)
+}
+
+/// [`output_image`], or the picture under `key` when a model names its own
+/// field (MoGe's `normal_map`, MiDaS's `depth_map`).
+pub fn output_image_at(out: &Value, key: Option<&str>) -> Option<(String, bool)> {
+    if let Some(k) = key {
+        let url = out.get(k).and_then(|i| i.get("url")).and_then(|u| u.as_str())?.to_string();
+        return Some((url, false));
+    }
     let url = out
         .get("images")
         .and_then(|a| a.get(0))

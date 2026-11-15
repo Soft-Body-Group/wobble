@@ -1882,6 +1882,7 @@ mod tests {
                     usd: Some(0.025),
                     label: "flux dev: a moth on a lamp at night, rain".into(),
                     when: 0,
+                    data: false,
                 });
             }
             let quote = Ok(Quote {
@@ -1939,6 +1940,7 @@ mod tests {
                 usd: Some(0.025),
                 label: "flux dev: a moth on a lamp".into(),
                 when: 0,
+                data: false,
             });
         }
         let quote = Ok(Quote {

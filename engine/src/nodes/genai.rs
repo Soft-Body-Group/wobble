@@ -86,11 +86,18 @@ impl GenAiParams {
     /// Topology: only whether a take is loaded changes the shader. Which
     /// take, the pipeline, the prompts — none of it is code.
     pub fn topo_tag(&self) -> u64 {
-        if self.loaded {
-            1
-        } else {
-            0
+        match (self.loaded, self.data()) {
+            (false, _) => 0,
+            (true, false) => 1,
+            // Raw values skip the sRGB transform: different code.
+            (true, true) => 2,
         }
+    }
+
+    /// The take on screen holds MEASUREMENTS (depth, normals): it plays
+    /// back as stored, with no sRGB input transform.
+    pub fn data(&self) -> bool {
+        self.pipeline.picked().is_some_and(|t| t.data)
     }
 
     /// Rule 10, per instance. Tagged when the picture on screen was made by
@@ -156,6 +163,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_data_take_is_its_own_code_and_skips_the_srgb_transform() {
+        let mut p = GenAiParams::new(0);
+        p.pipeline.takes.push(genai::Take {
+            key: "k".into(),
+            file: "result.png".into(),
+            tick: 0,
+            commercial: true,
+            usd: None,
+            label: String::new(),
+            when: 0,
+            data: true,
+        });
+        p.pipeline.take = 0;
+        p.loaded = true;
+        assert!(p.data());
+        let still = GenAiParams { pipeline: genai::Pipeline::default(), ..p.clone() };
+        assert_ne!(p.topo_tag(), still.topo_tag(), "raw values are different code");
+    }
+
+    #[test]
     fn only_loading_a_take_changes_the_topology() {
         let mut a = GenAiParams::new(3);
         let b = a.clone();
@@ -179,6 +206,7 @@ mod tests {
             usd: None,
             label: String::new(),
             when: 0,
+            data: false,
         });
         p.pipeline.take = 0;
         // The pipeline itself is all-commercial now; the pixels on screen
@@ -198,6 +226,7 @@ mod tests {
             usd: None,
             label: String::new(),
             when: 0,
+            data: false,
         };
         p.pipeline.takes = vec![take("result.png"), take("result.mp4")];
         p.pipeline.take = 0;

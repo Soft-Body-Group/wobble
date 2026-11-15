@@ -185,7 +185,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 let out_mp = match m.task {
                     Task::TextToImage => size.0 as f64 * size.1 as f64 / 1e6,
                     Task::Upscale => in_mp(0).unwrap_or(comp_mp) * (opts.scale as f64).powi(2),
-                    Task::Cutout => in_mp(0).unwrap_or(comp_mp),
+                    Task::Cutout | Task::Depth | Task::Normals | Task::Albedo => in_mp(0).unwrap_or(comp_mp),
+                    Task::Relight => in_mp(1).unwrap_or(comp_mp),
                     Task::Edit | Task::Inpaint => in_mp(1).unwrap_or(comp_mp),
                     Task::ImageToVideo => {
                         let (w, h) = video_size(m, opts, inputs.comp);
@@ -289,8 +290,26 @@ pub fn request(
             .map(Value::String)
             .ok_or_else(|| anyhow!("{} needs an image", m.label))
     };
+    let style = Dialect::lighting_style(prompt.unwrap_or(""));
     let prompt = || json!(prompt.unwrap_or(""));
     let mut v = match (m.task, m.dialect) {
+        // Geometry and relighting: their own field names, no size.
+        (_, Dialect::Moge) => json!({
+            "image_url": img(0)?,
+            // The mesh and point cloud cost time and nobody reads them.
+            "export_glb": false, "export_ply": false,
+        }),
+        (_, Dialect::Marigold { prediction }) => json!({
+            "image_url": img(0)?, "prediction_type": prediction,
+        }),
+        (_, Dialect::Preprocessor) => json!({ "image_url": img(0)? }),
+        (_, Dialect::IcLight) => json!({
+            "prompt": prompt(), "image_url": img(1)?, "seed": seed, "num_images": 1,
+        }),
+        (_, Dialect::LightingStyle) => json!({
+            "image_url": img(1)?,
+            "lighting_style": style,
+        }),
         (Task::ImageToVideo, _) => {
             let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
             json!({
@@ -355,6 +374,10 @@ pub fn request(
         (Task::Cutout, _) => json!({
             "image_url": img(0)?, "output_format": "png", "refine_foreground": true,
         }),
+        // A future depth / normals / albedo / relight model in FLUX's field
+        // names.
+        (Task::Depth | Task::Normals | Task::Albedo, _) => json!({ "image_url": img(0)?, "seed": seed }),
+        (Task::Relight, _) => json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed }),
     };
     if !m.dialect.sends_seed() {
         // No seed in the schema: the authored seed still keys the cache.
@@ -632,7 +655,7 @@ fn execute(
                             .ok_or_else(|| anyhow!("{} returned no video", m.label))?;
                         (url, false)
                     } else {
-                        service::output_image(&ran.output)
+                        service::output_image_at(&ran.output, m.dialect.output_key(m.task))
                             .ok_or_else(|| anyhow!("{} returned no image", m.label))?
                     };
                     let _ = tx.send(Event::Step(i, StepState::Fetching));
@@ -746,7 +769,12 @@ fn execute(
     if let Some(t) = prompt {
         label = format!("{label}: {t}");
     }
-    Ok(Take { key, file, tick: inputs.tick, commercial: plan.commercial, usd: charged, label, when: now() })
+    // A depth or normals model feeding Output makes a data take.
+    let data = p.steps[plan.target].inputs.first().copied().flatten().is_some_and(|i| {
+        matches!(&p.steps[i].op, Op::Generate { model, .. }
+            if catalog::get(model).is_some_and(|m| m.task.is_data()))
+    });
+    Ok(Take { key, file, tick: inputs.tick, commercial: plan.commercial, usd: charged, label, when: now(), data })
 }
 
 fn meta0() -> Meta {
@@ -799,6 +827,33 @@ mod tests {
         assert_eq!(e["image_urls"], json!(["data:x"]));
         assert_eq!(e["aspect_ratio"], "auto");
         assert!(e.get("image_url").is_none());
+    }
+
+    #[test]
+    fn geometry_and_relight_models_ask_in_their_own_words() {
+        let o = Opts::default();
+        let img = Some("data:x".to_string());
+        let g = request(m("fal/moge-3-normals"), &o, 7, (2048, 1080), None, &[img.clone()]).unwrap();
+        assert_eq!(g["image_url"], "data:x");
+        assert_eq!((g["export_glb"].as_bool(), g["export_ply"].as_bool()), (Some(false), Some(false)));
+        assert!(g.get("seed").is_none() && g.get("image_size").is_none(), "{g}");
+        let mg = request(m("fal/marigold-albedo"), &o, 7, (2048, 1080), None, &[img.clone()]).unwrap();
+        assert_eq!(mg["prediction_type"], "albedo");
+        let d = request(m("fal/midas-depth"), &o, 7, (2048, 1080), None, &[img.clone()]).unwrap();
+        assert_eq!(d, json!({"image_url": "data:x"}));
+        let ic = request(m("fal/iclight-v2"), &o, 7, (2048, 1080), Some("rim light"), &[None, img.clone()]).unwrap();
+        assert_eq!((ic["prompt"].as_str(), ic["image_url"].as_str(), ic["seed"].as_u64()), (Some("rim light"), Some("data:x"), Some(7)));
+        let r = request(m("fal/relighting"), &o, 7, (2048, 1080), Some("Golden-hour, warm"), &[None, img]).unwrap();
+        assert_eq!(r, json!({"image_url": "data:x", "lighting_style": "golden_hour"}));
+        assert_eq!(Dialect::lighting_style("backlight please"), "backlight");
+        assert_eq!(Dialect::lighting_style("whatever"), "natural");
+        // Which field holds the picture.
+        let out = json!({"depth_map": {"url": "d"}, "normal_map": {"url": "n"}});
+        let key = |id: &str| m(id).dialect.output_key(m(id).task);
+        assert_eq!(service::output_image_at(&out, key("fal/midas-normals")).unwrap().0, "n");
+        assert_eq!(service::output_image_at(&out, key("fal/midas-depth")).unwrap().0, "d");
+        assert_eq!(service::output_image_at(&out, key("fal/moge-2-normals")).unwrap().0, "n");
+        assert!(m("fal/marigold-normals").task.is_data() && !m("fal/marigold-albedo").task.is_data());
     }
 
     #[test]

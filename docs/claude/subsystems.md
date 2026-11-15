@@ -1329,6 +1329,12 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `genai_runnable` (the run's copy, and what staleness compares) — never
   written back. `genai_unrun_upstream` refuses a capture through a GenAI
   node with no take (it would pass the plate through and bill for that).
+- **Depth and normals are DATA takes.** `Task::is_data()` (Depth,
+  Normals) → `Take::data` at run time → `GenAiParams::data()` →
+  `idt_fn` reads it as `Working` (no transform) and `topo_tag` changes.
+  A model whose picture is not `images[0]`/`image` names its field in
+  `Dialect::output_key` (MoGe `normal_map`, MiDaS `depth_map`/`normal_map`).
+  MoGe's `depth_map` is a colourised visualisation: never offer it as depth.
 
 - **Nothing runs or bills without a click, and the quote comes first.**
   `run…` = capture + `run::plan` + `run::quote`, all free; only "pay & run"

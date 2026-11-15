@@ -3491,6 +3491,18 @@ own click; a node whose upstream model has no take yet refuses to run
 rather than send the raw plate in its place. Billing, caching and takes
 are as below.
 
+**Geometry and relighting from one picture.** *MoGe-3 / MoGe-2 Normals*,
+*Marigold Depth / Normals / Albedo*, *Depth Anything v2*, *MiDaS Depth /
+Normals* take the node's image and hand back depth or normals as RAW
+values: grey for depth (relative, near is bright, 8-bit), `n * 0.5 + 0.5`
+in rgb for normals. Those takes skip the sRGB input transform, so the
+numbers are what the model wrote, ready for a Refract or a relight.
+*Marigold Albedo* is a picture (the lighting taken out). *IC-Light v2*
+relights from a prompt (extra `{"initial_latent": "Left"}` picks the
+light's side); *Relighting* relights to a named style the prompt picks
+(natural, studio, golden hour, rim light, neon…). Depth Anything v2 and
+MiDaS have no price from fal before the run.
+
 A **GenAI Pipeline** node is the free-form version: a small generative
 pipeline — a prompt,
 the node's own input as a reference, one or more model calls, an Output —

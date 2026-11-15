@@ -512,6 +512,7 @@ mod tests {
             usd: None,
             label: String::new(),
             when: 0,
+            data: false,
         });
         assert_eq!(licence_of(&NodeKind::GenAi(p.clone())), Licence::NonCommercial);
         // And it is fast: a reader like any other, whatever it cost to make.

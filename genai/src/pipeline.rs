@@ -240,8 +240,10 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
         Task::Inpaint => {
             vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
         }
-        Task::Upscale | Task::Cutout => vec![(Pipe::Image, "image")],
-        Task::ImageToVideo => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
+        Task::Upscale | Task::Cutout | Task::Depth | Task::Normals | Task::Albedo => {
+            vec![(Pipe::Image, "image")]
+        }
+        Task::ImageToVideo | Task::Relight => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
     }
 }
 
@@ -268,6 +270,10 @@ pub struct Take {
     /// Unix seconds.
     #[serde(default)]
     pub when: u64,
+    /// MEASUREMENTS, not a picture (a depth or normals model made it): the
+    /// node plays the file back as stored values, with no sRGB transform.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub data: bool,
 }
 
 impl Take {
@@ -677,6 +683,7 @@ mod tests {
             usd: None,
             label: String::new(),
             when: 0,
+            data: false,
         };
         assert!(t("result.mp4").is_video());
         assert!(!t("result.png").is_video());
