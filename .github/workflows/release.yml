@@ -93,9 +93,8 @@ jobs:
           WOBBLE_MSYS: ${{ steps.msys.outputs.msys2-location }}
           # bindgen's libclang: the runner image ships LLVM.
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-        run: powershell -File tools\release_public_win.ps1
-        env:
           WOBBLE_INGEST_KEY: ${{ secrets.WOBBLE_INGEST_KEY }}
+        run: powershell -File tools\release_public_win.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: public-windows-x86_64
