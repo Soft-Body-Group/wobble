@@ -180,6 +180,7 @@ pub fn tiles_for(kind: &NodeKind) -> usize {
         NodeKind::Gradient(_) => crate::nodes::gradient::TILES,
         NodeKind::Grain(_) => crate::nodes::grain::TILES,
         NodeKind::Starfield(_) => crate::nodes::starfield::TILES,
+        NodeKind::Splat(_) => crate::nodes::splat::TILES,
         NodeKind::Planet(_) => crate::nodes::planet::TILES,
         NodeKind::Plasma(_) => crate::nodes::plasma::TILES,
         NodeKind::Particles(_) | NodeKind::ParticleNode(_) => crate::nodes::particles::TILES,

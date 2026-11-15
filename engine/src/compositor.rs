@@ -308,6 +308,11 @@ pub struct Compositor {
     /// additively, re-drawn only when its uniform changes.
     plasma_raster: crate::plasmagpu::PlasmaRaster,
     plasma_layers: HashMap<crate::graph::NodeId, crate::plasmagpu::PlasmaLayer>,
+    /// A Splat node's layer (`splatgpu`): its capture projected, sorted
+    /// and drawn, re-drawn only when its uniform or cloud changes, and
+    /// only while the plan samples it.
+    splat_raster: crate::splatgpu::SplatRaster,
+    splat_layers: HashMap<crate::graph::NodeId, crate::splatgpu::SplatLayer>,
     /// A Particles node's simulation and layer (`particlegpu`).
     particle_raster: crate::particlegpu::ParticleRaster,
     particle_layers: HashMap<crate::graph::NodeId, crate::particlegpu::ParticleLayer>,
@@ -650,6 +655,10 @@ impl Compositor {
         let geo_raster = crate::georaster::GeoRaster::new(&device);
         let text_raster = crate::textgpu::TextRaster::new(&device);
         let plasma_raster = crate::plasmagpu::PlasmaRaster::new(&device);
+        let splat_raster = crate::splatgpu::SplatRaster::new(&device);
+        crate::splat::set_gpu_budget(
+            (device.limits().max_storage_buffer_binding_size as u64).min(device.limits().max_buffer_size),
+        );
         let particle_raster = crate::particlegpu::ParticleRaster::new(&device);
         let geo_lit = crate::geolight::GeoLit::new(&device);
         // Every built-in stage's pass modules, compiled once here rather
@@ -698,6 +707,8 @@ impl Compositor {
             text_layers: HashMap::new(),
             plasma_raster,
             plasma_layers: HashMap::new(),
+            splat_raster,
+            splat_layers: HashMap::new(),
             particle_raster,
             particle_layers: HashMap::new(),
             geo_lit,
@@ -1522,6 +1533,51 @@ impl Compositor {
         }
     }
 
+    /// Keep one layer per Splat node at the node's format, its cloud on
+    /// the GPU and its uniform current; the encode draws it when dirty.
+    fn update_splat_layers(&mut self, graph: &Graph) {
+        let mut live = std::collections::HashSet::new();
+        for (id, kind) in &graph.nodes {
+            let NodeKind::Splat(p) = kind else { continue };
+            if p.depth_of.is_some() {
+                continue;
+            }
+            let Some((w, h)) = graph.format_of(*id).or_else(|| self.output_size()) else { continue };
+            let (w, h) = (w.max(1), h.max(1));
+            live.insert(*id);
+            if self.splat_layers.get(id).is_none_or(|l| l.width != w || l.height != h) {
+                self.splat_layers.insert(*id, self.splat_raster.make_layer(&self.device, w, h));
+                self.frame_bgs = None;
+            }
+            let layer = self.splat_layers.get_mut(id).unwrap();
+            let cloud = match crate::splat::peek(&p.path) {
+                Some((crate::splat::State::Ready(c), gen)) => Some((c, gen)),
+                _ => None,
+            };
+            let uni = cloud.as_ref().map(|(c, _)| p.uniform(c, w, h)).unwrap_or([0; crate::splatgpu::UNIFORM_BYTES]);
+            self.splat_raster.set(
+                &self.device,
+                &self.queue,
+                layer,
+                cloud.as_ref().map(|(c, g)| (&**c, *g)),
+                &uni,
+                p.depth_used,
+            );
+        }
+        let before = self.splat_layers.len();
+        self.splat_layers.retain(|id, _| live.contains(id));
+        if self.splat_layers.len() != before {
+            self.frame_bgs = None;
+        }
+    }
+
+    /// A Splat node's layer, for tests: (dirty, times drawn, splats on the
+    /// GPU).
+    #[doc(hidden)]
+    pub fn splat_layer_state(&self, id: crate::graph::NodeId) -> Option<(bool, u64, u32)> {
+        self.splat_layers.get(&id).map(|l| (l.dirty, l.draws, l.splats()))
+    }
+
     /// Keep one simulation + layer per Particles node at the node's format,
     /// and hand it the frame; the encode steps it there.
     fn update_particle_layers(&mut self, graph: &Graph) {
@@ -2022,6 +2078,7 @@ impl Compositor {
         self.update_text_tables(graph);
         self.update_text_layers(graph);
         self.update_plasma_layers(graph);
+        self.update_splat_layers(graph);
         self.update_particle_layers(graph);
         self.update_blender_layers(graph);
         let Some(compiled) = self.current.and_then(|h| self.pipelines.get(&h)) else {
@@ -2331,6 +2388,11 @@ impl Compositor {
                 .or_else(|| self.text_tables.get(n).map(|t| &t.view))
                 .unwrap_or(&self.dummy.view),
             SourceBinding::Plasma(n) => self.plasma_layers.get(n).map(|l| &l.view).unwrap_or(&self.dummy.view),
+            SourceBinding::Splat(n, depth) => self
+                .splat_layers
+                .get(n)
+                .map(|l| if *depth { &l.depth_view } else { &l.view })
+                .unwrap_or(&self.dummy.view),
             SourceBinding::Particles(n) => {
                 self.particle_layers.get(n).map(|l| &l.view).unwrap_or(&self.dummy.view)
             }
@@ -2633,6 +2695,28 @@ impl Compositor {
         for id in dirty_plasma {
             let layer = self.plasma_layers.get_mut(&id).unwrap();
             self.plasma_raster.encode(encoder, layer);
+        }
+        // Splat layers whose view moved — only those this plan samples: a
+        // capture of millions is not drawn for a node nobody is looking at.
+        if !self.splat_layers.is_empty() {
+            let plan = &self.pipelines[&hash].plan;
+            let used: std::collections::HashSet<crate::graph::NodeId> = plan
+                .main
+                .sources
+                .iter()
+                .chain(plan.blurs.iter().flat_map(|(_, _, s, aux)| {
+                    s.sources.iter().chain(aux.iter().flat_map(|a| a.sources.iter()))
+                }))
+                .filter_map(|b| match b {
+                    SourceBinding::Splat(n, _) => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            for (id, layer) in self.splat_layers.iter_mut() {
+                if layer.dirty && used.contains(id) {
+                    self.splat_raster.encode(encoder, layer);
+                }
+            }
         }
         // Particle layers whose frame or look moved: step, then draw.
         let dirty_particles: Vec<crate::graph::NodeId> =

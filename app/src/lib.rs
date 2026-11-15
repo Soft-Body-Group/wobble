@@ -11525,6 +11525,7 @@ impl Gfx {
             }
             NodeKind::Blank(b) if !b.inherit => Some(b.size),
             NodeKind::Starfield(s) if !s.inherit => Some(s.size),
+            NodeKind::Splat(s) if !s.inherit => Some(s.size),
             NodeKind::Planet(s) if !s.inherit => Some(s.size),
             NodeKind::Plasma(s) if !s.inherit => Some(s.size),
             NodeKind::Particles(s) if !s.inherit => Some(s.size),
@@ -17973,6 +17974,10 @@ impl Gfx {
         }
         if self.blender_pad_idle() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        // A splat capture loading in the background lands on a redraw.
+        if engine::splat::any_loading() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.image_rect = rect;
         // Pixel readout follows the pointer, in COMP pixels. Cleared when the
@@ -24928,6 +24933,11 @@ impl Gfx {
                     }
                     NodeKind::Plasma(s) => {
                         if let Some(h) = nodes::plasma::panel(ui, &mut rcx, s, &tab, working, ungang) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::Splat(s) => {
+                        if let Some(h) = nodes::splat::panel(ui, &mut rcx, s, wired[0]) {
                             hud_drag_out = Some(h);
                         }
                     }

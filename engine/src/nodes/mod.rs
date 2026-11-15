@@ -10,6 +10,7 @@ pub mod blank;
 pub mod starfield;
 pub mod planet;
 pub mod plasma;
+pub mod splat;
 pub mod particles;
 pub mod bokehkernel;
 pub mod glintkernel;

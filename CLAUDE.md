@@ -318,6 +318,7 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - 2dini fluid (`engine/src/geofluid.rs`, `app/src/geofluidui.rs`)
 - Text node (`engine/src/textfx.rs`, `engine/src/textgpu.rs`, `engine/src/nodes/text.rs`, `app/src/nodes/text.rs`)
 - Plasma node (`engine/src/nodes/plasma.rs`, `engine/src/plasmagpu.rs`, `app/src/nodes/plasma.rs`)
+- Splat node (`engine/src/splat.rs`, `engine/src/splatgpu.rs`, `engine/src/nodes/splat.rs`, `app/src/nodes/splat.rs`)
 - Particles node (`engine/src/nodes/particles.rs`, `engine/src/particlegpu.rs`, `app/src/nodes/particles.rs`)
 - LUT node (`engine/src/lut.rs`, `engine/src/nodes/lut.rs`, `app/src/nodes/lut.rs`)
 - Refract node (`engine/src/nodes/refract.rs`, `app/src/nodes/refract.rs`)

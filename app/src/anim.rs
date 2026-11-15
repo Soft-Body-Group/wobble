@@ -2144,6 +2144,10 @@ pub fn channels_for(kind: &NodeKind) -> Vec<Channel> {
     if let NodeKind::Planet(_) = kind {
         v.extend(crate::nodes::planet::dyn_channels());
     }
+    // A Splat's numbers, as `splat.<name>` (`nodes::splat`).
+    if let NodeKind::Splat(_) = kind {
+        v.extend(crate::nodes::splat::dyn_channels());
+    }
     // A Starfield's numbers, as `star.<name>` (`nodes::starfield`).
     if let NodeKind::Starfield(_) = kind {
         v.extend(crate::nodes::starfield::dyn_channels());
@@ -2425,6 +2429,7 @@ pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
         (NodeKind::Env(p), _) => return crate::nodes::env::get(p, ch),
         (NodeKind::Refract(p), _) => return crate::nodes::refract::get(p, ch),
         (NodeKind::Starfield(p), _) => return crate::nodes::starfield::get(p, ch),
+        (NodeKind::Splat(p), _) => return crate::nodes::splat::get(p, ch),
         (NodeKind::Planet(p), _) => return crate::nodes::planet::get(p, ch),
         (NodeKind::Plasma(p), _) => return crate::nodes::plasma::get(p, ch),
         (NodeKind::Particles(p), _) => return crate::nodes::particles::get(p, ch),
@@ -2712,6 +2717,7 @@ pub fn set(kind: &mut NodeKind, ch: Channel, v: f32) {
         (NodeKind::Env(p), _) => crate::nodes::env::set(p, ch, v),
         (NodeKind::Refract(p), _) => crate::nodes::refract::set(p, ch, v),
         (NodeKind::Starfield(p), _) => crate::nodes::starfield::set(p, ch, v),
+        (NodeKind::Splat(p), _) => crate::nodes::splat::set(p, ch, v),
         (NodeKind::Planet(p), _) => crate::nodes::planet::set(p, ch, v),
         (NodeKind::Plasma(p), _) => crate::nodes::plasma::set(p, ch, v),
         (NodeKind::Particles(p), _) => crate::nodes::particles::set(p, ch, v),

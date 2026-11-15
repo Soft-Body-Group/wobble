@@ -61,6 +61,7 @@ pub use crate::nodes::blank::BlankParams;
 pub use crate::nodes::starfield::{StarCam, StarDist, StarfieldParams};
 pub use crate::nodes::planet::{PlanetMode, PlanetNoise, PlanetParams};
 pub use crate::nodes::plasma::PlasmaParams;
+pub use crate::nodes::splat::SplatParams;
 pub use crate::nodes::particles::{ParticlesParams, PNode};
 pub use crate::nodes::bokehkernel::BokehKernelParams;
 pub use crate::nodes::glintkernel::GlintKernelParams;
@@ -380,6 +381,9 @@ pub enum NodeKind {
     /// GPU particles flowing along magnetic loops and streamers off a
     /// star: a corona. See [`crate::nodes::plasma`].
     Plasma(PlasmaParams),
+    /// A 3D Gaussian splat capture (.ply / .spz) seen through a camera:
+    /// the picture, then its depth. See [`crate::nodes::splat`].
+    Splat(SplatParams),
     /// A general 2D particle system simulated on the GPU: it owns a
     /// sub-graph of [`PNode`]s (emitters, forces, renders). See
     /// [`crate::nodes::particles`].
@@ -5912,6 +5916,7 @@ impl NodeKind {
             NodeKind::Starfield(_) => StarfieldParams::INPUTS,
             NodeKind::Planet(_) => PlanetParams::INPUTS,
             NodeKind::Plasma(_) => PlasmaParams::INPUTS,
+            NodeKind::Splat(_) => SplatParams::INPUTS,
             NodeKind::Particles(_) => ParticlesParams::INPUTS,
             NodeKind::ParticleNode(n) => n.inputs().len(),
             NodeKind::GenAiStep(op) => op.ports().len(),
@@ -6365,6 +6370,8 @@ impl NodeKind {
             NodeKind::Extract(p) => p.pairs(),
             // The picture, then its depth (lowered by `scene3d::expand`).
             NodeKind::Render3D(p) if p.lowered.is_none() => 2,
+            // The same for a Splat (lowered by `nodes::splat::lower`).
+            NodeKind::Splat(p) if p.depth_of.is_none() => 2,
             _ => 1,
         }
     }
@@ -6532,6 +6539,8 @@ impl NodeKind {
                 _ => s("the prompt, off a String node"),
             },
             NodeKind::Card3D(_) => s("the picture on the card"),
+            NodeKind::Splat(_) => s("the Camera to look through (a CameraTrack's, a file's, Blender's); \
+                                    unwired, the default Camera"),
             NodeKind::Starfield(_) => s("a Camera to look through (a CameraTrack's, a file's, Blender's): \
                                         its rotation and lens drive the sky; unwired, the node's own"),
             NodeKind::Scene3D(_) => s("a Camera, a Card or another Scene, gathered \
@@ -6805,6 +6814,7 @@ impl NodeKind {
                 if input == crate::nodes::render3d::CAMERA_PORT { "camera" } else { "scene" }
             }
             NodeKind::Starfield(_) => "camera",
+            NodeKind::Splat(_) => "camera",
             NodeKind::Godrays(_) if input == crate::nodes::godrays::SOURCE_INPUT => "source",
             NodeKind::EdgeExtend(_) if input == crate::nodes::edgeextend::MATTE_INPUT => {
                 "edge matte"
@@ -6954,6 +6964,8 @@ impl NodeKind {
             NodeKind::Refract(_) if input == crate::nodes::refract::CAMERA_INPUT => return PortKind::Scene,
             // A Starfield's camera (lowered away before codegen).
             NodeKind::Starfield(_) => return PortKind::Scene,
+            // A Splat's camera, the same.
+            NodeKind::Splat(_) => return PortKind::Scene,
             _ => {}
         }
         // A GenAI's port 2 takes a prompt off a Prompt node.
@@ -7074,6 +7086,9 @@ impl NodeKind {
         // A scalar pass (Z, AO, shadow) rides the data pipe; output 0 is
         // the fat cable when the node offers one.
         if matches!(self, NodeKind::Render3D(p) if p.lowered.is_none()) && slot == 1 {
+            return PortKind::Data;
+        }
+        if matches!(self, NodeKind::Splat(p) if p.depth_of.is_none()) && slot == 1 {
             return PortKind::Data;
         }
         if let NodeKind::Blender(p) = self {
@@ -7256,6 +7271,7 @@ impl NodeKind {
             NodeKind::Starfield(_) => StarfieldParams::NAME,
             NodeKind::Planet(_) => PlanetParams::NAME,
             NodeKind::Plasma(_) => PlasmaParams::NAME,
+            NodeKind::Splat(_) => SplatParams::NAME,
             NodeKind::Particles(_) => ParticlesParams::NAME,
             NodeKind::ParticleNode(n) => n.name(),
             NodeKind::GenAiStep(op) => op.name(),
@@ -7484,6 +7500,7 @@ impl NodeKind {
             NodeKind::Starfield(p) => p.topo_tag(),
             NodeKind::Planet(p) => p.topo_tag(),
             NodeKind::Plasma(p) => p.topo_tag(),
+            NodeKind::Splat(p) => p.topo_tag(),
             NodeKind::Particles(p) => p.topo_tag(),
             // A particle node never reaches a comp graph's topology.
             NodeKind::ParticleNode(n) => 0x9A00 ^ n.topo_tag(),

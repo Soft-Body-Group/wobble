@@ -137,6 +137,10 @@ pub fn speed_of(kind: &NodeKind) -> Speed {
         // the work. It is also exactly what the node's own bake takes
         // away, so it glows until the matte is on disk (`clears_slow`).
         NodeKind::Cryptomatte(_) => Speed::Heavy,
+        // A Splat projects, depth-sorts and draws its whole capture in
+        // passes of its own whenever the camera moves: millions of splats,
+        // not a fused expression. A Bake below it clears the red.
+        NodeKind::Splat(_) => Speed::Slow,
         // A Blender node's cost is a PROCESS: every frame is a round trip
         // to Blender — a viewport draw and a copy back (slow), or a real
         // render, seconds a frame in Cycles (heavy). No pass of ours, so
@@ -329,6 +333,7 @@ mod tests {
             NodeKind::Starfield(Default::default()),
             NodeKind::Planet(Default::default()),
             NodeKind::Plasma(Default::default()),
+            NodeKind::Splat(Default::default()),
             NodeKind::Particles(Default::default()),
             NodeKind::ParticleNode(Default::default()),
             NodeKind::GlintKernel(Default::default()),
@@ -366,10 +371,13 @@ mod tests {
     /// which is the one thing the stage rule cannot see. Deliberately
     /// short, and listed here rather than waved through: every other node
     /// earns its colour from `stage_def`, and an addition to this list is
-    /// a claim somebody has to justify. Two entries: a Cryptomatte's rank
-    /// decodes, and a Blender node's round trip to another process.
+    /// a claim somebody has to justify. Three entries: a Cryptomatte's rank
+    /// decodes, a Blender node's round trip to another process, and a
+    /// Splat's layer — drawn outside the stages like a Plasma's, but a
+    /// projection, a depth sort and a draw of the whole capture (millions
+    /// of splats, tens of milliseconds) every time the camera moves.
     fn decode_cost(kind: &NodeKind) -> bool {
-        matches!(kind, NodeKind::Cryptomatte(_) | NodeKind::Blender(_))
+        matches!(kind, NodeKind::Cryptomatte(_) | NodeKind::Blender(_) | NodeKind::Splat(_))
     }
 
     /// THE invariant: "slow" means "codegen gives it a stage" — or, for the

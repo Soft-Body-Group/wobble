@@ -1530,6 +1530,9 @@ impl EditorGraph {
         engine::nodes::refract::lower(&mut g);
         // A Starfield's camera becomes its uniforms, the wire dropped.
         engine::nodes::starfield::lower(&mut g);
+        // A Splat's camera lands on the node, the wire dropped; its depth
+        // output becomes a node of its own where it is used.
+        engine::nodes::splat::lower(&mut g);
         lower_crop_bakes(&mut g);
         g
     }

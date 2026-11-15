@@ -31,6 +31,7 @@ pub enum Icon {
     Gradient,
     Blank,
     Starfield,
+    Splat,
     Planet,
     Plasma,
     Particles,
@@ -165,6 +166,7 @@ pub const NODES: &[Node] = &[
     n(Icon::Gradient, "Gradient", Slot::node_gradient),
     n(Icon::Blank, "Blank", Slot::node_blank),
     n(Icon::Starfield, "Starfield", Slot::node_starfield),
+    n(Icon::Splat, "Splat", Slot::node_splat),
     n(Icon::Planet, "Planet", Slot::node_planet),
     n(Icon::Plasma, "Plasma", Slot::node_plasma),
     n(Icon::Particles, "Particles", Slot::node_particles),
@@ -822,6 +824,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         Icon::Gradient => gradient(painter, sp, r, fill, stroke),
         Icon::Blank => blank(painter, sp, r, fill, stroke),
         Icon::Starfield => starfield(painter, sp, r, fill, stroke),
+        Icon::Splat => splat(painter, sp, r, fill, stroke),
         Icon::Planet => planet(painter, sp, r, fill, stroke),
         Icon::Plasma => plasma(painter, sp, r, fill, stroke),
         Icon::Particles => particles(painter, sp, r, fill, stroke),
@@ -1709,6 +1712,24 @@ fn starfield(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) 
     painter.circle_filled(Pos2::new(c.x + r * 0.45, c.y - r * 0.4), r * 0.09, fill);
     painter.circle_filled(Pos2::new(c.x + r * 0.35, c.y + r * 0.5), r * 0.07, fill);
     painter.circle_filled(Pos2::new(c.x - r * 0.5, c.y - r * 0.45), r * 0.06, fill);
+}
+
+/// `app/src/nodes/splat.rs` `glyph`.
+fn splat(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let ellipse = |ctr: Pos2, rx: f32, ry: f32, tilt: f32, col: Color32| {
+        let (s, co) = tilt.sin_cos();
+        let pts: Vec<Pos2> = (0..20)
+            .map(|i| {
+                let a = i as f32 / 20.0 * std::f32::consts::TAU;
+                let (x, y) = (a.cos() * rx, a.sin() * ry);
+                Pos2::new(ctr.x + x * co - y * s, ctr.y + x * s + y * co)
+            })
+            .collect();
+        painter.add(egui::Shape::convex_polygon(pts, col, stroke));
+    };
+    ellipse(Pos2::new(c.x - r * 0.3, c.y + r * 0.25), r * 0.5, r * 0.32, 0.5, fill.gamma_multiply(0.55));
+    ellipse(Pos2::new(c.x + r * 0.3, c.y + r * 0.1), r * 0.42, r * 0.42, 0.0, fill.gamma_multiply(0.75));
+    ellipse(Pos2::new(c.x, c.y - r * 0.3), r * 0.55, r * 0.26, -0.4, fill);
 }
 
 /// `app/src/nodes/plasma.rs` `glyph`.

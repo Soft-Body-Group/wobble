@@ -773,6 +773,57 @@ path. README has the user story. What must stay true:
   `GeoNode::is_geometry`, never `!is_scalar` (a dangling String must not
   become the drawing).
 
+## Splat node (`engine/src/splat.rs`, `engine/src/splatgpu.rs`, `engine/src/nodes/splat.rs`, `app/src/nodes/splat.rs`)
+
+A 3D Gaussian splat capture (`.ply`, `.spz` v1–3) drawn through a Camera:
+the picture, and its depth on output 2. No training. README has the user
+story. What must stay true:
+
+- **The capture is a LAYER, never topology** (the Plasma / Text
+  precedent): `splatgpu` draws into a per-node texture, the fused pass
+  samples it (`SourceBinding::Splat(host, depth)`). Camera, placement,
+  opacity are the layer's 128-byte uniform; `topo_tag` only tells the
+  picture from the depth copy.
+- **Everything per frame is on the GPU and nothing reads back**: project
+  (cull, EWA covariance, SH for the view, atomic append), an LSD radix
+  sort on 24-bit log-depth keys (6 passes of 4 bits; per-block counts, one
+  scan, a stable scatter that sorts each 512-block in workgroup memory —
+  kept under 8 KiB, see the Apple cliff), then instanced quads nearest
+  first, blended UNDER (`1 - dst.a`). Dispatch and draw counts are
+  indirect. One compute pass, one render pass.
+- **Drawn only when dirty AND sampled.** The layer's hash is its uniform +
+  cloud generation + whether depth is wanted; the encode skips layers the
+  current plan does not bind. A still camera costs nothing
+  (`a_still_camera_draws_once`).
+- **The camera is lowered, like a Starfield's** (`nodes::splat::lower`,
+  after sources, next to `scene3d::expand`): the Camera3D lands in the
+  transient `cam`, the wire goes. Unwired = the default Camera. The same
+  pass stamps `gen` (the cloud's load generation), so a capture that
+  finishes loading CHANGES the graph and the viewer redraws.
+- **Depth is a second lowered node** (Render3D's pattern, `depth_of` +
+  `format_alias`) reading the host layer's depth target, which is only
+  drawn while `depth_used`. Weighted distance where coverage ≥ 0.5, the
+  far clip elsewhere.
+- **The cloud keeps the file's frame.** A `.ply` is right-down-forward, an
+  `.spz` right-up-back (ours); the model matrix converts (`convert`), so SH
+  is evaluated in the file's frame with the camera taken INTO it. Do not
+  rewrite positions at load without rotating the SH.
+- **Colours are blended as trained (display sRGB), then decoded** to
+  scene-linear working primaries in the fused pass (`splat_px`); `linear`
+  skips the decode.
+- **Loading is off the UI thread, cached on path + mtime**
+  (`splat::request`); never refuse a big one: `splat::pack` drops SH bands,
+  then keeps every k-th splat, under the device's largest binding
+  (`set_gpu_budget`), and the panel says what went.
+- It is a SLOW path (`cost::speed_of`): red in the graph, a Bake clears it.
+- `engine/tests/splat.rs` pins: nearest wins in either file order, depth =
+  distance, a `.ply` is turned Y up, a shuffled 150k capture renders the
+  same, a still camera draws once. `WOBBLE_SPLAT_PERF=1` prints the time for
+  4M splats at 1080p (≈41 ms on the M-series dev Mac).
+- Not built: `.spz` v4 (zstd), compressed `.ply`, motion blur across the
+  shutter, a viewer gizmo for the placement, a tile rasteriser (big
+  near-camera splats are fill-rate bound).
+
 ## Plasma node (`engine/src/nodes/plasma.rs`, `engine/src/plasmagpu.rs`, `app/src/nodes/plasma.rs`)
 
 GPU particles along magnetic loops and streamers: a corona. README has the
@@ -1677,6 +1728,7 @@ and restored on the first turn. EDIT MODE's comp window is still a
 `WOBBLE_SHOT=<png>` with any `--test-*` run writes the interface as
 drawn (the picture itself left out) after 20 frames and exits: the way
 to look at the window without touching the user's.
+
 
 ## Refract node (`engine/src/nodes/refract.rs`, `app/src/nodes/refract.rs`)
 

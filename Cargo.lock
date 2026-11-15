@@ -1357,6 +1357,7 @@ dependencies = [
  "epaint_default_fonts 0.35.0",
  "exr",
  "ffmpeg-next",
+ "flate2",
  "genai",
  "half",
  "i_overlay",

@@ -9,6 +9,7 @@
 //! file store.
 
 pub mod blank;
+pub mod splat;
 pub mod starfield;
 pub mod planet;
 pub mod plasma;

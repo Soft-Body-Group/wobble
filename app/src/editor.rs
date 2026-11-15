@@ -1008,6 +1008,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         e(ThreeD, "Env", false, |_| NodeKind::Env(Default::default())),
         e(ThreeD, "Blend 3D", false, |_| NodeKind::Scene3D(Default::default())),
         e(ThreeD, "Render3D", false, |_| NodeKind::Render3D(Default::default())),
+        e(ThreeD, "Splat", false, |_| NodeKind::Splat(Default::default())),
         e(Filter, "Defocus", false, |_| NodeKind::Defocus(DefocusParams::default())),
         e(Filter, "Glow", false, |_| NodeKind::Glow(GlowParams::default())),
         e(Filter, "Godrays", false, |_| NodeKind::Godrays(Default::default())),
@@ -1962,6 +1963,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::Card3D(_) => t::node_card3d(),
         NodeKind::Scene3D(_) => t::node_scene3d(),
         NodeKind::Render3D(_) => t::node_render3d(),
+        NodeKind::Splat(_) => t::node_splat(),
         NodeKind::VectorWarp(_) => t::node_vector_warp(),
         NodeKind::ColorCompress(_) => t::node_color_compress(),
         NodeKind::HueRotate(_) => t::node_hue_rotate(),
@@ -2600,6 +2602,7 @@ pub(crate) fn paint_body(
         NodeKind::Gradient(_) => crate::nodes::gradient::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Blank(_) => crate::nodes::blank::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Starfield(_) => crate::nodes::starfield::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Splat(_) => crate::nodes::splat::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Planet(_) => crate::nodes::planet::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Plasma(_) => crate::nodes::plasma::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Particles(_) | NodeKind::ParticleNode(_) => {

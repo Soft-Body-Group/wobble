@@ -471,6 +471,7 @@ slots! {
         node_gradient: "Gradient" = shade(S::family_source, rgb(0x9a, 0x44, 0x7e));
         node_blank: "Blank" = shade(S::family_source, rgb(0x7a, 0x7a, 0x86));
         node_starfield: "Starfield" = shade(S::family_source, rgb(0x5a, 0x6c, 0xb8));
+        node_splat: "Splat" = shade(S::family_source, rgb(0x4e, 0xa8, 0x9c));
         node_planet: "Planet" = shade(S::family_source, rgb(0x4e, 0x8a, 0x9c));
         node_plasma: "Plasma" = shade(S::family_source, rgb(0xc8, 0x5a, 0x6e));
         node_particles: "Particles" = shade(S::family_source, rgb(0xd0, 0x7a, 0x8c));

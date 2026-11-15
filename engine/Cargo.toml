@@ -28,6 +28,8 @@ rayon = { workspace = true }
 lz4_flex = { workspace = true }
 half = { workspace = true }
 bytemuck = { workspace = true }
+# .spz splat captures are gzip. Pure Rust (miniz_oxide); already in the lock.
+flate2 = "1"
 pollster = { workspace = true }
 crossbeam-channel = { workspace = true }
 anyhow = { workspace = true }

@@ -162,6 +162,9 @@ pub enum SourceBinding {
     /// A Particles node's layer (`crate::particlegpu`), simulated and
     /// re-drawn by the compositor when its frame or look changes.
     Particles(NodeId),
+    /// A Splat node's layer (`crate::splatgpu`) — (the node that draws,
+    /// true for its depth target) — re-drawn when its uniform changes.
+    Splat(NodeId, bool),
     /// A loop's previous-iteration texture, named by the LoopIn's id. Inside
     /// the loop stage the compositor rebinds it per iteration (ping-pong);
     /// sampled anywhere else it resolves to the loop's finished result.
@@ -321,6 +324,7 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::Starfield(_) => crate::graph::StarfieldParams::VEC4_SLOTS,
         NodeKind::Planet(_) => crate::graph::PlanetParams::VEC4_SLOTS,
         NodeKind::Plasma(_) => crate::graph::PlasmaParams::VEC4_SLOTS,
+        NodeKind::Splat(_) => crate::graph::SplatParams::VEC4_SLOTS,
         NodeKind::Particles(_) => crate::graph::ParticlesParams::VEC4_SLOTS,
         NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) => 0,
         NodeKind::GlintKernel(_) => crate::graph::GlintKernelParams::VEC4_SLOTS,
@@ -1737,6 +1741,18 @@ impl<'e, 'a> Emit<'e, 'a> {
         format!("src{idx}")
     }
 
+    /// A Splat node's layer (`SourceBinding::Splat`) — `host`'s, its
+    /// depth target when `depth` — as a WGSL texture name.
+    pub fn splat_layer(&mut self, host: NodeId, depth: bool) -> String {
+        let idx = self.cx.bind(SourceBinding::Splat(host, depth));
+        format!("src{idx}")
+    }
+
+    /// The node being emitted.
+    pub fn node(&self) -> NodeId {
+        self.node
+    }
+
     /// This node's first vec4 slot in the uniform block.
     pub fn slot(&self) -> usize {
         self.cx.layout.node_slot[&self.node]
@@ -2764,6 +2780,7 @@ fn emit(
         NodeKind::Starfield(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Planet(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Plasma(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
+        NodeKind::Splat(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Particles(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) => "vec4f(0.0)".into(),
         NodeKind::GlintKernel(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
@@ -4499,6 +4516,7 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 p.pack(&mut v[base..base + crate::graph::ParticlesParams::VEC4_SLOTS * 4])
             }
             NodeKind::ParticleNode(_) => {}
+            NodeKind::Splat(p) => p.pack(&mut v[base..base + crate::graph::SplatParams::VEC4_SLOTS * 4]),
             NodeKind::Plasma(p) => {
                 p.pack_fmt(&mut v[base..base + crate::graph::PlasmaParams::VEC4_SLOTS * 4], graph.proxy_scale())
             }
@@ -5654,6 +5672,8 @@ mod node_pack_tests {
             NodeKind::Planet(Default::default()),
             NodeKind::Planet(crate::graph::PlanetParams { mode: crate::graph::PlanetMode::Latlong, ..Default::default() }),
             NodeKind::Plasma(Default::default()),
+            NodeKind::Splat(Default::default()),
+            NodeKind::Splat(crate::graph::SplatParams { depth_of: Some(1), ..Default::default() }),
             NodeKind::LensFlare(Default::default()),
             NodeKind::Contrast(Default::default()),
             NodeKind::LensFlare(crate::graph::LensFlareParams { occlude: true, ..Default::default() }),

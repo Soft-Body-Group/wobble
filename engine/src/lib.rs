@@ -35,6 +35,8 @@ pub mod textraster;
 pub mod textfx;
 pub mod textgpu;
 pub mod plasmagpu;
+pub mod splat;
+pub mod splatgpu;
 pub mod particlegpu;
 pub mod invview;
 pub mod extract;

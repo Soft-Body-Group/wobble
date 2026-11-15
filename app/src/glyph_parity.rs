@@ -22,6 +22,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::Gradient(_) => Icon::Gradient,
         NodeKind::Blank(_) => Icon::Blank,
         NodeKind::Starfield(_) => Icon::Starfield,
+        NodeKind::Splat(_) => Icon::Splat,
         NodeKind::Planet(_) => Icon::Planet,
         NodeKind::Plasma(_) => Icon::Plasma,
         NodeKind::Particles(_) | NodeKind::ParticleNode(_) => Icon::Particles,

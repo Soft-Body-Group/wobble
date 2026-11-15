@@ -1151,6 +1151,30 @@ through the Blender node's offset, as its picture does. A plane's own
 width is folded in, so a default card fills it; Blender's camera sensor
 fit is honoured, its lens shift is not.
 
+## Splat — a Gaussian splat capture through a camera
+
+**3D → Splat.** Pick a `.ply` (the layout 3DGS training writes) or an
+`.spz` (versions 1–3) and the capture is drawn on the GPU through whatever
+**Camera** is wired into the node's input — a CameraTrack's solve, a
+file's, Blender's. Unwired, it is the default Camera. Output 1 is the
+picture (premultiplied RGBA, scene-linear); output 2 is **depth**, the
+distance from the camera, the far clip where there is nothing.
+
+- A capture you pick in the panel is **fitted to the frame** once it has
+  loaded; `fit to frame` does it again. Translate / rotate / scale place it
+  in the scene and are keyable.
+- `opacity` and `splat size` are looks; `view-dependent colour` turns the
+  spherical harmonics past the first band on or off.
+- A `.ply` is turned Y up on the way in (training writes Y down). Colours
+  are decoded from sRGB unless `colours are linear`.
+- Loading happens in the background. A capture too big for the GPU loses
+  SH bands first, then is thinned, and the panel says so — it still draws.
+- The depth sort is on the GPU every time the camera moves, and a still
+  camera costs nothing. It is still a pass of its own, so the node is
+  **red**; a Bake below it clears that.
+
+Training a capture is not something wobble does.
+
 ## CameraTrack — a 3D camera solved off the picture
 
 A **CameraTrack** node (3D menu) solves where the camera was from the
