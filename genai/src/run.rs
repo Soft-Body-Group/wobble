@@ -305,6 +305,17 @@ pub fn request(
                 "generate_audio": false,
             })
         }
+        (Task::TextToImage, Dialect::Gemini) => {
+            let (w, h) = t2i_size(m, opts, comp);
+            json!({
+                "prompt": prompt(),
+                "aspect_ratio": Dialect::gemini_aspect(w, h),
+                "resolution": Dialect::gemini_resolution(w as f32 * h as f32 / 1e6),
+                "seed": seed,
+                "num_images": 1,
+                "output_format": "png",
+            })
+        }
         (Task::TextToImage, _) => {
             let (w, h) = t2i_size(m, opts, comp);
             json!({
@@ -315,8 +326,19 @@ pub fn request(
                 "output_format": "png",
             })
         }
-        (Task::Edit, Dialect::Seedream) => json!({
+        (Task::Edit, Dialect::Gemini) => json!({
+            "prompt": prompt(), "image_urls": [img(1)?], "seed": seed,
+            // The input decides the shape.
+            "aspect_ratio": "auto",
+            "resolution": Dialect::gemini_resolution(opts.megapixels),
+            "num_images": 1, "output_format": "png",
+        }),
+        (Task::Edit, Dialect::Seedream | Dialect::GptImage) => json!({
             "prompt": prompt(), "image_urls": [img(1)?],
+            "num_images": 1, "output_format": "png",
+        }),
+        (Task::Inpaint, Dialect::GptImage) => json!({
+            "prompt": prompt(), "image_urls": [img(1)?], "mask_url": img(2)?,
             "num_images": 1, "output_format": "png",
         }),
         (Task::Edit, _) => json!({
@@ -759,6 +781,41 @@ mod tests {
         let e = request(m("fal/seedream-5-pro-edit"), &o, 7, (2048, 1080), Some("p"), &[None, img]).unwrap();
         assert_eq!(e["image_urls"], json!(["data:x"]));
         assert!(e.get("image_url").is_none() && e.get("seed").is_none());
+    }
+
+    #[test]
+    fn nano_banana_asks_by_aspect_and_resolution() {
+        let o = Opts::default();
+        let t = request(m("fal/nano-banana-pro"), &o, 7, (2048, 1080), Some("p"), &[None]).unwrap();
+        assert!(t.get("image_size").is_none(), "{t}");
+        assert_eq!(t["aspect_ratio"], "16:9");
+        assert_eq!(t["resolution"], "1K");
+        assert_eq!(t["seed"], 7);
+        let big = Opts { megapixels: 3.0, ..Opts::default() };
+        let t = request(m("fal/nano-banana-2"), &big, 7, (1080, 1920), Some("p"), &[None]).unwrap();
+        assert_eq!((t["aspect_ratio"].as_str(), t["resolution"].as_str()), (Some("9:16"), Some("2K")));
+        let img = Some("data:x".to_string());
+        let e = request(m("fal/nano-banana-pro-edit"), &o, 7, (2048, 1080), Some("p"), &[None, img]).unwrap();
+        assert_eq!(e["image_urls"], json!(["data:x"]));
+        assert_eq!(e["aspect_ratio"], "auto");
+        assert!(e.get("image_url").is_none());
+    }
+
+    #[test]
+    fn gpt_image_takes_lists_a_mask_and_no_seed() {
+        let o = Opts { megapixels: 0.25, ..Opts::default() };
+        let t = request(m("fal/gpt-image-2"), &o, 7, (2048, 1080), Some("p"), &[None]).unwrap();
+        assert!(t.get("seed").is_none(), "{t}");
+        let (w, h) = (t["image_size"]["width"].as_u64().unwrap(), t["image_size"]["height"].as_u64().unwrap());
+        assert!(w * h >= 655_360 && w % 16 == 0 && h % 16 == 0, "{w}x{h}: above GPT Image's floor");
+        let img = Some("data:x".to_string());
+        let mask = Some("data:m".to_string());
+        let e = request(m("fal/gpt-image-2-edit"), &o, 7, (2048, 1080), Some("p"), &[None, img.clone()]).unwrap();
+        assert_eq!(e["image_urls"], json!(["data:x"]));
+        assert!(e.get("seed").is_none() && e.get("image_url").is_none());
+        let i = request(m("fal/gpt-image-2-inpaint"), &o, 7, (2048, 1080), Some("p"), &[None, img, mask]).unwrap();
+        assert_eq!(i["image_urls"], json!(["data:x"]));
+        assert_eq!(i["mask_url"], "data:m");
     }
 
     #[test]

@@ -61,6 +61,15 @@ pub enum Dialect {
     /// ByteDance Seedance image-to-video: no `seed`, `duration` and
     /// `resolution` are strings, audio off (a take is pictures).
     Seedance { max_seconds: u32, top_res: u32 },
+    /// Google's Gemini image models (Nano Banana): no width or height. The
+    /// size is an `aspect_ratio` from a fixed list plus a `resolution`
+    /// class ("1K", "2K"), and an edit takes `image_urls`. Takes a seed.
+    Gemini,
+    /// OpenAI's GPT Image: no `seed`, an edit or inpaint takes
+    /// `image_urls` (+ `mask_url`, white = replace), and a text-to-image
+    /// size must hold at least 655,360 px. Billed by tokens, which fal's
+    /// pricing API does not turn into a price, so it quotes as unknown.
+    GptImage,
 }
 
 impl Dialect {
@@ -70,6 +79,10 @@ impl Dialect {
             // 1024² = 1.049 MP; 1536² = 2.359 MP (rounded to 16 px by
             // `image::fit_size`, so a hair inside both).
             Dialect::Seedream => (1.06, 2.34),
+            // Below 2 MP asks for "1K", at or above for "2K".
+            Dialect::Gemini => (0.5, 4.0),
+            // 655,360 px is GPT Image's floor.
+            Dialect::GptImage => (0.66, 4.0),
             _ => (0.1, 4.0),
         }
     }
@@ -77,7 +90,42 @@ impl Dialect {
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
-        matches!(self, Dialect::Flux)
+        matches!(self, Dialect::Flux | Dialect::Gemini)
+    }
+
+    /// Nano Banana's `resolution` class for a megapixel budget.
+    pub fn gemini_resolution(megapixels: f32) -> &'static str {
+        if megapixels < 2.0 {
+            "1K"
+        } else {
+            "2K"
+        }
+    }
+
+    /// Nano Banana's `aspect_ratio`: the listed ratio nearest `w:h`.
+    pub fn gemini_aspect(w: u32, h: u32) -> &'static str {
+        const RATIOS: [(&str, f64); 14] = [
+            ("21:9", 21.0 / 9.0),
+            ("16:9", 16.0 / 9.0),
+            ("3:2", 1.5),
+            ("4:3", 4.0 / 3.0),
+            ("5:4", 1.25),
+            ("1:1", 1.0),
+            ("4:5", 0.8),
+            ("3:4", 0.75),
+            ("2:3", 2.0 / 3.0),
+            ("9:16", 9.0 / 16.0),
+            ("4:1", 4.0),
+            ("1:4", 0.25),
+            ("8:1", 8.0),
+            ("1:8", 0.125),
+        ];
+        let a = (w.max(1) as f64 / h.max(1) as f64).ln();
+        RATIOS
+            .iter()
+            .min_by(|x, y| (x.1.ln() - a).abs().total_cmp(&(y.1.ln() - a).abs()))
+            .unwrap()
+            .0
     }
 }
 
@@ -226,6 +274,90 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
         about: "the bigger Seedance: up to 30 s and 1080p; about twice 2.0 fast's price per second",
+    },
+    RemoteModel {
+        id: "fal/nano-banana-pro",
+        label: "Nano Banana Pro",
+        short: "nano banana",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-pro",
+        dialect: Dialect::Gemini,
+        task: Task::TextToImage,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "Google's Gemini Pro image model: strong prompt following and text in the picture; 1K, or 2K from 2 MP",
+    },
+    RemoteModel {
+        id: "fal/nano-banana-pro-edit",
+        label: "Nano Banana Pro edit",
+        short: "banana edit",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-pro/edit",
+        dialect: Dialect::Gemini,
+        task: Task::Edit,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "edit a picture by instruction with Nano Banana Pro; keeps the input's aspect",
+    },
+    RemoteModel {
+        id: "fal/nano-banana-2",
+        label: "Nano Banana 2",
+        short: "nano banana 2",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-2",
+        dialect: Dialect::Gemini,
+        task: Task::TextToImage,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "the faster, cheaper Nano Banana; 1K, or 2K from 2 MP",
+    },
+    RemoteModel {
+        id: "fal/nano-banana-2-edit",
+        label: "Nano Banana 2 edit",
+        short: "banana 2 edit",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-2/edit",
+        dialect: Dialect::Gemini,
+        task: Task::Edit,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "edit a picture by instruction, the faster, cheaper Nano Banana",
+    },
+    RemoteModel {
+        id: "fal/gpt-image-2",
+        label: "GPT Image 2",
+        short: "gpt image",
+        service: Service::Fal,
+        endpoint: "openai/gpt-image-2",
+        dialect: Dialect::GptImage,
+        task: Task::TextToImage,
+        commercial: true,
+        licence: "OpenAI via fal API terms (commercial use through the API)",
+        about: "OpenAI's image model. Billed by tokens, so no price up front; quality defaults to high, and extra {\"quality\": \"medium\"} costs far less",
+    },
+    RemoteModel {
+        id: "fal/gpt-image-2-edit",
+        label: "GPT Image 2 edit",
+        short: "gpt edit",
+        service: Service::Fal,
+        endpoint: "openai/gpt-image-2/edit",
+        dialect: Dialect::GptImage,
+        task: Task::Edit,
+        commercial: true,
+        licence: "OpenAI via fal API terms (commercial use through the API)",
+        about: "edit a picture by instruction with GPT Image; billed by tokens, so no price up front",
+    },
+    RemoteModel {
+        id: "fal/gpt-image-2-inpaint",
+        label: "GPT Image 2 inpaint",
+        short: "gpt inpaint",
+        service: Service::Fal,
+        endpoint: "openai/gpt-image-2/edit",
+        dialect: Dialect::GptImage,
+        task: Task::Inpaint,
+        commercial: true,
+        licence: "OpenAI via fal API terms (commercial use through the API)",
+        about: "repaint the white of the matte from a prompt with GPT Image; billed by tokens, so no price up front",
     },
 ];
 

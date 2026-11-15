@@ -125,6 +125,11 @@ impl Service for Fal {
                 }
                 let up = r.get("unit_price")?.as_f64()?;
                 let unit = r.get("unit").and_then(|u| u.as_str()).unwrap_or("call");
+                // Token-billed endpoints (GPT Image) answer "$1 per units":
+                // no price at all, and quoting $1 would be a fiction.
+                if matches!(unit.trim().to_ascii_lowercase().as_str(), "unit" | "units") {
+                    return None;
+                }
                 Some(service::price_of(up, unit, it.megapixels, it.video))
             })
             .collect();
