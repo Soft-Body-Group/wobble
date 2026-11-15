@@ -1678,7 +1678,6 @@ and restored on the first turn. EDIT MODE's comp window is still a
 drawn (the picture itself left out) after 20 frames and exits: the way
 to look at the window without touching the user's.
 
-
 ## Refract node (`engine/src/nodes/refract.rs`, `app/src/nodes/refract.rs`)
 
 A plate or a latlong seen through bumpy glass. Input 0 is what is behind

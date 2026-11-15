@@ -295,8 +295,8 @@ pub fn panel_tabs(kind: &NodeKind) -> Vec<PanelTab> {
         NodeKind::Plasma(_) => crate::nodes::plasma::tabs(),
         NodeKind::LensFlare(_) => crate::nodes::lensflare::tabs(),
         NodeKind::Contrast(_) => crate::nodes::contrast::tabs(),
-        // The box, and the Crop's own bake.
         NodeKind::Refract(_) => crate::nodes::refract::tabs(),
+        // The box, and the Crop's own bake.
         NodeKind::SoftCrop(_) => vec![PanelTab::new("crop", "crop"), PanelTab::new("bake", "bake")],
         NodeKind::Paint(_) => vec![
             PanelTab::new("brush", "brush"),

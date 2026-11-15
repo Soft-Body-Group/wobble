@@ -102,8 +102,8 @@ pub enum Icon {
     SoftCrop,
     UvWarp,
     Env,
-    GridWarp,
     Refract,
+    GridWarp,
     Warp,
     Spline,
     LumaKey,
@@ -233,9 +233,9 @@ pub const NODES: &[Node] = &[
     n(Icon::CornerPin, "CornerPin", Slot::node_corner_pin),
     n(Icon::SoftCrop, "SoftCrop", Slot::node_soft_crop),
     n(Icon::UvWarp, "UV Warp", Slot::node_uvwarp),
+    n(Icon::Refract, "Refract", Slot::node_refract),
     n(Icon::GridWarp, "GridWarp", Slot::node_grid_warp),
     n(Icon::Warp, "Warp", Slot::node_warp),
-    n(Icon::Refract, "Refract", Slot::node_refract),
     n(Icon::Spline, "Spline", Slot::node_spline),
     n(Icon::LumaKey, "LumaKey", Slot::node_luma_key),
     n(Icon::Keyer, "Keyer", Slot::node_keyer),
@@ -722,9 +722,9 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         }
         Icon::UvWarp => uvwarp(painter, sp, r, fill, stroke),
         Icon::Env => env(painter, sp, r, fill, stroke),
+        Icon::Refract => refract(painter, sp, r, fill, stroke),
         Icon::GridWarp => gridwarp(painter, sp, r, fill, stroke),
         Icon::Warp => warp(painter, sp, r, fill, stroke),
-        Icon::Refract => refract(painter, sp, r, fill, stroke),
         Icon::SoftCrop => {
             softcrop(painter, sp, r, fill, stroke)
         }
@@ -1531,9 +1531,6 @@ fn env(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
     }
 }
 
-fn uvwarp(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
-    let h = r * 0.8;
-    painter.rect(
 /// `app/src/nodes/refract.rs` `glyph`.
 /// A pane of glass with a ray kinking through it.
 fn refract(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
@@ -1556,6 +1553,9 @@ fn refract(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
     painter.add(egui::Shape::line(pts.to_vec(), ink));
 }
 
+fn uvwarp(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let h = r * 0.8;
+    painter.rect(
         egui::Rect::from_center_size(c, egui::vec2(h * 2.0, h * 2.0)),
         2.0,
         fill,

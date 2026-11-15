@@ -342,11 +342,11 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::ToneMap(_) => ToneMapParams::VEC4_SLOTS,
         NodeKind::UvWarp(_) => UvWarpParams::VEC4_SLOTS,
         NodeKind::Env(_) => crate::graph::EnvParams::VEC4_SLOTS,
+        NodeKind::Refract(_) => crate::graph::RefractParams::VEC4_SLOTS,
         // The header, then a vec4 per lattice point: the span follows the
         // lattice's SHAPE, which is in the topology tag.
         NodeKind::GridWarp(p) => p.slots(),
         NodeKind::LensDistort(_) => crate::graph::LensDistortParams::VEC4_SLOTS,
-        NodeKind::Refract(_) => crate::graph::RefractParams::VEC4_SLOTS,
         NodeKind::Warp(p) => p.slots(),
         NodeKind::Expression(_) => crate::graph::ExpressionParams::VEC4_SLOTS,
         NodeKind::Despill(_) => DespillParams::VEC4_SLOTS,
@@ -2790,6 +2790,7 @@ fn emit(
         NodeKind::ToneMap(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::UvWarp(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Env(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
+        NodeKind::Refract(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::GridWarp(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::LensDistort(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Warp(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
@@ -2809,7 +2810,6 @@ fn emit(
         NodeKind::SoftCrop(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::MotionBlur(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Reformat(_) => {
-        NodeKind::Refract(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
             // Output pixel -> source pixel: a scale and an offset, so the
             // node stays one sample (no resampling pass).
             let slot = cx.layout.node_slot[&node];
@@ -4606,6 +4606,16 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 let src = graph.input_of(*id, crate::nodes::env::IMAGE_INPUT).and_then(fmt_of).unwrap_or(fmt);
                 p.pack_fmt(&mut v[base..base + crate::graph::EnvParams::VEC4_SLOTS * 4], fmt, src)
             }
+            // The latlong view spans the node's OWN format; the lookup lands
+            // in input 0's. Thickness and relief are pixels (the proxy's).
+            NodeKind::Refract(p) => {
+                let fmt_of = |n: NodeId| graph.formats.get(&n).map(|(w, h)| [*w as f32, *h as f32]);
+                let fmt = fmt_of(*id).unwrap_or(out_size);
+                let src =
+                    graph.input_of(*id, crate::nodes::refract::IMAGE_INPUT).and_then(fmt_of).unwrap_or(fmt);
+                let end = base + crate::graph::RefractParams::VEC4_SLOTS * 4;
+                p.pack_fmt(&mut v[base..end], fmt, src, graph.proxy_scale())
+            }
             // The model is normalised over the PLATE, which is the input
             // undistorting and the output distorting; both formats go in.
             NodeKind::LensDistort(p) => {
@@ -4626,16 +4636,6 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
             NodeKind::GridWarp(p) => {
                 let fmt = graph
                     .formats
-            // The latlong view spans the node's OWN format; the lookup lands
-            // in input 0's. Thickness and relief are pixels (the proxy's).
-            NodeKind::Refract(p) => {
-                let fmt_of = |n: NodeId| graph.formats.get(&n).map(|(w, h)| [*w as f32, *h as f32]);
-                let fmt = fmt_of(*id).unwrap_or(out_size);
-                let src =
-                    graph.input_of(*id, crate::nodes::refract::IMAGE_INPUT).and_then(fmt_of).unwrap_or(fmt);
-                let end = base + crate::graph::RefractParams::VEC4_SLOTS * 4;
-                p.pack_fmt(&mut v[base..end], fmt, src, graph.proxy_scale())
-            }
                     .get(id)
                     .map(|(w, h)| [*w as f32, *h as f32])
                     .unwrap_or(out_size);

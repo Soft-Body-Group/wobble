@@ -549,8 +549,8 @@ slots! {
         node_transform: "Transform" = shade(S::family_transform, rgb(0x3a, 0x6e, 0xa5));
         node_vector_blur: "VectorBlur" = shade(S::family_filter, rgb(0x4f, 0x8a, 0x3f));
         node_uvwarp: "UV Warp" = shade(S::family_transform, rgb(0x3a, 0x86, 0xa8));
-        node_vector_warp: "VectorWarp" = shade(S::family_transform, rgb(0x4e, 0x72, 0xc8));
         node_refract: "Refract" = shade(S::family_transform, rgb(0x46, 0x9c, 0xb0));
+        node_vector_warp: "VectorWarp" = shade(S::family_transform, rgb(0x4e, 0x72, 0xc8));
         node_vector_distort: "VectorDistort" = shade(S::family_transform, rgb(0x9a, 0x7a, 0x35));
         node_write: "Render" = shade(S::family_other, rgb(0xd0, 0x6a, 0x2e));
     }

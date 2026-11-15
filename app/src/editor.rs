@@ -1947,8 +1947,8 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::ToData(_) => t::node_to_data(),
         NodeKind::UvWarp(_) => t::node_uvwarp(),
         NodeKind::Env(_) => t::node_env(),
-        NodeKind::GridWarp(_) => t::node_grid_warp(),
         NodeKind::Refract(_) => t::node_refract(),
+        NodeKind::GridWarp(_) => t::node_grid_warp(),
         NodeKind::Warp(_) => t::node_warp(),
         NodeKind::ToRgba(_) => t::node_to_rgba(),
         NodeKind::SoftCrop(_) => t::node_soft_crop(),
@@ -2553,9 +2553,9 @@ pub(crate) fn paint_body(
         }
         NodeKind::UvWarp(_) => crate::nodes::uvwarp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Env(_) => crate::nodes::env::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Refract(_) => crate::nodes::refract::glyph(&painter, sp, r, fill, stroke),
         NodeKind::GridWarp(_) => crate::nodes::gridwarp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Warp(_) => crate::nodes::warp::glyph(&painter, sp, r, fill, stroke),
-        NodeKind::Refract(_) => crate::nodes::refract::glyph(&painter, sp, r, fill, stroke),
         NodeKind::ToRgba(_) => {
             crate::nodes::torgba::glyph(&painter, sp, r, fill, stroke)
         }
