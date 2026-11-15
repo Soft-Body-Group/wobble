@@ -2100,6 +2100,7 @@ impl Gfx {
             NodeKind::GraphBake { .. } | NodeKind::SoftCrop(_) => "bake",
             NodeKind::Tracker(_) | NodeKind::PlanarTrack(_) => "track",
             NodeKind::CorridorKey(_) => "key",
+            NodeKind::Normals(_) => "render",
             NodeKind::Sammie(_) => "track",
             NodeKind::Flow(_) | NodeKind::MorphDissolve(_) => "analyse",
             NodeKind::Stabilize(_) => "analyse",
@@ -2216,6 +2217,15 @@ impl Gfx {
                 }
             }
             (NodeKind::CamTrack(_), "cancel") => self.ct_action(id, crate::flowui::Action::Cancel),
+            // Runs on what is installed; installing stays a click. The
+            // first run fetches the tool's weights (the CorridorKey way).
+            (NodeKind::Normals(_), "render") => {
+                self.normals_action(id, crate::normals::Action::Run);
+                if let Some(crate::normals::Phase::Failed(e)) = self.jobs.normals.run.as_ref().map(|r| &r.phase) {
+                    return Err(ApiError::app(e.clone()));
+                }
+            }
+            (NodeKind::Normals(_), "cancel") => self.normals_action(id, crate::normals::Action::Cancel),
             (NodeKind::Upscale(_), "render") => {
                 self.upscale_action(id, crate::flowui::Action::Analyse);
                 if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.upscale.run.as_ref().map(|r| &r.phase) {
@@ -2326,6 +2336,7 @@ impl Gfx {
                 crate::BakeSink::Write { .. } => "render",
                 crate::BakeSink::Capture { .. } => "capture",
                 crate::BakeSink::Corridor { .. } => "key-inputs",
+                crate::BakeSink::Normals => "normals-input",
                 crate::BakeSink::Sammie => "track-plate",
                 crate::BakeSink::Flow => "flow-input",
                 crate::BakeSink::Morph { .. } => "morph-input",
@@ -2394,6 +2405,13 @@ impl Gfx {
             let kind = if self.jobs.camtrack.tracking { "camtrack-track" } else { "camtrack-solve" };
             jobs.push(json!({ "node": r.node, "kind": kind, "done": done, "total": total }));
         }
+        if let Some(r) = self.jobs.normals.run.as_ref().filter(|r| r.active()) {
+            let (done, total) = match &r.phase {
+                crate::normals::Phase::Running { done, total, .. } => (*done, *total),
+                _ => (0, 0),
+            };
+            jobs.push(json!({ "node": r.node, "kind": "normals", "done": done, "total": total }));
+        }
         if let Some(r) = self.jobs.upscale.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {
                 crate::flowui::Phase::Solving { done, total, .. } => (*done, *total),
@@ -2449,6 +2467,11 @@ impl Gfx {
             "status": self.render_status,
             "errors": errors,
             "key": corridor,
+            "normals": self.jobs.normals.run.as_ref().map(|r| match &r.phase {
+                crate::normals::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
+                crate::normals::Phase::Done(d) => json!({ "node": r.node, "done": d }),
+                _ => json!({ "node": r.node, "running": true }),
+            }),
             "flow": self.jobs.flow.run.as_ref().map(|r| match &r.phase {
                 crate::flowui::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::flowui::Phase::Done(d) => json!({ "node": r.node, "done": d }),

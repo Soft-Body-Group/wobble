@@ -336,6 +336,8 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - GenAI node (`genai/`, `engine/src/nodes/genai.rs`, `app/src/genaiui.rs`)
 - CorridorKey node (`engine/src/nodes/corridorkey.rs`, `app/src/corridorkey.rs`, `app/src/nodes/corridorkey.rs`)
 - Sammie node (`engine/src/nodes/sammie.rs`, `app/src/sammie.rs`, `app/src/nodes/sammie.rs`)
+- Normals node (`engine/src/nodes/normals.rs`, `app/src/normals.rs`, `tools/wobble_normals.py`)
+- Relight node (`engine/src/nodes/relight.rs`, `app/src/nodes/relight.rs`)
 - Screen recorder (`app/src/recorder.rs`, `recorder/`)
 - Plugin store (`app/src/pluginstore.rs`, `app/src/urlhook.rs`)
 - One build, runtime consent (`app/src/report.rs`, `tools/release_public.sh`)

@@ -227,6 +227,8 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::GraphBake { baked, window, .. } => (*baked && window.is_some()) as usize,
         NodeKind::GenAi(_) => GenAiParams::VEC4_SLOTS,
         NodeKind::CorridorKey(_) => CorridorKeyParams::VEC4_SLOTS,
+        NodeKind::Normals(_) => crate::graph::NormalsParams::VEC4_SLOTS,
+        NodeKind::Relight(_) => <crate::graph::RelightParams as crate::nodes::NodeDef>::VEC4_SLOTS,
         NodeKind::Flow(_) => crate::nodes::flow::FlowParams::VEC4_SLOTS,
         NodeKind::Rifetime(_) => 0,
         // The dissolve between its two branches (unused once loaded).
@@ -2393,6 +2395,17 @@ fn emit(
                 }
             }
         }
+        // A loaded result is numbers off disk; nothing run yet, no normal
+        // (a Relight reads a zero normal as "no surface" and adds nothing).
+        NodeKind::Normals(p) => {
+            if p.loaded {
+                let idx = cx.bind(SourceBinding::Reader(cx.graph.slot_for(node, tkey, p.source)));
+                let slot = cx.layout.node_slot[&node];
+                crate::graph::NormalsParams::emit_loaded(&format!("src{idx}"), pos, slot, body, &mut || fresh(tmp))
+            } else {
+                "vec4f(0.0)".into()
+            }
+        }
         NodeKind::Sammie(p) => {
             let plate = if p.samples_plate() {
                 cx.graph.input_of(node, 0).map(|input| emit(cx, input, tkey, pos, body, tmp, on_path))
@@ -2871,6 +2884,7 @@ fn emit(
         }
         NodeKind::Despill(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Lightwrap(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
+        NodeKind::Relight(p) => crate::nodes::NodeDef::emit(p, &mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::ScreenKey(p) => {
             p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path))
         }
@@ -4513,6 +4527,7 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 v[base + 3] = if m.alpha { 1.0 } else { 0.0 };
             }
             NodeKind::CorridorKey(p) => p.pack(&mut v[base..base + 4]),
+            NodeKind::Normals(p) => p.pack(&mut v[base..base + 4]),
             NodeKind::Depth(p) => p.pack(&mut v[base..base + 4]),
             NodeKind::LtxHdr(p) => {
                 let f = graph.format_of(*id).map(|(w, h)| [w as f32, h as f32]).unwrap_or(out_size);
@@ -4539,8 +4554,15 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                     .and_then(|s| graph.formats.get(&s))
                     .map(|(w, h)| [*w as f32, *h as f32])
                     .unwrap_or(out_size);
-                let out = rf.out_size((src[0].max(1.0) as u32, src[1].max(1.0) as u32));
-                let dst = [out.0.max(1) as f32, out.1.max(1) as f32];
+                // Size 0 is "the format this node is stamped with": what a
+                // lowering mints to fit a picture to another node's format
+                // (`nodes::relight::lower`, by `format_alias`).
+                let dst = if !rf.by_factor && rf.size == (0, 0) {
+                    graph.format_of(*id).map(|(w, h)| [w as f32, h as f32]).unwrap_or(out_size)
+                } else {
+                    let out = rf.out_size((src[0].max(1.0) as u32, src[1].max(1.0) as u32));
+                    [out.0.max(1) as f32, out.1.max(1) as f32]
+                };
                 let [sx, sy] = reformat_scale(rf, src, dst);
                 // The shader maps forward through the INVERSE of the fit.
                 let (ix, iy) = (1.0 / sx.max(1e-6), 1.0 / sy.max(1e-6));

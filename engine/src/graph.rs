@@ -81,6 +81,8 @@ pub use crate::nodes::prompt::PromptParams;
 pub use crate::nodes::render3d::Render3dParams;
 pub use crate::scene3d::{CameraParams, CardParams, SceneParams};
 pub use crate::nodes::corridorkey::{CorridorKeyParams, CorridorOut, Screen as CorridorScreen};
+pub use crate::nodes::normals::NormalsParams;
+pub use crate::nodes::relight::{RelightMode, RelightParams};
 pub use crate::nodes::flow::{FlowDetail, FlowEngine, FlowParams};
 pub use crate::nodes::rifetime::{RifetimeMode, RifetimeParams};
 pub use crate::nodes::freeze::FreezeParams;
@@ -357,6 +359,10 @@ pub enum NodeKind {
     /// Corridor Digital's neural screen keyer, run by the app as a process;
     /// the result plays through its reader slot. See `crate::nodes::corridorkey`.
     CorridorKey(CorridorKeyParams),
+    /// NormalCrafter as a process-backed reader (`nodes::normals`).
+    Normals(NormalsParams),
+    /// Environment light added to a plate through its normals (`nodes::relight`).
+    Relight(RelightParams),
     /// Click-to-roto with SAM 2 (and optionally MatAnyone), run by the app
     /// as a process; the matte plays through its reader slot. See
     /// `crate::nodes::sammie`.
@@ -6386,6 +6392,7 @@ impl NodeKind {
             | NodeKind::GraphBake { source, .. } => Some(*source),
             NodeKind::GenAi(p) => Some(p.source),
             NodeKind::CorridorKey(p) => Some(p.source),
+            NodeKind::Normals(p) => Some(p.source),
             NodeKind::Sammie(p) => Some(p.source),
             NodeKind::Flow(p) => Some(p.source),
             NodeKind::MorphDissolve(p) => Some(p.source),
@@ -6428,6 +6435,7 @@ impl NodeKind {
             NodeKind::Cryptomatte(c) => c.start,
             NodeKind::GraphBake { start, .. } => *start,
             NodeKind::CorridorKey(p) => p.start,
+            NodeKind::Normals(p) => p.start,
             NodeKind::Sammie(p) => p.start,
             NodeKind::Flow(p) => p.start,
             NodeKind::MorphDissolve(p) => p.start,
@@ -6525,6 +6533,8 @@ impl NodeKind {
             NodeKind::GraphBake { .. } => 1,
             NodeKind::GenAi(p) => p.inputs(),
             NodeKind::CorridorKey(_) => CorridorKeyParams::INPUTS,
+            NodeKind::Normals(_) => NormalsParams::INPUTS,
+            NodeKind::Relight(_) => RelightParams::INPUTS,
             NodeKind::Sammie(_) => SammieParams::INPUTS,
             NodeKind::Flow(_) => FlowParams::INPUTS,
             NodeKind::Rifetime(_) => RifetimeParams::INPUTS,
@@ -6658,6 +6668,7 @@ impl NodeKind {
             NodeKind::Convolve(p) => Some(p),
             NodeKind::Diffuse(p) => Some(p),
             NodeKind::Lightwrap(p) => Some(p),
+            NodeKind::Relight(p) => Some(p),
             NodeKind::MotionBlur(p) => Some(p),
             NodeKind::VectorBlur(p) => Some(p),
             NodeKind::Render3D(p) => p.stage().map(|p| p as &dyn crate::nodes::stage::StageDef),
@@ -6695,6 +6706,7 @@ impl NodeKind {
             NodeKind::Expression(_) => ExpressionParams::MASK_INPUT,
             NodeKind::Despill(_) => DespillParams::MASK_INPUT,
             NodeKind::Lightwrap(_) => LightwrapParams::MASK_INPUT,
+            NodeKind::Relight(_) => RelightParams::MASK_INPUT,
             NodeKind::ScreenKey(_) => ScreenKeyParams::MASK_INPUT,
             NodeKind::ColorSlice(_) => ColorSliceParams::MASK_INPUT,
             NodeKind::Blur(_) => BlurParams::MASK_INPUT,
@@ -7183,6 +7195,16 @@ impl NodeKind {
                     s("the picture whose edge colour is pushed outward")
                 }
             }
+            NodeKind::Normals(_) => s("the plate to estimate surface normals from"),
+            NodeKind::Relight(_) => match input {
+                crate::nodes::relight::PLATE_INPUT => s("the plate the light is added to (its colour is the albedo)"),
+                crate::nodes::relight::NORMAL_INPUT => s("camera-space normals: a Normals node, or any normal map"),
+                crate::nodes::relight::DEPTH_INPUT => s("optional depth: with a radius, the environment is a room \
+                       round the camera rather than at infinity"),
+                crate::nodes::relight::ENV_INPUT => s("the latlong environment whose light is added: an HDRI, \
+                       a DiffusionLight estimate"),
+                _ => s("where the light is added"),
+            },
             NodeKind::Lightwrap(_) => {
                 if input == 0 {
                     s("the foreground (premultiplied, with its alpha)")
@@ -7444,6 +7466,13 @@ impl NodeKind {
             NodeKind::Lightwrap(_) => {
                 if input == 0 { "foreground" } else { "background" }
             }
+            NodeKind::Relight(_) => match input {
+                crate::nodes::relight::PLATE_INPUT => "plate",
+                crate::nodes::relight::NORMAL_INPUT => "normals",
+                crate::nodes::relight::DEPTH_INPUT => "depth",
+                crate::nodes::relight::ENV_INPUT => "environment",
+                _ => "mask",
+            },
             NodeKind::MatteCombine(_) => {
                 if input == 0 { "A" } else { "B" }
             }
@@ -7901,6 +7930,8 @@ impl NodeKind {
             NodeKind::Scene3D(_) => SceneParams::NAME,
             NodeKind::Render3D(_) => Render3dParams::NAME,
             NodeKind::CorridorKey(_) => CorridorKeyParams::NAME,
+            NodeKind::Normals(_) => NormalsParams::NAME,
+            NodeKind::Relight(_) => <RelightParams as crate::nodes::NodeDef>::NAME,
             NodeKind::Sammie(_) => SammieParams::NAME,
             NodeKind::Flow(_) => FlowParams::NAME,
             NodeKind::Rifetime(_) => RifetimeParams::NAME,
@@ -8113,6 +8144,8 @@ impl NodeKind {
             // in the pipeline is code.
             NodeKind::GenAi(p) => 0x6A1_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::CorridorKey(p) => 0x6C2_0000 + (p.source as u64) * 2 + p.topo_tag(),
+            NodeKind::Normals(p) => 0x40A_0000 + (p.source as u64) * 2 + p.topo_tag(),
+            NodeKind::Relight(p) => crate::nodes::NodeDef::topo_tag(p),
             NodeKind::Sammie(p) => 0x5A3_0000 + (p.source as u64) * 4 + p.topo_tag(),
             NodeKind::Flow(p) => 0xF10_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::Rifetime(p) => 0x7E7_0000 + (p.source as u64) * 2 + p.topo_tag(),
@@ -8844,6 +8877,7 @@ impl Graph {
                     // A loaded key is the frames on disk; its plate and hint
                     // were rendered when it was run.
                     | NodeKind::CorridorKey(CorridorKeyParams { loaded: true, .. })
+                    | NodeKind::Normals(NormalsParams { loaded: true, .. })
                     // A loaded matte on the mask pipe reads no plate.
                     | NodeKind::Sammie(SammieParams { loaded: true, output: SammieOut::Matte, .. })
                     // Vectors are frames on disk, or zero motion: its input

@@ -85,6 +85,11 @@ its own licence, which Wobble shows before anything is downloaded:
   DiffusionLight node, with the weights it runs on: Stable Diffusion XL and
   its depth ControlNet (CreativeML Open RAIL++-M), the DiffusionLight LoRAs
   (MIT) and DPT-Large (Apache-2.0).
+- **NormalCrafter** (MIT), installed from its own repository by the
+  Normals node. Its weights, fetched by the tool on its first run, are a
+  fine-tune of Stable Video Diffusion and come under the Stability AI
+  Community Licence (commercial use under a revenue cap); the node is
+  tagged.
 - **Blender**, which Wobble launches as a separate program. Blender is
   GPL-2.0-or-later.
 - **Remote generative-AI services**, which have their own terms of service.

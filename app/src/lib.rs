@@ -85,6 +85,7 @@ mod planarui;
 mod blenderui;
 mod genaiui;
 mod corridorkey;
+mod normals;
 mod flowui;
 mod stabilizeui;
 mod camtrackui;
@@ -4347,6 +4348,8 @@ enum BakeSink {
     /// A Sammie node rendering its plate into its shot directory for the
     /// tool to read (`sammie.rs`).
     Sammie,
+    /// A Normals node rendering its input for NormalCrafter (`normals.rs`).
+    Normals,
     /// A Flow node rendering its input for the motion solve
     /// (`flowui.rs`).
     Flow,
@@ -4405,6 +4408,7 @@ impl SubtreeBake {
                 .join(if *port == 0 { "Input" } else { "Matte" })
                 .join(corridorkey::frame_name(tick)),
             BakeSink::Planar => self.dir.join("Matte").join(corridorkey::frame_name(tick)),
+            BakeSink::Normals => self.dir.join("Input").join(corridorkey::frame_name(tick)),
         }
     }
 }
@@ -5649,6 +5653,13 @@ fn repair_reader_slots(g: &mut EditorGraph) -> usize {
                     next += 1;
                 }
             }
+            NodeKind::Normals(p) => {
+                if p.source != usize::MAX && !seen.insert(p.source) {
+                    p.source = next;
+                    seen.insert(next);
+                    next += 1;
+                }
+            }
             NodeKind::Rifetime(p) => {
                 if p.source != usize::MAX && !seen.insert(p.source) {
                     p.source = next;
@@ -6794,6 +6805,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         jobs: state::NodeJobs {
             genai: Default::default(),
             corridor: Default::default(),
+            normals: Default::default(),
             sammie: Default::default(),
             flow: Default::default(),
             stab: Default::default(),
@@ -7846,6 +7858,11 @@ impl Gfx {
                     p.loaded = loaded.is_some();
                     p.start = loaded.and_then(|l| l.first_frame);
                 }
+                if let NodeKind::Normals(p) = kind {
+                    let loaded = self.loaded.get(id);
+                    p.loaded = loaded.is_some();
+                    p.start = loaded.and_then(|l| l.first_frame);
+                }
                 if let NodeKind::Sammie(p) = kind {
                     let loaded = self.loaded.get(id);
                     p.loaded = loaded.is_some();
@@ -8053,6 +8070,8 @@ impl Gfx {
                 // transform.
                 BakeSink::Corridor { port: 0, .. } => Some(engine::color::Colorspace::LINEAR_REC709),
                 BakeSink::Corridor { .. } => None,
+                // NormalCrafter's driver reads linear Rec.709 and encodes it.
+                BakeSink::Normals => Some(engine::color::Colorspace::LINEAR_REC709),
                 // SAM reads the plate as a picture: linear Rec.709, which
                 // the driver encodes to sRGB.
                 BakeSink::Sammie => Some(engine::color::Colorspace::LINEAR_REC709),
@@ -8256,6 +8275,10 @@ impl Gfx {
             self.corridor_render_finished(bake.node, port);
             return;
         }
+        if let BakeSink::Normals = bake.sink {
+            self.normals_render_finished(bake.node);
+            return;
+        }
         if let BakeSink::Sammie = bake.sink {
             self.sammie_render_finished(bake.node);
             return;
@@ -8371,6 +8394,11 @@ impl Gfx {
             }
             // A CorridorKey likewise, its files named by comp frame.
             if let NodeKind::CorridorKey(p) = kind {
+                let loaded = self.loaded.get(id);
+                p.loaded = loaded.is_some();
+                p.start = loaded.and_then(|l| l.first_frame);
+            }
+            if let NodeKind::Normals(p) = kind {
                 let loaded = self.loaded.get(id);
                 p.loaded = loaded.is_some();
                 p.start = loaded.and_then(|l| l.first_frame);
@@ -8772,6 +8800,7 @@ impl Gfx {
         self.genai_adopt();
         // And every CorridorKey whose run for the current recipe is on disk.
         self.corridor_adopt();
+        self.normals_adopt();
         // And every Sammie whose matte for its current clicks is on disk.
         self.sammie_adopt();
         // And every Flow whose vectors for the current input are on disk.
@@ -9922,6 +9951,7 @@ impl Gfx {
                 }),
                 // A key's frames are already on NVMe, as the tool wrote them.
                 NodeKind::CorridorKey(_)
+                | NodeKind::Normals(_)
                 | NodeKind::Sammie(_)
                 | NodeKind::MorphDissolve(_)
                 | NodeKind::Flow(_)
@@ -10904,6 +10934,7 @@ impl Gfx {
             // Baked: the cached frames' size; live: whatever flows through.
             NodeKind::GraphBake { .. }
             | NodeKind::CorridorKey(_)
+            | NodeKind::Normals(_)
             | NodeKind::Sammie(_)
             | NodeKind::Flow(_)
             | NodeKind::Rifetime(_)
@@ -11630,6 +11661,9 @@ impl Gfx {
         }
         if self.jobs.corridor.run.is_some() || self.jobs.corridor.install.is_some() {
             self.corridor_poll();
+        }
+        if self.jobs.normals.run.is_some() || self.jobs.normals.install.is_some() {
+            self.normals_poll();
         }
         if self.jobs.sammie.run.is_some() || self.jobs.sammie.install.is_some() || self.jobs.sammie.edited.is_some() {
             self.sammie_poll();
@@ -14395,6 +14429,7 @@ impl Gfx {
                         NodeKind::Read { .. }
                             | NodeKind::GraphBake { .. }
                             | NodeKind::CorridorKey(_)
+                            | NodeKind::Normals(_)
                             | NodeKind::Sammie(_)
                             | NodeKind::MorphDissolve(_)
                             | NodeKind::Flow(_)
@@ -23612,6 +23647,8 @@ impl Gfx {
                 let mut genai_click: Option<genaiui::Action> = None;
                 let corridor_view = self.corridor_view(node);
                 let mut corridor_click: Option<corridorkey::Action> = None;
+                let normals_view = self.normals_view(node);
+                let mut normals_click: Option<normals::Action> = None;
                 let sammie_view = self.sammie_view(node);
                 let mut sammie_click: Option<sammie::Action> = None;
                 let flow_view = self.flow_view(node);
@@ -24339,6 +24376,9 @@ impl Gfx {
                     NodeKind::CorridorKey(cp) => {
                         corridor_click = nodes::corridorkey::panel(ui, node, cp, &corridor_view);
                     }
+                    NodeKind::Normals(np) => {
+                        normals_click = nodes::normals::panel(ui, node, np, &normals_view);
+                    }
                     NodeKind::Sammie(sp) => {
                         sammie_click = nodes::sammie::panel(ui, node, sp, &sammie_view);
                     }
@@ -24415,6 +24455,12 @@ impl Gfx {
                     NodeKind::Refract(p) => {
                         let camera = wired[engine::nodes::refract::CAMERA_INPUT];
                         if let Some(h) = nodes::refract::panel(ui, &mut rcx, p, &tab, camera) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::Relight(p) => {
+                        let w = [wired[0], wired[1], wired[2], wired[3]];
+                        if let Some(h) = nodes::relight::panel(ui, &mut rcx, node, p, w) {
                             hud_drag_out = Some(h);
                         }
                     }
@@ -25229,6 +25275,9 @@ impl Gfx {
                 }
                 if let Some(a) = corridor_click {
                     self.corridor_action(key, a);
+                }
+                if let Some(a) = normals_click {
+                    self.normals_action(key, a);
                 }
                 if let Some(a) = sammie_click {
                     self.sammie_action(key, a);
@@ -26485,6 +26534,7 @@ fn motion_blur_samples(
                                     k,
                                     NodeKind::GraphBake { .. }
                                         | NodeKind::CorridorKey(_)
+                                        | NodeKind::Normals(_)
                                         | NodeKind::Sammie(_)
                                         | NodeKind::MorphDissolve(_)
                                         | NodeKind::Flow(_)

@@ -514,6 +514,8 @@ slots! {
         node_despill: "Despill" = shade(S::family_matte, rgb(0x5a, 0x9a, 0x7a));
         node_corridor_key: "CorridorKey" = shade(S::family_matte, rgb(0x3c, 0xb0, 0x8e));
         node_sammie: "Sammie" = shade(S::family_matte, rgb(0x5a, 0x9c, 0xc8));
+        node_normals: "Normals" = shade(S::family_filter, rgb(0x7c, 0x6e, 0xc4));
+        node_relight: "Relight" = shade(S::family_filter, rgb(0xa8, 0x9a, 0x5e));
         node_layer: "Layer" = shade(S::family_merge, rgb(0x8a, 0x82, 0x6e));
         node_loop: "LoopIn / LoopOut" = shade(S::family_time, rgb(0xc0, 0x6a, 0x2e));
         node_luma_key: "LumaKey" = shade(S::family_matte, rgb(0x7a, 0xa8, 0x9a));

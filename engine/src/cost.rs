@@ -188,6 +188,14 @@ pub fn licence_of(kind: &NodeKind) -> Licence {
     if let NodeKind::LtxHdr(_) = kind {
         return Licence::Restricted;
     }
+    // NormalCrafter's weights are fetched by its tool, and are a
+    // fine-tune of Stable Video Diffusion: the Stability AI Community
+    // Licence (a revenue cap, registration, an acceptable-use policy)
+    // comes with them whatever their own card says. Tagged whether or not
+    // a result is loaded; a bake does not clear it.
+    if let NodeKind::Normals(_) = kind {
+        return Licence::Restricted;
+    }
     if crate::models::all_commercial(kind.models()) {
         Licence::Permissive
     } else {
@@ -217,6 +225,7 @@ pub fn clears_slow(kind: &NodeKind, is_loaded: bool) -> bool {
                 | NodeKind::SoftCrop(_)
                 | NodeKind::Cryptomatte(_)
                 | NodeKind::CorridorKey(_)
+                | NodeKind::Normals(_)
                 | NodeKind::Flow(_)
                 | NodeKind::Rifetime(_)
                 // Flow-mode frames on disk (only ever loaded in flow mode).
@@ -364,6 +373,9 @@ mod tests {
             NodeKind::GraphBake { source: 0, baked: false, start: None, mask: false, window: None, matte_half: false, single: false },
             NodeKind::GenAi(Default::default()),
             NodeKind::CorridorKey(Default::default()),
+            NodeKind::Normals(Default::default()),
+            NodeKind::Normals(crate::graph::NormalsParams { loaded: true, ..Default::default() }),
+            NodeKind::Relight(Default::default()),
             NodeKind::Sammie(Default::default()),
             NodeKind::Flow(Default::default()),
             NodeKind::Rifetime(Default::default()),
@@ -577,6 +589,23 @@ mod tests {
             assert!(clears_slow(&loaded, true));
             assert_eq!(licence_of(&loaded) == Licence::NonCommercial, nc);
         }
+    }
+
+    /// Normals: restricted (SVD-derived weights), loaded or not; a loaded
+    /// result clears slow like any reader; never a stage. Relight is a
+    /// stage, and licence-clean on its own.
+    #[test]
+    fn a_normals_node_is_restricted_and_a_relight_is_a_clean_stage() {
+        use crate::graph::NormalsParams;
+        for loaded in [false, true] {
+            let k = NodeKind::Normals(NormalsParams { loaded, ..Default::default() });
+            assert_eq!(licence_of(&k), Licence::Restricted);
+            assert_eq!(clears_slow(&k, loaded), loaded);
+            assert_eq!(speed_of(&k), Speed::Fast, "a reader, never a stage");
+        }
+        let r = NodeKind::Relight(Default::default());
+        assert_eq!(licence_of(&r), Licence::Permissive);
+        assert_eq!(speed_of(&r), Speed::Slow);
     }
 
     /// DiffusionLight: MIT on OpenRAIL++-M and Apache-2.0 weights, so never

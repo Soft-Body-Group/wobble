@@ -1550,6 +1550,8 @@ impl EditorGraph {
         engine::nodes::env::lower(&mut g);
         // A Refract's, the same.
         engine::nodes::refract::lower(&mut g);
+        // A Relight's environment comes in whole, fitted to its format.
+        engine::nodes::relight::lower(&mut g);
         // A Starfield's camera becomes its uniforms, the wire dropped.
         engine::nodes::starfield::lower(&mut g);
         // A Splat's camera lands on the node, the wire dropped; its depth

@@ -9,6 +9,7 @@ pub(crate) struct NodeJobs {
     /// GenAI runs: capture, quote, the one job going, the account.
     pub(crate) genai: genaiui::Runs,
     pub(crate) corridor: corridorkey::Jobs,
+    pub(crate) normals: normals::Jobs,
     pub(crate) sammie: sammie::Jobs,
     pub(crate) flow: flowui::Jobs,
     /// A Stabilize node's analysis (`stabilizeui`).

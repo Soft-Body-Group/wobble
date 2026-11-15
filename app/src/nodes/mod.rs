@@ -74,6 +74,8 @@ pub mod upscale;
 pub mod uvwarp;
 pub mod env;
 pub mod refract;
+pub mod normals;
+pub mod relight;
 pub mod vectorblur;
 pub mod vectorwarp;
 pub mod todata;

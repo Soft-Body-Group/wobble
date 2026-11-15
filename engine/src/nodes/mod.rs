@@ -48,6 +48,8 @@ pub mod lut;
 pub mod text;
 pub mod burnin;
 pub mod lightwrap;
+pub mod normals;
+pub mod relight;
 pub mod glint;
 pub mod diffuse;
 pub mod glow;
@@ -187,6 +189,10 @@ pub fn builtin_pass_wgsl() -> Vec<&'static str> {
         lightwrap::PACK_H_WGSL,
         lightwrap::V_WGSL,
         lightwrap::COMP_WGSL,
+        relight::DOWN_WGSL,
+        relight::IRR_WGSL,
+        relight::SPEC_WGSL,
+        relight::COMP_WGSL,
         vectorblur::WGSL,
         vectorblur::MOD_WGSL,
     ]

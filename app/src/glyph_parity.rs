@@ -112,6 +112,8 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::UvWarp(_) => Icon::UvWarp,
         NodeKind::Env(_) => Icon::Env,
         NodeKind::Refract(_) => Icon::Refract,
+        NodeKind::Normals(_) => Icon::Normals,
+        NodeKind::Relight(_) => Icon::Relight,
         NodeKind::GridWarp(_) => Icon::GridWarp,
         NodeKind::Warp(_) => Icon::Warp,
         NodeKind::Premult { premult: true } => Icon::Premult,

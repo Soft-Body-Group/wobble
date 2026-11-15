@@ -109,6 +109,8 @@ pub enum Icon {
     UvWarp,
     Env,
     Refract,
+    Normals,
+    Relight,
     GridWarp,
     Warp,
     Spline,
@@ -222,6 +224,8 @@ pub const NODES: &[Node] = &[
     n(Icon::Scene3d, "Blend 3D", Slot::node_scene3d),
     n(Icon::Render3d, "Render3D", Slot::node_render3d),
     n(Icon::Env, "Env", Slot::node_env),
+    n(Icon::Normals, "Normals", Slot::node_normals),
+    n(Icon::Relight, "Relight", Slot::node_relight),
     n(Icon::VectorWarp, "VectorWarp", Slot::node_vector_warp),
     n(Icon::Defocus, "Defocus", Slot::node_defocus),
     n(Icon::Glow, "Glow", Slot::node_glow),
@@ -735,6 +739,8 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         Icon::UvWarp => uvwarp(painter, sp, r, fill, stroke),
         Icon::Env => env(painter, sp, r, fill, stroke),
         Icon::Refract => refract(painter, sp, r, fill, stroke),
+        Icon::Normals => normals(painter, sp, r, fill, stroke),
+        Icon::Relight => relight(painter, sp, r, fill, stroke),
         Icon::GridWarp => gridwarp(painter, sp, r, fill, stroke),
         Icon::Warp => warp(painter, sp, r, fill, stroke),
         Icon::SoftCrop => {
@@ -1570,6 +1576,47 @@ fn gridwarp(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
 
 /// `app/src/nodes/uvwarp.rs` `glyph`.
 /// A globe with its meridians, under a frame: the sky through a camera.
+/// `app/src/nodes/normals.rs` `glyph`.
+fn normals(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let sq = egui::Rect::from_center_size(c, Vec2::splat(r * 1.7));
+    painter.rect(sq, r * 0.35, fill, stroke, egui::StrokeKind::Middle);
+    let ink = Stroke::new((r * 0.12).max(1.0), theme::node_ink());
+    let base = Pos2::new(c.x, c.y + r * 0.45);
+    let rr = r * 0.55;
+    let n = 12;
+    let arc: Vec<Pos2> = (0..=n)
+        .map(|i| {
+            let t = std::f32::consts::PI * i as f32 / n as f32;
+            Pos2::new(base.x - rr * t.cos(), base.y - rr * t.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(arc, ink));
+    for a in [-0.55f32, 0.0, 0.55] {
+        let t = std::f32::consts::FRAC_PI_2 + a;
+        let (dx, dy) = (-t.cos(), -t.sin());
+        let p0 = Pos2::new(base.x + rr * dx, base.y + rr * dy);
+        let p1 = Pos2::new(base.x + (rr + r * 0.38) * dx, base.y + (rr + r * 0.38) * dy);
+        painter.line_segment([p0, p1], ink);
+    }
+}
+
+/// `app/src/nodes/relight.rs` `glyph`.
+fn relight(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let rr = r * 0.8;
+    painter.circle(c, rr, fill, stroke);
+    let ink = crate::theme::node_ink();
+    let n = 16;
+    // The terminator: a half-ellipse from top to bottom, lit side left.
+    let pts: Vec<Pos2> = (0..=n)
+        .map(|i| {
+            let t = std::f32::consts::PI * (i as f32 / n as f32 - 0.5);
+            Pos2::new(c.x + 0.35 * rr * t.cos(), c.y + rr * t.sin())
+        })
+        .collect();
+    painter.add(egui::Shape::line(pts, Stroke::new((r * 0.1).max(1.0), ink)));
+    painter.circle_filled(Pos2::new(c.x - rr * 0.42, c.y - rr * 0.42), (r * 0.16).max(1.5), ink);
+}
+
 fn env(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
     let rr = r * 0.82;
     painter.circle(c, rr, fill, stroke);

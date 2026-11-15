@@ -1075,6 +1075,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         e(Filter, "EdgeDetect", false, |_| NodeKind::EdgeDetect(Default::default())),
         e(Filter, "Diffuse", false, |_| NodeKind::Diffuse(Default::default())),
         e(Filter, "Lightwrap", false, |_| NodeKind::Lightwrap(Default::default())),
+        // An environment's light added to the plate through its normals
+        // (a Normals node's, or any normal map): diffuse and specular.
+        e(Filter, "Relight", false, |_| NodeKind::Relight(Default::default())),
         // --- matte ------------------------------------------------------
         e(Matte, "ToMatte", false, |_| NodeKind::ToMatte(Default::default())),
         // Not a matte: the pipe next door. It sits here because the gesture
@@ -1092,6 +1095,10 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // Corridor Digital's neural keyer, run as a process on a click; the
         // result plays through the reader slot like a bake.
         e(Ai, "CorridorKey", true, |s| NodeKind::CorridorKey(engine::graph::CorridorKeyParams::new(s))),
+        // NormalCrafter: temporally steady camera-space normals for a clip
+        // on a click, played back like a bake. Restricted licence (an SVD
+        // fine-tune), tagged.
+        e(Ai, "Normals", true, |s| NodeKind::Normals(engine::graph::NormalsParams::new(s))),
         // Click-to-roto: SAM 2 tracks what you click, optionally matted by
         // MatAnyone; a process on a click, played back like a bake.
         e(Ai, "Sammie", true, |s| NodeKind::Sammie(engine::graph::SammieParams::new(s))),
@@ -2144,6 +2151,8 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         // somebody set for "Tinter" before the prune is its colour again.
         NodeKind::ColorSlice(_) => t::node_tinter(),
         NodeKind::MatteIn => t::node_matte_in(),
+        NodeKind::Normals(_) => t::node_normals(),
+        NodeKind::Relight(_) => t::node_relight(),
         // STOPGAP for the colour-keyer lane so the tree compiles; replace
         // with that lane's own colour and glyph.
         NodeKind::Keyer(_) => t::node_keyer(),
@@ -2715,6 +2724,8 @@ pub(crate) fn paint_body(
         NodeKind::UvWarp(_) => crate::nodes::uvwarp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Env(_) => crate::nodes::env::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Refract(_) => crate::nodes::refract::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Normals(_) => crate::nodes::normals::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Relight(_) => crate::nodes::relight::glyph(&painter, sp, r, fill, stroke),
         NodeKind::GridWarp(_) => crate::nodes::gridwarp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Warp(_) => crate::nodes::warp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::ToRgba(_) => {

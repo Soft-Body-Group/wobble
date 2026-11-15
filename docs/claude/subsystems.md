@@ -1945,6 +1945,90 @@ shared with `corridorkey.rs`. README has the user-facing story.
   <dir> --model Efficient [--matting matanyone2]` against an `Input/` of
   EXRs and a `points.json`).
 
+## Normals node (`engine/src/nodes/normals.rs`, `app/src/normals.rs`, `tools/wobble_normals.py`)
+
+NormalCrafter (Bin et al., ICCV 2025) as a process-backed reader, the
+Depth pattern (CorridorKey's `spawn`/`Msg`/`uv`, Upscale's
+`render_input_frames`). What must stay true:
+
+- **The weights are the TOOL's** (the CorridorKey precedent, not the
+  catalog's): the driver loads `Yanrui95/NormalCrafter` — the whole
+  pipeline lives in that one repo, so SVD itself is never fetched — at a
+  PINNED revision (`REVISION`; `the_weights_are_pinned_to_a_revision`). A
+  new revision is a driver change and a re-test, never a float.
+- **Licence: `Restricted`, always** (`cost::licence_of`). The code is MIT
+  and the model card says Apache-2.0, but the weights are an SVD-XT
+  fine-tune, so the Stability AI Community Licence travels with them. A
+  loaded result clears slow, never the tag.
+- **The pin is a commit AND a pyproject.** Upstream pins torch 2.0.1 +
+  xformers + CUDA 11 wheels, which cannot run on an RTX 50-series (sm_120);
+  `install…` writes `normals::PYPROJECT` (torch >= 2.8, diffusers 0.33.1,
+  no xformers) and `installed()` is false while the checkout's differs.
+- **The driver re-does the tool's `__call__` window by window** with its
+  own `get_ses`, `generate` and linear latent blend, so the decode
+  STREAMS: frames are encoded (CLIP + per-frame VAE encode, two at a time)
+  into latents held on the GPU (1/8 size), and each result frame is
+  decoded, unpadded, scaled back to the plate and written as soon as no
+  later window can touch it. A clip shorter than a window repeats its last
+  frame. Measured on a 5080 (16 GB, shared): 30 frames at 1024 in ~22 s,
+  12.1 GB peak.
+- **Out of memory scales down, never fails outright**: a decode OOM halves
+  the temporal decode chunk for the rest of the run; any other OOM
+  restarts the clip at 0.8x the resolution (and puts the VAE back in fp16:
+  an OOM inside its fp32 upcast leaves it in fp32); a load that does not
+  fit moves to `enable_model_cpu_offload`.
+- **The result is `R G B` = the unit camera-space normal** (x right, y up,
+  z towards the camera; checked on a plate: the ground reads +y), half
+  float, `Normals/meta.json` with `layout` (`normals::LAYOUT`, in the
+  directory key). On the image pipe (multi-channel data stays there:
+  `PortKind::Data`'s note), no input transform. `flip_x` / `flip_y` /
+  `encode01` are uniforms (`NormalsParams::derive` is the CPU mirror);
+  `recipe()` (res, window, stride) is the directory key.
+- No UI suite yet: the real check is the driver on its own
+  (`uv run --project ~/.wobble/NormalCrafter python wobble_normals.py
+  --shot <dir with Input/>`) or `node_run` through the API, which is how
+  it was proven.
+
+## Relight node (`engine/src/nodes/relight.rs`, `app/src/nodes/relight.rs`)
+
+A latlong's light added to a plate through its normals. A STAGE (Slow,
+rule 8), licence-clean on its own. What must stay true:
+
+- **Ports**: plate 0, normals 1, depth 2 (optional), environment 3, mask
+  4. Unwired normals OR environment: no passes, the plate passes through
+  (`aux_ports` empty). `aux0` normals, `aux1` environment, `aux2` depth
+  only when wired (the light pass binds `a` in its place and a uniform
+  says so: `aux_fmt.len() > 3`).
+- **The environment arrives whole**: an aux port is rendered at the
+  canvas in PIXELS, which would crop a latlong of any other size.
+  `relight::lower` (run in `doc/graph.rs` next to `env::lower`) mints a
+  Reformat with `size (0, 0)` — "the format I am stamped with", which
+  `codegen`'s Reformat pack honours — distort, top-left, aliased to the
+  Relight's format; the passes read the latlong's region through
+  `aux_fmt[1]`.
+- **The chain**: the environment averaged to 128x64 rgba32f (exposure and
+  spin applied, 12x12 bilinear taps a texel), a 32x16 irradiance / pi map,
+  four 64x32 GGX-prefiltered levels at roughness 1/4..1 stacked in one
+  texture (n = v = r), then the light pass. Roughness under 1/4 blends in
+  the FULL-resolution environment for the mirror end. ~70M taps a frame
+  for the reduction, whatever the plate's size.
+- **Conventions are the Env node's**: Blender's equirectangular mapping
+  (`ll_uv` / `ll_dir`, middle = -X), the camera `rotate` (default
+  `[0, 90, 0]`, looking at the latlong's middle) and focal/aperture turn
+  camera-space normals and pixel rays into the latlong's space. Normals
+  are camera space, x right, y up, z to camera, with 0..1 / flip toggles.
+- **The maths** (`RelightParams::shade` / `fresnel` are the CPU mirrors):
+  albedo = `mix(1, clamp(plate), from_plate) * albedo`; out = plate +
+  intensity (diffuse (1 - F) albedo E + specular F S) plate.a, or the
+  light alone; F is Schlick with the roughness term. A zero-length normal
+  (an unrun Normals node) adds nothing.
+- **Depth makes the environment finite**: with `radius` > 0 each lookup
+  starts from the pixel's position (ray x depth / -ray.z) and meets a
+  sphere of that radius round the camera; radius 0 or no depth is
+  infinity.
+- `relight::tests::every_pass_validates` runs naga over all four modules;
+  the passes also compile at startup (`nodes::builtin_pass_wgsl`).
+
 ## Screen recorder (`app/src/recorder.rs`, `recorder/`)
 
 A record button in the menubar (⌘⇧R; right-click for window / viewer,

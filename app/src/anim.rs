@@ -2144,6 +2144,10 @@ pub fn channels_for(kind: &NodeKind) -> Vec<Channel> {
     if let NodeKind::Refract(_) = kind {
         v.extend(crate::nodes::refract::dyn_channels());
     }
+    // A Relight's numbers, as `relight.<name>` (`nodes::relight`).
+    if let NodeKind::Relight(_) = kind {
+        v.extend(crate::nodes::relight::dyn_channels());
+    }
     // A Lens Flare's numbers, as `flare.<name>` (`nodes::lensflare`).
     if let NodeKind::LensFlare(_) = kind {
         v.extend(crate::nodes::lensflare::dyn_channels());
@@ -2472,6 +2476,7 @@ pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
         (NodeKind::Text(p), _) => return crate::nodes::text::get(p, ch),
         (NodeKind::Env(p), _) => return crate::nodes::env::get(p, ch),
         (NodeKind::Refract(p), _) => return crate::nodes::refract::get(p, ch),
+        (NodeKind::Relight(p), _) => return crate::nodes::relight::get(p, ch),
         (NodeKind::Starfield(p), _) => return crate::nodes::starfield::get(p, ch),
         (NodeKind::Splat(p), _) => return crate::nodes::splat::get(p, ch),
         (NodeKind::Planet(p), _) => return crate::nodes::planet::get(p, ch),
@@ -2774,6 +2779,7 @@ pub fn set(kind: &mut NodeKind, ch: Channel, v: f32) {
         (NodeKind::Text(p), _) => crate::nodes::text::set(p, ch, v),
         (NodeKind::Env(p), _) => crate::nodes::env::set(p, ch, v),
         (NodeKind::Refract(p), _) => crate::nodes::refract::set(p, ch, v),
+        (NodeKind::Relight(p), _) => crate::nodes::relight::set(p, ch, v),
         (NodeKind::Starfield(p), _) => crate::nodes::starfield::set(p, ch, v),
         (NodeKind::Splat(p), _) => crate::nodes::splat::set(p, ch, v),
         (NodeKind::Planet(p), _) => crate::nodes::planet::set(p, ch, v),
