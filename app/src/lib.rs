@@ -93,6 +93,7 @@ mod hdrcnnui;
 mod seedvr;
 mod depth;
 mod ltxhdr;
+mod difflight;
 mod sammie;
 mod textui;
 mod tracker;
@@ -2971,6 +2972,7 @@ impl Options {
             || self.test_seedvr
             || self.test_depth
             || self.test_ltxhdr
+            || self.test_difflight
             || self.test_upscale
             || self.test_hdrcnn
             || self.test_flow
@@ -3122,6 +3124,7 @@ mod options_tests {
             ("seedvr", |o| o.test_seedvr = true),
             ("depth", |o| o.test_depth = true),
             ("ltxhdr", |o| o.test_ltxhdr = true),
+            ("difflight", |o| o.test_difflight = true),
             ("upscale", |o| o.test_upscale = true),
             ("hdrcnn", |o| o.test_hdrcnn = true),
             ("flow", |o| o.test_flow = true),
@@ -3542,6 +3545,8 @@ struct Options {
     test_depth: bool,
     /// --test-ltxhdr: an LTX HDR node against the stand-in tool.
     test_ltxhdr: bool,
+    /// --test-difflight: a DiffusionLight node against the stand-in tool.
+    test_difflight: bool,
     /// --test-upscale: an Upscale node with the real compact network.
     test_upscale: bool,
     /// --test-hdrcnn: an HDRCNN node with the real network.
@@ -3682,6 +3687,7 @@ fn base_options() -> Options {
         test_seedvr: false,
         test_depth: false,
         test_ltxhdr: false,
+        test_difflight: false,
         test_upscale: false,
         test_hdrcnn: false,
         test_flow: false,
@@ -3818,6 +3824,13 @@ pub fn run() -> anyhow::Result<()> {
             "--test-seedvr" => opts.test_seedvr = true,
             "--test-depth" => opts.test_depth = true,
             "--test-ltxhdr" => opts.test_ltxhdr = true,
+            "--test-difflight" => opts.test_difflight = true,
+            // The stand-in DiffusionLight-Turbo `--test-difflight` runs
+            // (`difflight::fake`).
+            "--difflight-fake" => {
+                let rest: Vec<String> = args.collect();
+                return difflight::fake(&rest);
+            }
             // The stand-in LTX-2 `--test-ltxhdr` runs (`ltxhdr::fake`).
             "--ltxhdr-fake" => {
                 let rest: Vec<String> = args.by_ref().collect();
@@ -4348,6 +4361,9 @@ enum BakeSink {
     Depth,
     /// An LTX HDR node rendering its input for the tool (`ltxhdr.rs`).
     LtxHdr,
+    /// A DiffusionLight node rendering its input for the tool
+    /// (`difflight.rs`).
+    DiffLight,
     /// A Stabilize node rendering input `port` (0 the picture, 1 the
     /// matte) for the camera solve (`stabilizeui.rs`).
     Stabilize { port: usize },
@@ -4377,7 +4393,7 @@ impl SubtreeBake {
                 .dir
                 .join(if *port == 0 { "Input" } else { "AlphaHint" })
                 .join(corridorkey::frame_name(tick)),
-            BakeSink::Sammie | BakeSink::Flow | BakeSink::Upscale | BakeSink::HdrCnn | BakeSink::SeedVr | BakeSink::Depth | BakeSink::LtxHdr => {
+            BakeSink::Sammie | BakeSink::Flow | BakeSink::Upscale | BakeSink::HdrCnn | BakeSink::SeedVr | BakeSink::Depth | BakeSink::LtxHdr | BakeSink::DiffLight => {
                 self.dir.join("Input").join(corridorkey::frame_name(tick))
             }
             BakeSink::Morph { port } => self
@@ -5696,6 +5712,13 @@ fn repair_reader_slots(g: &mut EditorGraph) -> usize {
                     next += 1;
                 }
             }
+            NodeKind::DiffLight(p) => {
+                if p.source != usize::MAX && !seen.insert(p.source) {
+                    p.source = next;
+                    seen.insert(next);
+                    next += 1;
+                }
+            }
             NodeKind::Sammie(p) => {
                 if p.source != usize::MAX && !seen.insert(p.source) {
                     p.source = next;
@@ -6670,6 +6693,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             seedvr: opts.test_seedvr.then(Default::default),
             depth: opts.test_depth.then(Default::default),
             ltxhdr: opts.test_ltxhdr.then(Default::default),
+            difflight: opts.test_difflight.then(Default::default),
             upscale: opts.test_upscale.then(Default::default),
             hdrcnn: opts.test_hdrcnn.then(Default::default),
             flow: opts.test_flow.then(Default::default),
@@ -6779,6 +6803,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             seedvr: Default::default(),
             depth: Default::default(),
             ltxhdr: Default::default(),
+            difflight: Default::default(),
         },
         render_play: None,
         render_status: None,
@@ -7874,6 +7899,11 @@ impl Gfx {
                     p.loaded = loaded.is_some();
                     p.start = loaded.and_then(|l| l.first_frame);
                 }
+                if let NodeKind::DiffLight(p) = kind {
+                    let loaded = self.loaded.get(id);
+                    p.loaded = loaded.is_some();
+                    p.start = loaded.and_then(|l| l.first_frame);
+                }
             }
             eval_graph.view = Some(bake.input);
             // A Crop's own bake renders the crop, not the Bake it lowered to.
@@ -8040,6 +8070,8 @@ impl Gfx {
                 BakeSink::Depth => Some(engine::color::Colorspace::LINEAR_REC709),
                 // LTX's HDR pipeline is fed ACEScg (`--input-colorspace acescg`).
                 BakeSink::LtxHdr => Some(engine::color::Colorspace::ACESCG),
+                // The DiffusionLight driver reads linear Rec.709 and encodes it.
+                BakeSink::DiffLight => Some(engine::color::Colorspace::LINEAR_REC709),
                 // The camera solve reads a picture like the Flow's; its
                 // matte is coverage and needs no transform.
                 BakeSink::Stabilize { port: 0 } | BakeSink::CamTrack { port: 0 } => {
@@ -8248,6 +8280,10 @@ impl Gfx {
             self.ltxhdr_render_finished(bake.node);
             return;
         }
+        if let BakeSink::DiffLight = bake.sink {
+            self.difflight_render_finished(bake.node);
+            return;
+        }
         if let BakeSink::Flow = bake.sink {
             self.flow_render_finished(bake.node);
             return;
@@ -8391,6 +8427,11 @@ impl Gfx {
                 (p.top, p.metric_take) = loaded.and_then(|l| self.jobs.depth.stats.get(&l.path).copied()).unwrap_or((1.0, false));
             }
             if let NodeKind::LtxHdr(p) = kind {
+                let loaded = self.loaded.get(id);
+                p.loaded = loaded.is_some();
+                p.start = loaded.and_then(|l| l.first_frame);
+            }
+            if let NodeKind::DiffLight(p) = kind {
                 let loaded = self.loaded.get(id);
                 p.loaded = loaded.is_some();
                 p.start = loaded.and_then(|l| l.first_frame);
@@ -8740,6 +8781,7 @@ impl Gfx {
         self.seedvr_adopt();
         self.depth_adopt();
         self.ltxhdr_adopt();
+        self.difflight_adopt();
     }
 
     /// Committing the bin is the end of the errand: one Read per pick, then
@@ -9889,7 +9931,8 @@ impl Gfx {
                 | NodeKind::HdrCnn(_)
                 | NodeKind::SeedVr(_)
                 | NodeKind::Depth(_)
-                | NodeKind::LtxHdr(_) => self.loaded.get(id).map(|l| {
+                | NodeKind::LtxHdr(_)
+                | NodeKind::DiffLight(_) => self.loaded.get(id).map(|l| {
                     (slot, l.seq.clone(), ReaderCacheOpts { ram: true, disk: false, write: true }, map, None)
                 }),
                 // A selected channel is a reader of the UPSTREAM Read's
@@ -10868,7 +10911,8 @@ impl Gfx {
             | NodeKind::Upscale(_)
             | NodeKind::HdrCnn(_)
             | NodeKind::SeedVr(_)
-            | NodeKind::Depth(_) => match self.loaded.get(&id) {
+            | NodeKind::Depth(_)
+            | NodeKind::DiffLight(_) => match self.loaded.get(&id) {
                 // A proxy Bake's half-res frames stand for the full-res
                 // format (`proxy_dims` halves it back).
                 Some(l) => Some((l.seq.info.width * l.seq.proxy, l.seq.info.height * l.seq.proxy)),
@@ -11614,6 +11658,9 @@ impl Gfx {
         }
         if self.jobs.ltxhdr.run.is_some() || self.jobs.ltxhdr.install.is_some() || self.jobs.ltxhdr.fetch.is_some() {
             self.ltxhdr_poll();
+        }
+        if self.jobs.difflight.run.is_some() || self.jobs.difflight.install.is_some() || self.jobs.difflight.fetch.is_some() {
+            self.difflight_poll();
         }
         if self.planar_job.is_some() {
             self.poll_planar();
@@ -12626,6 +12673,7 @@ impl Gfx {
         self.drive_test_seedvr();
         self.drive_test_depth();
         self.drive_test_ltxhdr();
+        self.drive_test_difflight();
         self.drive_test_upscale();
         self.drive_test_hdrcnn();
         self.drive_test_flow();
@@ -14357,6 +14405,7 @@ impl Gfx {
                             | NodeKind::SeedVr(_)
                             | NodeKind::Depth(_)
                             | NodeKind::LtxHdr(_)
+                            | NodeKind::DiffLight(_)
                     )
                 })
                 .map(|n| n.kind.clone())
@@ -23584,6 +23633,8 @@ impl Gfx {
                 let mut depth_click: Option<depth::Action> = None;
                 let ltxhdr_view = self.ltxhdr_view(node);
                 let mut ltxhdr_click: Option<ltxhdr::Action> = None;
+                let difflight_view = self.difflight_view(node);
+                let mut difflight_click: Option<difflight::Action> = None;
                 // The format feeding it, read before the node is borrowed.
                 let input_fmt = self
                     .egraph
@@ -24784,6 +24835,9 @@ impl Gfx {
                     NodeKind::Depth(p) => {
                         depth_click = nodes::depth::panel(ui, node, p, &depth_view);
                     }
+                    NodeKind::DiffLight(p) => {
+                        difflight_click = nodes::difflight::panel(ui, node, p, &difflight_view);
+                    }
                     NodeKind::LtxHdr(p) => {
                         let (a, h) = nodes::ltxhdr::panel(ui, &mut rcx, node, p, &ltxhdr_view);
                         ltxhdr_click = a;
@@ -25193,6 +25247,9 @@ impl Gfx {
                 }
                 if let Some(a) = ltxhdr_click {
                     self.ltxhdr_action(key, a);
+                }
+                if let Some(a) = difflight_click {
+                    self.difflight_action(key, a);
                 }
                 if let Some(a) = flow_click {
                     self.flow_action(key, a);
@@ -26438,6 +26495,7 @@ fn motion_blur_samples(
                                         | NodeKind::SeedVr(_)
                                         | NodeKind::Depth(_)
                                         | NodeKind::LtxHdr(_)
+                                        | NodeKind::DiffLight(_)
                                 ) => {}
                             Some(s) if std::mem::discriminant(s) == std::mem::discriminant(k) => {
                                 *k = s.clone()

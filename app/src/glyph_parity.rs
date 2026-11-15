@@ -60,6 +60,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::SeedVr(_) => Icon::SeedVr,
         NodeKind::Depth(_) => Icon::Depth,
         NodeKind::LtxHdr(_) => Icon::LtxHdr,
+        NodeKind::DiffLight(_) => Icon::DiffLight,
         NodeKind::ScreenKey(_) => Icon::ScreenKey,
         NodeKind::CorridorKey(_) => Icon::CorridorKey,
         NodeKind::Sammie(_) => Icon::Sammie,

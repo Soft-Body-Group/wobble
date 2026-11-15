@@ -260,6 +260,7 @@ pub fn tiles_for(kind: &NodeKind) -> usize {
         NodeKind::SeedVr(_) => crate::nodes::seedvr::TILES,
         NodeKind::Depth(_) => crate::nodes::depth::TILES,
         NodeKind::LtxHdr(_) => crate::nodes::ltxhdr::TILES,
+        NodeKind::DiffLight(_) => crate::nodes::difflight::TILES,
         NodeKind::ScreenKey(_) => crate::nodes::screenkey::TILES,
         NodeKind::ColorSlice(_) => crate::nodes::colorslice::TILES,
         NodeKind::Blur(_) => crate::nodes::blur::TILES,
@@ -559,6 +560,7 @@ pub fn tile_rows(kind: &NodeKind) -> usize {
         NodeKind::SeedVr(_) => crate::nodes::seedvr::TILE_ROWS,
         NodeKind::Depth(_) => crate::nodes::depth::TILE_ROWS,
         NodeKind::LtxHdr(_) => crate::nodes::ltxhdr::TILE_ROWS,
+        NodeKind::DiffLight(_) => crate::nodes::difflight::TILE_ROWS,
         // Two projections and the volume they project: the plots want a row
         // and the 3D view wants its own.
         NodeKind::Keyer(_) => 2,

@@ -68,6 +68,7 @@ pub enum Icon {
     SeedVr,
     Depth,
     LtxHdr,
+    DiffLight,
     Tinter,
     ScreenKey,
     CorridorKey,
@@ -207,6 +208,7 @@ pub const NODES: &[Node] = &[
     n(Icon::SeedVr, "SeedVR2", Slot::node_seedvr),
     n(Icon::Depth, "Depth", Slot::node_depth),
     n(Icon::LtxHdr, "LTX HDR", Slot::node_ltx_hdr),
+    n(Icon::DiffLight, "DiffusionLight", Slot::node_diffusion_light),
     n(Icon::Tinter, "Tinter", Slot::node_tinter),
     n(Icon::Blur, "Blur", Slot::node_blur),
     n(Icon::MotionBlur, "MotionBlur", Slot::node_motion_blur),
@@ -779,6 +781,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         Icon::SeedVr => seedvr(painter, sp, r, fill, stroke),
         Icon::Depth => depth(painter, sp, r, fill, stroke),
         Icon::LtxHdr => ltxhdr(painter, sp, r, fill, stroke),
+        Icon::DiffLight => difflight(painter, sp, r, fill, stroke),
         Icon::ScreenKey => {
             screenkey(painter, sp, r, fill, stroke)
         }
@@ -2064,6 +2067,24 @@ fn ltxhdr(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
     }
     let y = c.y + r * 0.5;
     painter.line_segment([Pos2::new(c.x - r * 0.7, y), Pos2::new(c.x + r * 0.7, y)], Stroke::new((r * 0.1).max(1.0), ink));
+}
+
+/// `app/src/nodes/difflight.rs` `glyph`.
+fn difflight(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let sq = egui::Rect::from_center_size(c, Vec2::splat(r * 1.7));
+    painter.rect(sq, r * 0.35, fill, stroke, egui::StrokeKind::Middle);
+    let ink = theme::node_ink();
+    let w = (r * 0.1).max(1.0);
+    painter.circle_stroke(c, r * 0.58, Stroke::new(w, ink));
+    let n = 8;
+    let pts: Vec<Pos2> = (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32 * 2.0 - 1.0;
+            c + Vec2::new(t * r * 0.52, (1.0 - t * t) * r * 0.2 + r * 0.02)
+        })
+        .collect();
+    painter.add(egui::Shape::line(pts, Stroke::new(w, ink)));
+    painter.circle_filled(c + Vec2::new(-r * 0.2, -r * 0.26), r * 0.1, ink);
 }
 
 fn lightwrap(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {

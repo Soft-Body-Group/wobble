@@ -158,7 +158,7 @@ B=./target/release/wobble; D=data/2k_zip_bg
 for t in click box slice magnet nodeux blendnav tv mswipe tab quickadd paint anim gizmokey curves keyer setup \
          spline patchlive zoom cachemeter bin browser thumbs dpx plugin \
          curveedit noise geo sdf mblur \
-         nodepack track planar colourkey channels write picker layer shader cost focus keymap cpick zones eyedrop cornerpin gridwarp warp compose subwob blender genai corridor sammie flow seedvr upscale depth ltxhdr stabilize text; do  # + record, with WOBBLE_TEST_FOCUS=1
+         nodepack track planar colourkey channels write picker layer shader cost focus keymap cpick zones eyedrop cornerpin gridwarp warp compose subwob blender genai corridor sammie flow seedvr upscale depth ltxhdr difflight stabilize text; do  # + record, with WOBBLE_TEST_FOCUS=1
   $B $D $D --test-$t 2>/dev/null | grep -E "TEST (PASS|FAIL)"; sleep 1
 done
 ```
@@ -310,6 +310,7 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - Depth node (`engine/src/nodes/depth.rs`, `app/src/depth.rs`, `tools/wobble_depth.py`)
 - HDRCNN node (`engine/src/hdrcnn.rs`, `engine/src/nodes/hdrcnn.rs`, `app/src/hdrcnnui.rs`)
 - LTX HDR node (`engine/src/nodes/ltxhdr.rs`, `app/src/ltxhdr.rs`, `tools/wobble_ltxhdr.py`)
+- DiffusionLight node (`engine/src/nodes/difflight.rs`, `app/src/difflight.rs`, `tools/wobble_difflight.py`)
 - Planar tracker (`engine/src/planar.rs`, `app/src/planarui.rs`)
 - Morph Dissolve (`engine/src/nodes/morphdissolve.rs`, `app/src/nodes/morphdissolve.rs`, `flowsolve::run_pair`)
 - Flow + motion vectors (`engine/src/searaft*`, `engine/src/rife*`, `engine/src/flowsolve.rs`, `engine/src/nodes/flow.rs`, `app/src/flowui.rs`)

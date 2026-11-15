@@ -2111,6 +2111,7 @@ impl Gfx {
             NodeKind::SeedVr(_) => "render",
             NodeKind::Depth(_) => "render",
             NodeKind::LtxHdr(_) => "render",
+            NodeKind::DiffLight(_) => "render",
             NodeKind::GenAi(_) => "quote",
             // A model step inside a GenAI pipeline runs from its own node.
             NodeKind::GenAiStep(genai::Op::Generate { .. } | genai::Op::Comfy { .. }) => "quote",
@@ -2252,6 +2253,14 @@ impl Gfx {
                 }
             }
             (NodeKind::LtxHdr(_), "cancel") => self.ltxhdr_action(id, crate::ltxhdr::Action::Cancel),
+            // Runs on what is installed and fetched; those stay clicks.
+            (NodeKind::DiffLight(_), "render") => {
+                self.difflight_action(id, crate::difflight::Action::Run);
+                if let Some(crate::difflight::Phase::Failed(e)) = self.jobs.difflight.run.as_ref().map(|r| &r.phase) {
+                    return Err(ApiError::app(e.clone()));
+                }
+            }
+            (NodeKind::DiffLight(_), "cancel") => self.difflight_action(id, crate::difflight::Action::Cancel),
             // A quote only: `Confirm` is what bills, and that stays a click.
             (NodeKind::GenAi(_), "quote") => self.genai_action(id, crate::genaiui::Action::Prepare),
             (NodeKind::GenAi(_), "cancel") => self.genai_action(id, crate::genaiui::Action::Cancel),
@@ -2325,6 +2334,7 @@ impl Gfx {
                 crate::BakeSink::SeedVr => "seedvr-input",
                 crate::BakeSink::Depth => "depth-input",
                 crate::BakeSink::LtxHdr => "ltxhdr-input",
+                crate::BakeSink::DiffLight => "difflight-input",
                 crate::BakeSink::Stabilize { .. } => "stabilize-input",
                 crate::BakeSink::CamTrack { .. } => "camtrack-input",
                 crate::BakeSink::Planar => "planar-matte",
@@ -2419,6 +2429,13 @@ impl Gfx {
             };
             jobs.push(json!({ "node": r.node, "kind": "ltxhdr", "done": done, "total": total }));
         }
+        if let Some(r) = self.jobs.difflight.run.as_ref().filter(|r| r.active()) {
+            let (done, total) = match &r.phase {
+                crate::difflight::Phase::Running { done, total, .. } => (*done, *total),
+                _ => (0, 0),
+            };
+            jobs.push(json!({ "node": r.node, "kind": "difflight", "done": done, "total": total }));
+        }
         let errors: Map<String, Value> =
             self.load_errors.iter().map(|(id, e)| (id.to_string(), json!(e))).collect();
         let corridor = self.jobs.corridor.run.as_ref().map(|r| match &r.phase {
@@ -2455,6 +2472,11 @@ impl Gfx {
             "ltxhdr": self.jobs.ltxhdr.run.as_ref().map(|r| match &r.phase {
                 crate::ltxhdr::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
                 crate::ltxhdr::Phase::Done(d) => json!({ "node": r.node, "done": d }),
+                _ => json!({ "node": r.node, "running": true }),
+            }),
+            "difflight": self.jobs.difflight.run.as_ref().map(|r| match &r.phase {
+                crate::difflight::Phase::Failed(e) => json!({ "node": r.node, "failed": e }),
+                crate::difflight::Phase::Done(d) => json!({ "node": r.node, "done": d }),
                 _ => json!({ "node": r.node, "running": true }),
             }),
             "roto": self.jobs.sammie.run.as_ref().map(|r| match &r.phase {

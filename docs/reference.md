@@ -2197,6 +2197,48 @@ commercial use), so the node is tagged whichever is picked. Its own
 side in multiples of 32 (default 1088, never above the plate's). Measured
 on an M4 Pro: hcr080, S at 1088, about 0.7 s a frame, 3.3 GB of GPU memory.
 
+## DiffusionLight — an HDR environment from the plate
+
+AI / ML ▸ **DiffusionLight**:
+[DiffusionLight-Turbo](https://github.com/DiffusionLight/DiffusionLight-Turbo)
+estimates the lighting AROUND the camera from the plate alone, for shots
+where no HDRI was taken. It inpaints a chrome ball into the frame with SDXL
+at three exposures, unwraps the ball and merges the brackets: one HDR
+latlong per frame, to wire into an **Env**'s latlong input and light or
+reflect CG with. It is a MODEL'S GUESS: the half of the world behind the
+camera is invented, plausibly.
+
+- **install…** fetches the pinned checkout into
+  `~/.wobble/DiffusionLight-Turbo` and builds an environment there with
+  `uv` (which must be installed). **fetch weights…** downloads ~11 GB (SDXL
+  base, its depth ControlNet, the method's two LoRAs, DPT-Large) at pinned
+  revisions into `models/` beside the checkout: public, no login. Nothing
+  downloads without a click, and a run is offline.
+- **run** renders the input (linear Rec.709 EXRs), estimates, smooths, and
+  plays the result back through the node at the latlong's own size. Unrun
+  the node is black. About 35 s a frame on an RTX 5080 and ~11 GB of VRAM
+  (three 30-step SDXL inpaints a frame): **every** estimates each Nth frame
+  only, and **steps** trades quality for time.
+- **exposure** (stops) is what the model is shown: an sRGB picture clipped
+  at 1, so expose the plate like a photograph. It is divided back out, and
+  the latlong is in the plate's units.
+- **Every frame is its own guess, so the raw latlongs flicker.** **smooth**
+  averages them over time (sigma in frames). With **follow the plate** on
+  (the default) only the picture of the surroundings is averaged, and each
+  frame's level and colour are taken from that frame of the plate — so a
+  strobe or a colour wash still lands on its own frame instead of being
+  smeared over its neighbours. Smoothing, **every** and **follow** are a
+  second pass over estimates kept on disk: changing them shows STALE, and
+  the re-run takes seconds. A cancelled run resumes from the estimates it
+  made.
+- The latlong is Blender's equirectangular, the Env node's own: its centre
+  is where the camera looks. It is relative to the CAMERA on every frame,
+  not to the world, so under a moving camera leave the Env's view at its
+  default rather than wiring the tracked camera in.
+- Licence: the method and its LoRAs are **MIT**, SDXL and its ControlNet
+  **CreativeML Open RAIL++-M** (commercial use allowed, with restrictions on
+  what the model is used for), DPT-Large **Apache-2.0**. Not tagged.
+
 ## Sammie — click-to-roto with SAM 2
 
 **Sammie** (AI) rotos by clicking. It runs the models

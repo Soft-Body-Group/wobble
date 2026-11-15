@@ -42,7 +42,7 @@ use super::peers::{self, Conn};
 
 /// Node kinds a helper refuses: each starts or talks to something outside
 /// wobble (a process, Blender, a paid service).
-pub const REFUSED: &[&str] = &["Blender", "CorridorKey", "Sammie", "SeedVr", "Depth", "LtxHdr", "GenAi"];
+pub const REFUSED: &[&str] = &["Blender", "CorridorKey", "Sammie", "SeedVr", "Depth", "LtxHdr", "DiffLight", "GenAi"];
 
 /// The kinds in a setup's graph that a helper refuses (nested graphs too).
 pub fn refused_kinds(setup: &Value) -> Vec<String> {

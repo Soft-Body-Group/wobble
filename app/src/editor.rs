@@ -1114,6 +1114,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // a click, composited back where the plate clipped. Restricted
         // licence, tagged.
         e(Ai, "LTX HDR", true, |s| NodeKind::LtxHdr(engine::graph::LtxHdrParams::new(s))),
+        e(Ai, "DiffusionLight", true, |s| NodeKind::DiffLight(engine::graph::DiffLightParams::new(s))),
         // Motion vectors: RIFE on a click, played back like a bake, read by
         // VectorBlur / VectorWarp (or anything else that reads a picture).
         e(Ai, "Flow", true, |s| NodeKind::Flow(engine::graph::FlowParams::new(s))),
@@ -2135,6 +2136,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::SeedVr(_) => t::node_seedvr(),
         NodeKind::Depth(_) => t::node_depth(),
         NodeKind::LtxHdr(_) => t::node_ltx_hdr(),
+        NodeKind::DiffLight(_) => t::node_diffusion_light(),
         NodeKind::ScreenKey(_) => t::node_screen_key(),
         NodeKind::CorridorKey(_) => t::node_corridor_key(),
         NodeKind::Sammie(_) => t::node_sammie(),
@@ -2696,6 +2698,7 @@ pub(crate) fn paint_body(
         NodeKind::SeedVr(_) => crate::nodes::seedvr::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Depth(_) => crate::nodes::depth::glyph(&painter, sp, r, fill, stroke),
         NodeKind::LtxHdr(_) => crate::nodes::ltxhdr::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::DiffLight(_) => crate::nodes::difflight::glyph(&painter, sp, r, fill, stroke),
         NodeKind::ScreenKey(_) => {
             crate::nodes::screenkey::glyph(&painter, sp, r, fill, stroke)
         }

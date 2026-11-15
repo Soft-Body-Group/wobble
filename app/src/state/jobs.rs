@@ -20,4 +20,5 @@ pub(crate) struct NodeJobs {
     pub(crate) seedvr: seedvr::Jobs,
     pub(crate) depth: depth::Jobs,
     pub(crate) ltxhdr: ltxhdr::Jobs,
+    pub(crate) difflight: difflight::Jobs,
 }

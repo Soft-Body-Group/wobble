@@ -27,6 +27,7 @@ pub mod sammie;
 pub mod seedvr;
 pub mod depth;
 pub mod ltxhdr;
+pub mod difflight;
 pub mod hdrcnn;
 pub mod expression;
 pub mod flow;

@@ -225,6 +225,7 @@ pub fn clears_slow(kind: &NodeKind, is_loaded: bool) -> bool {
                 | NodeKind::HdrCnn(_)
                 | NodeKind::SeedVr(_)
                 | NodeKind::Depth(_)
+                | NodeKind::DiffLight(_)
         )
         // A matte off disk reads no plate; a cutout still evaluates it.
         || is_loaded && matches!(kind, NodeKind::Sammie(p) if p.output == crate::graph::SammieOut::Matte)
@@ -284,6 +285,7 @@ mod tests {
             NodeKind::Depth(Default::default()),
             NodeKind::Depth(crate::graph::DepthParams { model: crate::graph::DepthModel::Large, ..Default::default() }),
             NodeKind::LtxHdr(Default::default()),
+            NodeKind::DiffLight(Default::default()),
             NodeKind::HdrCnn(Default::default()),
             NodeKind::HdrCnn(crate::graph::HdrCnnParams { model: crate::graph::HdrCnnModel::Original, ..Default::default() }),
             NodeKind::ScreenKey(Default::default()),
@@ -574,6 +576,20 @@ mod tests {
             let loaded = NodeKind::Depth(DepthParams { model, loaded: true, ..Default::default() });
             assert!(clears_slow(&loaded, true));
             assert_eq!(licence_of(&loaded) == Licence::NonCommercial, nc);
+        }
+    }
+
+    /// DiffusionLight: MIT on OpenRAIL++-M and Apache-2.0 weights, so never
+    /// tagged; its work is a process on a click, so it is never slow, and a
+    /// loaded latlong is frames on disk.
+    #[test]
+    fn a_diffusionlight_node_is_untagged_and_its_latlong_clears_slow() {
+        use crate::graph::DiffLightParams;
+        for loaded in [false, true] {
+            let k = NodeKind::DiffLight(DiffLightParams { loaded, ..Default::default() });
+            assert_eq!(licence_of(&k), Licence::Permissive);
+            assert_eq!(speed_of(&k), Speed::Fast);
+            assert_eq!(clears_slow(&k, loaded), loaded);
         }
     }
 

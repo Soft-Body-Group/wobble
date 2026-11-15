@@ -44,6 +44,7 @@ pub use crate::nodes::upscale::{UpscaleModel, UpscaleParams, UpscaleScale};
 pub use crate::nodes::seedvr::{SeedColour, SeedModel, SeedVrParams};
 pub use crate::nodes::depth::{DepthModel, DepthOut, DepthParams};
 pub use crate::nodes::ltxhdr::{LtxHdrParams, LtxOffload, LtxScale};
+pub use crate::nodes::difflight::{DiffLightParams, DiffLightSize};
 pub use crate::nodes::hdrcnn::{HdrCnnModel, HdrCnnParams};
 pub use crate::nodes::stabilize::{StabMode, StabModel, StabPath, StabPathRef, StabilizeParams};
 pub use crate::nodes::camtrack::{CamSolve, CamSolveRef, CamTrackParams};
@@ -517,6 +518,9 @@ pub enum NodeKind {
     /// LTX-2.5 SDR-to-HDR as a process-backed reader, composited back
     /// where the input clipped (`nodes::ltxhdr`).
     LtxHdr(LtxHdrParams),
+    /// DiffusionLight-Turbo as a process-backed reader: an HDR latlong
+    /// estimated from the plate, per frame (`nodes::difflight`).
+    DiffLight(DiffLightParams),
     /// A green / blue screen keyer: a colour-difference matte normalised to
     /// the sampled screen, a luma-preserving despill, premultiplied out.
     /// See [`crate::nodes::screenkey`].
@@ -6392,6 +6396,7 @@ impl NodeKind {
             NodeKind::SeedVr(p) => Some(p.source),
             NodeKind::Depth(p) => Some(p.source),
             NodeKind::LtxHdr(p) => Some(p.source),
+            NodeKind::DiffLight(p) => Some(p.source),
             // A Crop owns a slot once it has baked itself.
             NodeKind::SoftCrop(p) => p.bake,
             _ => None,
@@ -6433,6 +6438,7 @@ impl NodeKind {
             NodeKind::SeedVr(p) => p.start,
             NodeKind::Depth(p) => p.start,
             NodeKind::LtxHdr(p) => p.start,
+            NodeKind::DiffLight(p) => p.start,
             // A still take holds everywhere; a VIDEO take plays from the
             // tick it was captured at, which is where its first frame
             // belongs.
@@ -6582,6 +6588,7 @@ impl NodeKind {
             NodeKind::SeedVr(_) => SeedVrParams::INPUTS,
             NodeKind::Depth(_) => DepthParams::INPUTS,
             NodeKind::LtxHdr(_) => LtxHdrParams::INPUTS,
+            NodeKind::DiffLight(_) => DiffLightParams::INPUTS,
             NodeKind::ScreenKey(_) => ScreenKeyParams::INPUTS,
             NodeKind::ColorSlice(_) => ColorSliceParams::INPUTS,
             NodeKind::Blur(_) => BlurParams::INPUTS,
@@ -7284,6 +7291,7 @@ impl NodeKind {
             NodeKind::SeedVr(_) => s("the plate to restore"),
             NodeKind::Depth(_) => s("the plate to estimate depth from"),
             NodeKind::LtxHdr(_) => s("the SDR plate to lift to HDR"),
+            NodeKind::DiffLight(_) => s("the plate to estimate the lighting around the camera from"),
             NodeKind::Cryptomatte(_) => s("a multi-layer Load's channels cable, \
                                            carrying the Cryptomatte layers"),
             NodeKind::Breakout(_) | NodeKind::ChannelSelect(_) => {
@@ -7954,6 +7962,7 @@ impl NodeKind {
             NodeKind::SeedVr(_) => SeedVrParams::NAME,
             NodeKind::Depth(_) => DepthParams::NAME,
             NodeKind::LtxHdr(_) => LtxHdrParams::NAME,
+            NodeKind::DiffLight(_) => DiffLightParams::NAME,
             NodeKind::ScreenKey(_) => ScreenKeyParams::NAME,
             NodeKind::ColorSlice(_) => ColorSliceParams::NAME,
             NodeKind::Slip(_) => "Slip",
@@ -8193,6 +8202,7 @@ impl NodeKind {
             NodeKind::SeedVr(p) => 0x5EE_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::Depth(p) => 0xDE9_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::LtxHdr(p) => 0x17C_0000 + (p.source as u64) * 4 + p.topo_tag(),
+            NodeKind::DiffLight(p) => 0xD1F_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::ScreenKey(p) => p.topo_tag(),
             NodeKind::ColorSlice(p) => p.topo_tag(),
             // Time nodes are shader passthroughs; the remap happens in the
@@ -8850,6 +8860,7 @@ impl Graph {
                     | NodeKind::HdrCnn(HdrCnnParams { loaded: true, .. })
                     | NodeKind::SeedVr(SeedVrParams { loaded: true, .. })
                     | NodeKind::Depth(DepthParams { loaded: true, .. })
+                    | NodeKind::DiffLight(DiffLightParams { loaded: true, .. })
                     // Raw, the result alone; composited it still reads the
                     // plate under it.
                     | NodeKind::LtxHdr(LtxHdrParams { loaded: true, raw: true, .. })

@@ -365,6 +365,7 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::SeedVr(_) => crate::graph::SeedVrParams::VEC4_SLOTS,
         NodeKind::Depth(_) => crate::graph::DepthParams::VEC4_SLOTS,
         NodeKind::LtxHdr(_) => crate::graph::LtxHdrParams::VEC4_SLOTS,
+        NodeKind::DiffLight(_) => crate::graph::DiffLightParams::VEC4_SLOTS,
         NodeKind::ScreenKey(_) => ScreenKeyParams::VEC4_SLOTS,
         NodeKind::ColorSlice(_) => ColorSliceParams::VEC4_SLOTS,
         NodeKind::ToData(_) => ToDataParams::VEC4_SLOTS,
@@ -1583,7 +1584,8 @@ fn idt_fn(cx: &mut EmitCx, node: NodeId) -> Option<String> {
             crate::color::InputSpace::Explicit(crate::color::Colorspace::LINEAR_REC709)
         }
         // Their results are written linear Rec.709, premultiplied.
-        Some(NodeKind::Upscale(_)) | Some(NodeKind::SeedVr(_)) | Some(NodeKind::HdrCnn(_)) => {
+        // (and a DiffusionLight latlong: linear Rec.709, alpha 1)
+        Some(NodeKind::Upscale(_)) | Some(NodeKind::SeedVr(_)) | Some(NodeKind::HdrCnn(_)) | Some(NodeKind::DiffLight(_)) => {
             crate::color::InputSpace::Explicit(crate::color::Colorspace::LINEAR_REC709)
         }
         // The tool writes scene-linear ACEScg (`--exr-colorspace acescg`).
@@ -2313,6 +2315,17 @@ fn emit(
                     Some(input) => emit(cx, input, tkey, pos, body, tmp, on_path),
                     None => "vec4f(0.0)".into(),
                 }
+            }
+        }
+        // A loaded latlong plays from its reader at its own size; nothing
+        // run yet, black (the plate is not a latlong).
+        NodeKind::DiffLight(p) => {
+            if p.loaded {
+                let idx = cx.bind(SourceBinding::Reader(cx.graph.slot_for(node, tkey, p.source)));
+                let idt = idt_fn(cx, node);
+                crate::nodes::upscale::UpscaleParams::emit_loaded(&format!("src{idx}"), pos, idt.as_deref(), body, &mut || fresh(tmp))
+            } else {
+                "vec4f(0.0, 0.0, 0.0, 1.0)".into()
             }
         }
         // A loaded result is numbers off disk; nothing run yet, no depth.

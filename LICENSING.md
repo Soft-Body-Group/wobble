@@ -81,6 +81,10 @@ its own licence, which Wobble shows before anything is downloaded:
 - **CorridorKey**, installed from its own repository by the CorridorKey
   node. It is CC BY-NC-SA 4.0, with an explicit grant for commercial use of
   its output.
+- **DiffusionLight-Turbo** (MIT), installed from its own repository by the
+  DiffusionLight node, with the weights it runs on: Stable Diffusion XL and
+  its depth ControlNet (CreativeML Open RAIL++-M), the DiffusionLight LoRAs
+  (MIT) and DPT-Large (Apache-2.0).
 - **Blender**, which Wobble launches as a separate program. Blender is
   GPL-2.0-or-later.
 - **Remote generative-AI services**, which have their own terms of service.

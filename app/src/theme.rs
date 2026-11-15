@@ -504,6 +504,7 @@ slots! {
         node_seedvr: "SeedVR2" = shade(S::family_filter, rgb(0x6a, 0x8c, 0x5a));
         node_depth: "Depth" = shade(S::family_filter, rgb(0x5a, 0x76, 0xa8));
         node_ltx_hdr: "LTX HDR" = shade(S::family_filter, rgb(0xa8, 0x8e, 0xb8));
+        node_diffusion_light: "DiffusionLight" = shade(S::family_filter, rgb(0x8e, 0xa8, 0xb8));
         node_hdrcnn: "HDRCNN" = shade(S::family_filter, rgb(0x8e, 0xa0, 0x6c));
         node_grid_warp: "GridWarp" = shade(S::family_transform, rgb(0x35, 0x9a, 0x9a));
         node_warp: "Warp" = shade(S::family_transform, rgb(0x3f, 0x92, 0x8a));

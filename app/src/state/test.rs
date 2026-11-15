@@ -293,6 +293,7 @@ pub(crate) struct SuiteState {
     pub(crate) seedvr: Option<seedvr::TestSeedVr>,
     pub(crate) depth: Option<depth::TestDepth>,
     pub(crate) ltxhdr: Option<ltxhdr::TestLtxHdr>,
+    pub(crate) difflight: Option<difflight::TestDiffLight>,
     pub(crate) upscale: Option<upscaleui::TestUpscale>,
     pub(crate) hdrcnn: Option<hdrcnnui::TestHdrCnn>,
     pub(crate) flow: Option<flowui::TestFlow>,

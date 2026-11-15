@@ -366,6 +366,59 @@ pattern. README has the user story. What must stay true:
   weight load (imports, the tool's own arg parser, proxy downscale, 8k+1
   padding, the gated-fetch error); never with real weights.
 
+## DiffusionLight node (`engine/src/nodes/difflight.rs`, `app/src/difflight.rs`, `tools/wobble_difflight.py`)
+
+DiffusionLight-Turbo as a process-backed reader, the LTX HDR pattern
+(install + an explicit fetch job). README has the user story. What must
+stay true:
+
+- **The output is a latlong at ITS size, and black until run.** It is in
+  `node_resolution`'s loaded-size list; unloaded it emits opaque black,
+  never the plate (an Env downstream would light a scene with it). Loaded it
+  is `inputs_unsampled` and `clears_slow`. Linear Rec.709 through `idt_fn`.
+- **Two keys.** `difflight_dir` hashes the input, the range and the
+  ESTIMATE's recipe (exposure, seed, steps, size); `difflight_out` is that
+  plus `DiffLightParams::out_name()` (stride, sigma, follow). The driver
+  keeps estimates in `<dir>/Raw` by input name and skips the ones there, so
+  a smoothing change or a cancelled run costs no diffusion. Do not fold the
+  smoothing into the hash: a sigma tweak would be an hour.
+- **The smoothing is the driver's `smooth()`** and its docstring is the
+  spec: with `follow`, `G[E / mean E] x G[mean E / P] x P(t)` per channel
+  (E an estimate, P the plate's clipped mean, G a Gaussian over the
+  estimated frames). Sigma 0 at stride 1 is the estimate, bit for bit
+  without `follow` (measured). Strides widen the Gaussian to reach the
+  neighbours.
+- **The environment is ours, the projection is theirs.** Upstream pins
+  torch 2.0 + cu118 + diffusers 0.23 (no RTX 50 support); `PYPROJECT` pins
+  diffusers 0.33.1 + transformers 4.51.3 + peft 0.15.2, the authors'
+  diffusers port's day — a later peft does not load the LoRAs through 0.33.
+  The LoRA files carry `unet.unet.` (stripped in `lora_weights`). Only
+  `ball2envmap`'s three functions are imported from the checkout;
+  `merge_hdr` is `exposure2hdr.py` line for line. Bump `COMMIT`, `PINS` and
+  `PYPROJECT` together and re-run the driver by hand.
+- **Weights are the tool's, in `<install>/models`** (HF_HOME there, never
+  ~/.cache): five public repos at pinned revisions, fp16 safetensors only.
+  `--fetch` is the only network code (`only_the_fetch_mode_touches_the_network`)
+  and writes `models/READY` = the pins; `weights_ready` compares it to
+  `ready_text()`, so new pins bring the fetch button back. A run sets
+  `HF_HUB_OFFLINE`.
+- **VRAM: two departures from the port, both measured on a 16 GB 5080.**
+  Only the ball is decoded (`decode_ball`: the latents round it + 16 of
+  context) — the full 1024 float32 VAE decode overflowed the card; and the
+  text encoders go to the CPU once the prompts are encoded. 10.8 GB peak
+  (the float32 VAE ENCODE), 0.37 s a step, 35 s a frame. Fusing the LoRAs is
+  0.14 s; it is not the cost.
+- **Licence: Permissive.** MIT code and LoRAs, OpenRAIL++-M SDXL +
+  ControlNet, Apache-2.0 DPT. If a restricted base model is ever offered,
+  tag it per instance in `cost::licence_of`.
+- `--test-difflight` runs against `--difflight-fake` (a flat 512x256
+  latlong, halved by `--no-follow`, markers in `Raw/`): black unrun, the
+  latlong's format, untagged, a smoothing change STALE under the same
+  estimates and re-run without estimating, a new seed a new directory. The
+  real check is the driver on its own:
+  `uv run --project ~/.wobble/DiffusionLight-Turbo python wobble_difflight.py
+  --shot <dir with Input/> --models ~/.wobble/DiffusionLight-Turbo/models`.
+
 ## Planar tracker (`engine/src/planar.rs`, `app/src/planarui.rs`)
 
 Mocha-style planar + mesh tracking, CPU, research stage. README has the
