@@ -258,6 +258,7 @@ mod tests {
             NodeKind::LensDistort(Default::default()),
             NodeKind::Warp(Default::default()),
             NodeKind::Expression(Default::default()),
+            NodeKind::Refract(Default::default()),
             NodeKind::Despill(Default::default()),
             NodeKind::Lightwrap(Default::default()),
             // Rendered on a click and played from disk: never a stage.

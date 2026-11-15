@@ -321,6 +321,7 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - Particles node (`engine/src/nodes/particles.rs`, `engine/src/particlegpu.rs`, `app/src/nodes/particles.rs`)
 - LUT node (`engine/src/lut.rs`, `engine/src/nodes/lut.rs`, `app/src/nodes/lut.rs`)
 - Reader windows + shared decodes (`decode::Window`, `player.rs`, `main::sync_reader_windows`)
+- Refract node (`engine/src/nodes/refract.rs`, `app/src/nodes/refract.rs`)
 - Loops (LoopIn / LoopOut)
 - 3D cards (`engine/src/scene3d.rs`, `engine/src/nodes/render3d.rs`, `app/src/nodes/scene3d.rs`)
 - Blender node (`engine/src/blender.rs`, `app/src/blenderui.rs`)

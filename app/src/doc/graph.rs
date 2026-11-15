@@ -1526,6 +1526,8 @@ impl EditorGraph {
         // An Env's camera port: the Camera's rotation and lens (sources
         // applied above) land on the node, and the scene wire goes.
         engine::nodes::env::lower(&mut g);
+        // A Refract's, the same.
+        engine::nodes::refract::lower(&mut g);
         // A Starfield's camera becomes its uniforms, the wire dropped.
         engine::nodes::starfield::lower(&mut g);
         lower_crop_bakes(&mut g);

@@ -30,6 +30,7 @@ pub use crate::nodes::gamma::GammaParams;
 pub use crate::nodes::tonemap::{ToneMapParams, ToneMode, ToneOp};
 pub use crate::nodes::uvwarp::{UvWarpFilter, UvWarpParams};
 pub use crate::nodes::env::EnvParams;
+pub use crate::nodes::refract::{NormalY, RefractMap, RefractMode, RefractParams};
 pub use crate::nodes::lensdistort::{LensDistortParams, LensMode, LensOutput};
 pub use crate::nodes::gridwarp::{GridWarpParams, GRIDWARP_MAX};
 pub use crate::nodes::warp::{WarpPair, WarpParams, WARP_PAIRS};
@@ -454,6 +455,8 @@ pub enum NodeKind {
     /// source point lands on its destination point. See
     /// [`crate::nodes::gridwarp`].
     GridWarp(GridWarpParams),
+    /// A picture through bumpy glass (`nodes::refract`).
+    Refract(RefractParams),
     /// Brown-Conrady lens distortion, either way round, with CA and an
     /// STMap output. See [`crate::nodes::lensdistort`].
     LensDistort(LensDistortParams),
@@ -5999,6 +6002,7 @@ impl NodeKind {
             NodeKind::Warp(_) => WarpParams::INPUTS,
             NodeKind::Expression(_) => ExpressionParams::INPUTS,
             NodeKind::Despill(_) => DespillParams::INPUTS,
+            NodeKind::Refract(_) => RefractParams::INPUTS,
             NodeKind::Lightwrap(_) => LightwrapParams::INPUTS,
             NodeKind::Upscale(_) => UpscaleParams::INPUTS,
             NodeKind::HdrCnn(_) => HdrCnnParams::INPUTS,
@@ -6103,6 +6107,7 @@ impl NodeKind {
             NodeKind::GridWarp(_) => GridWarpParams::MASK_INPUT,
             NodeKind::LensDistort(_) => LensDistortParams::MASK_INPUT,
             NodeKind::Warp(_) => WarpParams::MASK_INPUT,
+            NodeKind::Refract(_) => RefractParams::MASK_INPUT,
             NodeKind::Expression(_) => ExpressionParams::MASK_INPUT,
             NodeKind::Despill(_) => DespillParams::MASK_INPUT,
             NodeKind::Lightwrap(_) => LightwrapParams::MASK_INPUT,
@@ -6411,6 +6416,8 @@ impl NodeKind {
                 2 => Some("Z"),
                 3 => Some("B"),
                 _ => None,
+            // The surface map wears N: which port is the glass.
+            NodeKind::Refract(_) => (input == crate::nodes::refract::MAP_INPUT).then_some("n"),
             },
             NodeKind::Convolve(_) => {
                 (input == crate::nodes::convolve::KERNEL_INPUT).then_some("K")
@@ -6608,6 +6615,18 @@ impl NodeKind {
             }
             NodeKind::Stabilize(_) => {
                 if input == 0 {
+            NodeKind::Refract(_) => match input {
+                crate::nodes::refract::IMAGE_INPUT => {
+                    s("what is behind the glass: a plate, or a latlong environment (pick \
+                       which in the panel)")
+                }
+                crate::nodes::refract::MAP_INPUT => {
+                    s("the glass's surface: a height map (red) or a tangent-space normal \
+                       map. Load a normal map raw, with no colour transform")
+                }
+                _ => s("a Camera for the latlong view: its rotation and lens; unwired, the \
+                        node's own"),
+            },
                     s("the plate to stabilise")
                 } else {
                     s("pixels under this matte are kept out of the camera solve \
@@ -6814,6 +6833,11 @@ impl NodeKind {
             NodeKind::CorridorKey(_) => CorridorKeyParams::input_name(input),
             NodeKind::Sammie(_) => SammieParams::input_name(input),
             NodeKind::Flow(_) => "image (to analyse)",
+            NodeKind::Refract(_) => match input {
+                crate::nodes::refract::IMAGE_INPUT => "background / latlong",
+                crate::nodes::refract::MAP_INPUT => "height / normal map",
+                _ => "camera",
+            },
             NodeKind::Stabilize(_) => {
                 if input == 0 { "image" } else { "matte (kept out of the solve)" }
             }
@@ -6937,6 +6961,7 @@ impl NodeKind {
         }
         // Inside a pipeline's dive: a step's prompt port is the text pipe,
         // everything else a picture.
+            NodeKind::Refract(_) if input == crate::nodes::refract::CAMERA_INPUT => return PortKind::Scene,
         if let NodeKind::GenAiStep(op) = self {
             return match op.ports().get(input) {
                 Some((genai::Pipe::Text, _)) => PortKind::Text,
@@ -7269,6 +7294,7 @@ impl NodeKind {
             NodeKind::Slip(_) => "Slip",
             NodeKind::TimeRemap(_) => "Time Curve",
             NodeKind::Speed(_) => "Speed",
+            NodeKind::Refract(_) => RefractParams::NAME,
             NodeKind::RangeRemap(_) => "Time Remap",
             NodeKind::TimeRange(_) => "Time Range",
             NodeKind::Premult { premult } => {
@@ -7502,6 +7528,7 @@ impl NodeKind {
             // player. Nothing about the WGSL changes with their params.
             NodeKind::Slip(_) | NodeKind::TimeRemap(_) | NodeKind::Speed(_) | NodeKind::RangeRemap(_) => 17,
             // Tracking is a bake; the node itself is always a passthrough.
+            NodeKind::Refract(p) => p.topo_tag(),
             NodeKind::Tracker(_) => 18,
             // The planar track too: its results are data, never uniforms.
             NodeKind::PlanarTrack(_) => 60,

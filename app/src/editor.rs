@@ -963,6 +963,8 @@ pub fn node_catalog() -> Vec<NodeEntry> {
             })
         }),
         e(Transform, "UV Warp", false, |_| NodeKind::UvWarp(Default::default())),
+        // A plate or a latlong through bumpy glass (a height or normal map).
+        e(Transform, "Refract", false, |_| NodeKind::Refract(Default::default())),
         e(Transform, "Mirror", false, |_| NodeKind::Mirror(Default::default())),
         e(Transform, "Lens Distortion", false, |_| NodeKind::LensDistort(Default::default())),
         e(Transform, "FlipFlop", false, |_| NodeKind::FlipFlop(Default::default())),
@@ -1946,6 +1948,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::UvWarp(_) => t::node_uvwarp(),
         NodeKind::Env(_) => t::node_env(),
         NodeKind::GridWarp(_) => t::node_grid_warp(),
+        NodeKind::Refract(_) => t::node_refract(),
         NodeKind::Warp(_) => t::node_warp(),
         NodeKind::ToRgba(_) => t::node_to_rgba(),
         NodeKind::SoftCrop(_) => t::node_soft_crop(),
@@ -2552,6 +2555,7 @@ pub(crate) fn paint_body(
         NodeKind::Env(_) => crate::nodes::env::glyph(&painter, sp, r, fill, stroke),
         NodeKind::GridWarp(_) => crate::nodes::gridwarp::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Warp(_) => crate::nodes::warp::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Refract(_) => crate::nodes::refract::glyph(&painter, sp, r, fill, stroke),
         NodeKind::ToRgba(_) => {
             crate::nodes::torgba::glyph(&painter, sp, r, fill, stroke)
         }

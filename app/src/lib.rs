@@ -11570,6 +11570,11 @@ impl Gfx {
                     .map(|r| p.output_format(r))
             }
             // The usual rule: the output lives in the MAP's format (a distortion
+            // Under a latlong the glass is the frame: the surface map's
+            // format (the script's with no map). Over a plate, the plate's.
+            NodeKind::Refract(p) if p.mode == engine::graph::RefractMode::Latlong => self
+                .input_res(id, engine::nodes::refract::MAP_INPUT, visited)
+                .or_else(|| Some(self.script_format().unwrap_or((1920, 1080)))),
             // map can overscan its plate), else the source's.
             NodeKind::UvWarp(_) => self.input_res(id, 1, visited)
                 .or_else(|| {
@@ -25070,6 +25075,12 @@ impl Gfx {
                     NodeKind::Warp(p) => {
                         let o = nodes::warp::panel(ui, &mut rcx, p);
                         if o.hud.is_some() {
+                    NodeKind::Refract(p) => {
+                        let camera = wired[engine::nodes::refract::CAMERA_INPUT];
+                        if let Some(h) = nodes::refract::panel(ui, &mut rcx, p, &tab, camera) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
                             hud_drag_out = o.hud;
                         }
                         warp_replace = o.replace.map(|g| (rcx.ekind.clone(), g));

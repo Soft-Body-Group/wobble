@@ -1672,3 +1672,32 @@ and restored on the first turn. EDIT MODE's comp window is still a
 drawn (the picture itself left out) after 20 frames and exits: the way
 to look at the window without touching the user's.
 
+
+## Refract node (`engine/src/nodes/refract.rs`, `app/src/nodes/refract.rs`)
+
+A plate or a latlong seen through bumpy glass. Input 0 is what is behind
+(`RefractMode::Background`: a plate; `Latlong`: an equirectangular
+environment through a camera, Env's convention and Env's `skyview` rows),
+input 1 the surface (a height map read as its slope, or a tangent-space
+normal map), input 2 a Camera on the scene pipe, lowered away by
+`refract::lower` next to Env's.
+
+- **It fuses, and must stay fused.** Dispersion and roughness are ONE WGSL
+  loop around `Emit::input_at`: each tap has its own index (its place in
+  the spectrum) and its own nudge of the normal (the R2 sequence, so the
+  disc's radius does not march with the spectrum). The tap count is a
+  uniform; the loop body is one copy of the background's subtree whatever
+  the count. Unrolling it would multiply the shader by the count.
+- **Only the mode and the map's kind are topology.** Everything else,
+  conventions and the tap count included, is a uniform.
+- **Flat glass is the identity**: the plate where it stands, and under a
+  latlong exactly what an Env shows (in through the bumpy face, OUT
+  through a flat back face). `engine/tests/refract.rs` pins both against
+  `RefractParams::lookup`, the CPU mirror.
+- **Thickness is Background-only.** A parallel shift of a ray reads the
+  same sky at infinity; the panel disables the row and says why.
+- **Pixels scale with the proxy at pack time**: thickness, and a height
+  map's relief (a half-res slope is twice as steep per pixel).
+- **Format**: the map's under a latlong (the glass is the frame), the
+  plate's otherwise (`node_resolution`).
+- A normal map must be loaded raw; the port's tooltip and the panel say so.

@@ -118,6 +118,7 @@ pub fn tiles_for(kind: &NodeKind) -> usize {
         NodeKind::ToData(_) => crate::nodes::todata::TILES,
         NodeKind::UvWarp(_) => crate::nodes::uvwarp::TILES,
         NodeKind::Env(_) => crate::nodes::env::TILES,
+        NodeKind::Refract(_) => crate::nodes::refract::TILES,
         NodeKind::GridWarp(_) => crate::nodes::gridwarp::TILES,
         NodeKind::Warp(_) => crate::nodes::warp::TILES,
         NodeKind::ToRgba(_) => crate::nodes::torgba::TILES,
@@ -295,6 +296,7 @@ pub fn panel_tabs(kind: &NodeKind) -> Vec<PanelTab> {
         NodeKind::LensFlare(_) => crate::nodes::lensflare::tabs(),
         NodeKind::Contrast(_) => crate::nodes::contrast::tabs(),
         // The box, and the Crop's own bake.
+        NodeKind::Refract(_) => crate::nodes::refract::tabs(),
         NodeKind::SoftCrop(_) => vec![PanelTab::new("crop", "crop"), PanelTab::new("bake", "bake")],
         NodeKind::Paint(_) => vec![
             PanelTab::new("brush", "brush"),

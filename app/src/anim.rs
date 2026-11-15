@@ -2120,6 +2120,10 @@ pub fn channels_for(kind: &NodeKind) -> Vec<Channel> {
     if let NodeKind::Env(_) = kind {
         v.extend(crate::nodes::env::dyn_channels());
     }
+    // A Refract's numbers, as `refract.<name>` (`nodes::refract`).
+    if let NodeKind::Refract(_) = kind {
+        v.extend(crate::nodes::refract::dyn_channels());
+    }
     // A Lens Flare's numbers, as `flare.<name>` (`nodes::lensflare`).
     if let NodeKind::LensFlare(_) = kind {
         v.extend(crate::nodes::lensflare::dyn_channels());
@@ -2423,6 +2427,7 @@ pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
         (NodeKind::Planet(p), _) => return crate::nodes::planet::get(p, ch),
         (NodeKind::Plasma(p), _) => return crate::nodes::plasma::get(p, ch),
         (NodeKind::Particles(p), _) => return crate::nodes::particles::get(p, ch),
+        (NodeKind::Refract(p), _) => return crate::nodes::refract::get(p, ch),
         (NodeKind::LensFlare(p), _) => return crate::nodes::lensflare::get(p, ch),
         (NodeKind::Contrast(p), _) => return crate::nodes::contrast::get(p, ch),
         (NodeKind::Burnin(p), _) => return crate::nodes::burnin::get(p, ch),
@@ -2710,6 +2715,7 @@ pub fn set(kind: &mut NodeKind, ch: Channel, v: f32) {
         (NodeKind::Plasma(p), _) => crate::nodes::plasma::set(p, ch, v),
         (NodeKind::Particles(p), _) => crate::nodes::particles::set(p, ch, v),
         (NodeKind::LensFlare(p), _) => crate::nodes::lensflare::set(p, ch, v),
+        (NodeKind::Refract(p), _) => crate::nodes::refract::set(p, ch, v),
         (NodeKind::Contrast(p), _) => crate::nodes::contrast::set(p, ch, v),
         (NodeKind::Burnin(p), _) => crate::nodes::burnin::set(p, ch, v),
         (NodeKind::Mirror(p), _) => crate::nodes::mirror::set(p, ch, v),
