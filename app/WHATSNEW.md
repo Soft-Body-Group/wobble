@@ -5,26 +5,26 @@ Newest first: a `## <version>` heading over `- ` bullets, a `**bold**` lead
 drawn strong. Plain words for the people using wobble, not commit messages.
 
 ## 0.1.0-alpha.12
-- **Particles** (new): a 2D particle system on the GPU. Inside the node is a small graph of Emit, Force, Merge and Render nodes. Forces include gravity, radial, vortex, drag, turbulence and field lines between pole pairs, optionally on a sphere. Any frame can be reached directly, and scrubbing stays quick.
-- **Plasma** (new): particles along loops and streamers off a star, for a solar corona. Presets for a corona, an eclipse and prominences.
-- **Planet** (new): noise on a sphere with no seam or pole pinch, drawn as a lit disc or unwrapped as a latlong for an Env.
-- **Starfield** (new): a star sky behind everything, seen through a wired Camera or its own rotation and focal length. Several distributions, star colour spread and a Milky Way glow.
-- **Env** (new): a latlong (equirect) image as a background at infinity, through a wired Camera or its own rotation and focal length.
-- **Lens Flare** (new): glow, starburst, streak, halo and ghosts off a light you drag in the viewer. The picture can block the light.
-- **Tone Map** (new, also listed as **Rolloff**): highlight rolloff and tone mapping on scene-linear pixels. Knee, Exponential, Reinhard, Hable, ACES fit and AgX-like, applied by max, luma or per channel.
-- **Contrast** (new): contrast about a pivot, in stops or linear, set separately for shadows and highlights, with a soft toe and shoulder.
-- **Grade**: contrast with an adjustable pivot, on the master and on each zone. Old comps look the same.
-- **LUT**: matches Resolve. Trilinear or tetrahedral, .csp files, and DaVinci Wide Gamut / Intermediate as a colour preset.
-- **Text**: each glyph is its own layer. Outline, shadow and glow, animators that move glyphs in turn, text on a path, and a words input a String node can feed. The same styling is in 2dini's Text.
-- **String**: the Prompt node is now called String. Old comps load unchanged.
-- **Clip browser**: rebuilt. A path bar with history and Tab completion, favourites, recent folders and a folder tree, type-ahead, tiles or sortable rows that scrub, drag to the bin, and a right-click menu.
-- **Layer**: mute and solo per layer. The layer picked in the panel lights up its input in the graph.
-- **Noise**: speed steps at a tenth, uniform fBm scale, single channel or 8-bit output, and any node inside can be viewed.
-- **Dives**: U goes up one level (unify size moves to shift+U), and the breadcrumb levels can be clicked.
-- **Viewer**: F frames the picture (Home too). Plain R, G and B show one channel; shift is no longer needed.
-- **RGB sliders**: the range can be moved like any other slider, and the number fields can go past it.
-- **Playback**: a Load under a Crop decodes only the box it needs, and one decode feeds every place that uses it. Scrubbing with a small cache shows pictures instead of waiting.
-- Fixed: a long Particles catch-up could lose the GPU on a Mac.
+- **Particles** (new): 2D particle system.
+- **Plasma** (new): solar corona. Presets: corona, eclipse, prominences.
+- **Planet** (new): seamless noise sphere, lit disc or latlong.
+- **Starfield** (new): star sky through a Camera, Milky Way glow.
+- **Env** (new): latlong background at infinity.
+- **Lens Flare** (new): draggable light, can be blocked by the picture.
+- **Tone Map / Rolloff** (new): Knee, Exponential, Reinhard, Hable, ACES fit, AgX-like.
+- **Contrast** (new): pivot, shadows/highlights, soft toe and shoulder.
+- **Grade**: contrast with pivot, master and per zone.
+- **LUT**: matches Resolve (tetrahedral, .csp, DaVinci WG).
+- **Text**: per-glyph layers, outline/shadow/glow, animators, text on a path.
+- **String**: Prompt renamed.
+- **Clip browser**: rebuilt (path bar, favourites, folder tree, scrubbing tiles).
+- **Layer**: mute and solo.
+- **Noise**: tenth-speed steps, 8-bit/single channel out, view inner nodes.
+- **Dives**: U goes up a level (unify size is shift+U).
+- **Viewer**: F frames, plain R/G/B show a channel.
+- **RGB sliders**: movable range.
+- **Playback**: Crop-aware decoding, small cache scrubs show pictures.
+- Fixed: long Particles catch-up could lose the GPU on Mac.
 
 ## 0.1.0-alpha.11
 - **Collect** (new, top bar **collect…**): copies every file the comp reads (Loads, LUTs, fonts, 3D and .blend files) to a folder and saves the comp there, pointing at the copies. Or pick an organisicator shot: the footage is ingested into the project and the Loads name it by asset id, and the comp goes in the shot's comp folder.
