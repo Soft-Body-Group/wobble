@@ -7975,6 +7975,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             sel_n: 0,
             sel_shape: 0,
             marquee: None,
+            pen: None,
         },
         pin: state::PinState {
             sel: None,

@@ -11,7 +11,8 @@ impl Gfx {
     /// --test-roto: a roto container through the gestures a hand makes.
     /// Zoomed out the node is its glyph; zoomed in, its inner graph: `+`
     /// adds shape 2 and hands it the viewer, S-clicks draw it (shape 1
-    /// untouched), and a node of the inner graph dragged onto another with
+    /// untouched) and leave it OPEN, a plain press-drag adds a point with
+    /// its tension pulled, a click on the first point closes it, and a node of the inner graph dragged onto another with
     /// O held makes a cut op of the two — which lowers to a Subtract
     /// MatteCombine for the engine.
     pub(crate) fn drive_test_roto(&mut self, raw: &mut egui::RawInput) {
@@ -159,7 +160,58 @@ impl Gfx {
                         "S-clicks gave shape 2 {k} points and left shape 1 with {} (wanted 3 and 4)",
                         s.points.len()
                     ));
+                } else if !s.more[0].open {
+                    fail("three points closed shape 2 by themselves (a new shape stays open)".into());
                 } else {
+                    next = 20;
+                }
+            }
+            // Pen tool: a PLAIN press while the shape is open adds a point
+            // at its end, and the drag that follows (Catmull-Rom) dials
+            // its tension — 40 px of pull is half way to a corner.
+            20 => {
+                let r = self.test.rect;
+                let p = egui::pos2(r.min.x + r.width() * 0.75, r.min.y + r.height() * 0.55);
+                if frames == 1 {
+                    self.test.roto_drag = (p, p + egui::vec2(40.0, 0.0));
+                    click(raw, p, true);
+                } else if frames <= 5 {
+                    let (a, b) = self.test.roto_drag;
+                    raw.events.push(egui::Event::PointerMoved(a + (b - a) * (frames as f32 - 1.0) / 4.0));
+                } else if frames == 6 {
+                    click(raw, self.test.roto_drag.1, false);
+                } else if frames > 9 {
+                    let s = sp(self).unwrap_or_default();
+                    let m = s.more.first().cloned().unwrap_or_default();
+                    let t = m.points.last().map(|q| q.tension).unwrap_or(0.0);
+                    if m.points.len() != 4 || !m.open || !(0.3..0.7).contains(&t) {
+                        fail(format!(
+                            "a pen drag left shape 2 with {} points, open {}, last tension {t} (wanted 4, open, ~0.5)",
+                            m.points.len(),
+                            m.open
+                        ));
+                    }
+                    next = 21;
+                }
+            }
+            // A click on the first point closes it.
+            21 => {
+                if frames == 1 {
+                    let p = spot(self, 0);
+                    self.test.roto_drag = (p, p);
+                    click(raw, p, true);
+                } else if frames == 2 {
+                    click(raw, self.test.roto_drag.0, false);
+                } else if frames > 5 {
+                    let s = sp(self).unwrap_or_default();
+                    let m = s.more.first().cloned().unwrap_or_default();
+                    if m.open || m.points.len() != 4 {
+                        fail(format!(
+                            "a click on the first point left shape 2 open {} with {} points (wanted closed, 4)",
+                            m.open,
+                            m.points.len()
+                        ));
+                    }
                     next = 8;
                 }
             }
@@ -300,7 +352,8 @@ impl Gfx {
             12 => {
                 println!(
                     "ROTO TEST PASS: zoomed in, + added shape 2 and picked it; S-clicks drew it \
-                     with shape 1 untouched; an O swipe inside the node cut shape 2 out of shape 1 \
+                     with shape 1 untouched, left open; a plain pen press-drag added a point and \
+                     set its tension; a click on the first point closed it; an O swipe inside the node cut shape 2 out of shape 1 \
                      and the node lowers to one Subtract over the two splines; the soft crop boxed \
                      what the roto draws (shape 1, the cut taken out of it); a ctrl-drag cut the \
                      op's wire into Out (all three left unconnected); Delete over the node took \

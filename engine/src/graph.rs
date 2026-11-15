@@ -4694,6 +4694,11 @@ pub struct SplineParams {
     /// Shape-wide feather added INSIDE every point's band.
     #[cfg_attr(feature = "serde", serde(default))]
     pub feather_in: f32,
+    /// Still being drawn: the outline has an end, and the shape renders NO
+    /// matte until it is closed (a click on its first point). Every shape
+    /// that existed before this is closed, hence the default.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "std::ops::Not::not"))]
+    pub open: bool,
     /// A ROTO CONTAINER's shapes after the first. The fields above are
     /// shape 0 (so a one-shape node is exactly what a Spline always was,
     /// and every setup loads unchanged); these are shapes 1.., and `ops`
@@ -4736,6 +4741,9 @@ pub struct SplineShape {
     pub xf: ShapeXf,
     pub feather_out: f32,
     pub feather_in: f32,
+    /// See [`SplineParams::open`].
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
+    pub open: bool,
 }
 
 impl Default for SplineShape {
@@ -4751,6 +4759,7 @@ impl Default for SplineShape {
             xf: d.xf,
             feather_out: d.feather_out,
             feather_in: d.feather_in,
+            open: false,
         }
     }
 }
@@ -4803,6 +4812,7 @@ impl SplineParams {
                 xf: self.xf,
                 feather_out: self.feather_out,
                 feather_in: self.feather_in,
+                open: self.open,
             });
         }
         self.more.get(s - 1).cloned()
@@ -4819,6 +4829,7 @@ impl SplineParams {
             self.xf = sh.xf;
             self.feather_out = sh.feather_out;
             self.feather_in = sh.feather_in;
+            self.open = sh.open;
         } else if let Some(slot) = self.more.get_mut(s - 1) {
             *slot = sh;
         }
@@ -4842,6 +4853,7 @@ impl SplineParams {
             format: self.format,
             feather_out: sh.feather_out,
             feather_in: sh.feather_in,
+            open: sh.open,
             ..SplineParams::default()
         }
     }
@@ -4863,6 +4875,7 @@ impl SplineParams {
                 xf: one.xf,
                 feather_out: one.feather_out,
                 feather_in: one.feather_in,
+                open: one.open,
             },
         );
     }
@@ -5050,6 +5063,7 @@ impl Default for SplineParams {
             format: None,
             feather_out: 0.0,
             feather_in: 0.0,
+            open: false,
             more: Vec::new(),
             ops: Vec::new(),
             layout: Vec::new(),
@@ -5164,6 +5178,8 @@ enum SplineRepr {
         #[serde(default)]
         feather_in: f32,
         #[serde(default)]
+        open: bool,
+        #[serde(default)]
         more: Vec<SplineShape>,
         #[serde(default)]
         ops: Vec<RotoOp>,
@@ -5196,6 +5212,7 @@ impl<'de> serde::Deserialize<'de> for SplineParams {
                 format,
                 feather_out,
                 feather_in,
+                open,
                 more,
                 ops,
                 layout,
@@ -5213,6 +5230,7 @@ impl<'de> serde::Deserialize<'de> for SplineParams {
                 format,
                 feather_out,
                 feather_in,
+                open,
                 more,
                 ops,
                 layout,

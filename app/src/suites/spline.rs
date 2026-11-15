@@ -268,6 +268,13 @@ impl Gfx {
                 if let Some(editor::ENode { kind: NodeKind::Spline(sp), .. }) =
                     self.egraph.node_mut(sid)
                 {
+                    // Three points leave a drawn shape OPEN (pen tool);
+                    // closing it by a click on point 0 is --test-roto's.
+                    if !sp.open {
+                        println!("SPLINE TEST FAIL: three points closed the shape by themselves");
+                        std::process::exit(1);
+                    }
+                    sp.open = false;
                     sp.points[0].feather = 4.0;
                     sp.points[1].feather = 80.0;
                     sp.mode = engine::graph::SplineMode::Bezier;

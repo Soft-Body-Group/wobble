@@ -437,6 +437,10 @@ pub fn spline_band(
     sp: &crate::graph::SplineParams,
     size: [f32; 2],
 ) -> Vec<([f32; 2], [f32; 2])> {
+    // A shape still being drawn has no inside yet: no band, no matte.
+    if sp.open {
+        return Vec::new();
+    }
     let (fi, fo) = (sp.feather_in.max(0.0), sp.feather_out.max(0.0));
     spline_outline(sp, size)
         .into_iter()

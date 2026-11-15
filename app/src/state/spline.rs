@@ -55,4 +55,8 @@ pub(crate) struct SplineUiState {
     pub(crate) sel_shape: usize,
     /// The live band while a background drag is marquee-selecting points.
     pub(crate) marquee: Option<egui::Rect>,
+    /// A point being laid down pen-tool style: (node, shape, point index,
+    /// the press). While the button is held the drag pulls its handles
+    /// (Bezier) or sets its tension (Catmull-Rom).
+    pub(crate) pen: Option<(u64, usize, usize, egui::Pos2)>,
 }

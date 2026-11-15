@@ -69,6 +69,8 @@ impl Gfx {
             let (mut spw, is_field) = match ekind {
                 NodeKind::Spline(sp) => {
                     shape_sel = innards::selected(ui.ctx(), node, sp.shape_count());
+                    // A shape still being drawn has an end (pen tool).
+                    open_curve = sp.single(shape_sel).open;
                     for k in (0..sp.shape_count()).filter(|k| *k != shape_sel) {
                         others.push((
                             k,
@@ -209,6 +211,22 @@ impl Gfx {
                     }
                 }
             }
+            // Pen-tool drawing: a roto shape with no points, or one not yet
+            // closed, takes a plain click as a new point at its end; a click
+            // on its first point closes it. Until then it renders no matte.
+            let drawing = !is_field && (sp.points.is_empty() || sp.open);
+            if group_ui && hud_key_list.is_empty() && drawing {
+                use hudkeys::chord;
+                hud_key_list.push(chord("click", "add point"));
+                hud_key_list.push(chord("drag", if sp.mode == engine::graph::SplineMode::Bezier {
+                    "pull handles"
+                } else {
+                    "set tension"
+                }));
+                if sp.points.len() >= 3 {
+                    hud_key_list.push(chord("1st point", "click: close"));
+                }
+            }
             if group_ui && hud_key_list.is_empty() {
                 use hudkeys::{chord, key};
                 hud_key_list.push(key("S", "click: add point", egui::Key::S));
@@ -290,6 +308,8 @@ impl Gfx {
             // Tab-drag is the scrub, so neither can start one.
             if group_ui {
                 let banding = nav.dragged_by(egui::PointerButton::Primary)
+                    && self.spline.pen.is_none()
+                    && !drawing
                     && !cmd
                     && !scrub_held
                     && !temp_live;
@@ -605,28 +625,36 @@ impl Gfx {
                 box_quad = Some(quad);
             }
 
-            // S-click lays points down: near the outline it splits that
-            // segment, anywhere else it appends. (It was shift-click while
-            // shift was the viewer scrub; the scrub is Tab now.) A plain click on
-            // empty canvas clears the pick instead — it used to add a
-            // point, which left no way to start a marquee.
-            if ui.input(|i| i.pointer.primary_clicked()) {
-                if let Some(p) = pointer_pos.filter(|p| rect.contains(*p)) {
-                    let shift = ui.input(|i| i.key_down(egui::Key::S));
-                    // A click on an existing point, a bezier handle or a
-                    // group handle belongs to that widget, not to the
-                    // canvas.
-                    let near_pt = sp.points.iter().any(|q| {
-                        (to_scr(q.p) - p).length() < 12.0
-                            || (to_scr([q.p[0] + q.h_in[0], q.p[1] + q.h_in[1]]) - p)
-                                .length()
-                                < 10.0
-                            || (to_scr([q.p[0] + q.h_out[0], q.p[1] + q.h_out[1]]) - p)
-                                .length()
-                                < 10.0
-                    }) || hot.iter().any(|h| (*h - p).length() < 12.0);
+            // S-press lays points down: near the outline it splits that
+            // segment, anywhere else it appends. While the shape is being
+            // drawn a plain press does too, always at the end. The point
+            // lands on the PRESS, so the drag that follows (pen tool) pulls
+            // its handles out (Bezier) or dials its tension (Catmull-Rom).
+            // A plain click on empty canvas otherwise clears the pick — it
+            // used to add a point, which left no way to start a marquee.
+            let near_pt_at = |p: egui::Pos2| {
+                sp.points.iter().any(|q| {
+                    (to_scr(q.p) - p).length() < 12.0
+                        || (to_scr([q.p[0] + q.h_in[0], q.p[1] + q.h_in[1]]) - p).length() < 10.0
+                        || (to_scr([q.p[0] + q.h_out[0], q.p[1] + q.h_out[1]]) - p).length()
+                            < 10.0
+                }) || hot.iter().any(|h| (*h - p).length() < 12.0)
+            };
+            let press = ui.input(|i| {
+                i.pointer.primary_pressed().then(|| i.pointer.press_origin()).flatten()
+            });
+            // Asked BEFORE anything below adds a point under the cursor.
+            let press_near = press.is_some_and(near_pt_at);
+            let click_near = pointer_pos.is_some_and(near_pt_at);
+            if let Some(p) = press.filter(|p| rect.contains(*p) && !cmd && !scrub_held && !temp_live) {
+                let shift = ui.input(|i| i.key_down(egui::Key::S));
+                let first_hit = sp.points.first().is_some_and(|q| (to_scr(q.p) - p).length() < 12.0);
+                if drawing && sp.open && sp.points.len() >= 3 && first_hit {
+                    // Back on the first point: the shape closes.
+                    sp.open = false;
+                } else if (shift || drawing) && !press_near {
                     let mut seg: Option<(f32, usize)> = None;
-                    if poly.len() > 1 {
+                    if poly.len() > 1 && !drawing {
                         // Open: the last leg (last point back to the
                         // first) is not part of the curve.
                         let legs = if open_curve {
@@ -653,22 +681,67 @@ impl Gfx {
                     // A new shape starts HARD; later points take the
                     // last one's feather.
                     let feather = sp.points.last().map(|q| q.feather).unwrap_or(0.0);
-                    if shift && !near_pt {
-                        let at = match seg {
-                            Some((d, j)) if d < 14.0 => {
-                                let ci = j / engine::codegen::spline_subd(sp.points.len());
-                                (ci + 1).min(sp.points.len())
-                            }
-                            _ => sp.points.len(),
-                        };
-                        sp.points
-                            .insert(at, engine::graph::SplinePoint::new(norm(p), feather));
-                        struct_edit = Some(SplineEdit::Inserted(at));
-                    } else if let (false, false, Some(k)) = (shift, near_pt, other_hit) {
+                    let at = match seg {
+                        Some((d, j)) if d < 14.0 => {
+                            let ci = j / engine::codegen::spline_subd(sp.points.len());
+                            (ci + 1).min(sp.points.len())
+                        }
+                        _ => sp.points.len(),
+                    };
+                    // The first point of a roto shape opens it: it stays
+                    // an open outline until it is closed on purpose.
+                    if sp.points.is_empty() && !is_field {
+                        sp.open = true;
+                    }
+                    sp.points.insert(at, engine::graph::SplinePoint::new(norm(p), feather));
+                    struct_edit = Some(SplineEdit::Inserted(at));
+                    self.spline.pen = Some((node, shape_sel, at, p));
+                    if group_ui {
+                        self.spline.sel.clear();
+                    }
+                }
+            }
+            if ui.input(|i| i.pointer.primary_clicked()) && struct_edit.is_none() {
+                if pointer_pos.is_some_and(|p| rect.contains(p)) {
+                    let shift = ui.input(|i| i.key_down(egui::Key::S));
+                    let near_pt = click_near;
+                    if let (false, false, false, Some(k)) = (shift, drawing, near_pt, other_hit) {
                         // Another shape of the container: pick it.
                         innards::select(ui.ctx(), node, k);
-                    } else if !shift && !near_pt && group_ui && !temp_live {
+                    } else if !shift && !drawing && !near_pt && group_ui && !temp_live {
                         self.spline.sel.clear();
+                    }
+                }
+            }
+            // The pen drag: the point just laid down follows the press, and
+            // the hand pulls its tangents. Absolute from the press, so an
+            // animated shape keys cleanly.
+            if let Some((pn, ps, pi, po)) = self.spline.pen {
+                let down = ui.input(|i| i.pointer.primary_down());
+                if pn != node || ps != shape_sel || pi >= sp.points.len() || !down {
+                    if pn == node || !down {
+                        self.spline.pen = None;
+                    }
+                } else if let Some(p) = pointer_pos {
+                    let d = (p - po).length();
+                    if d > 3.0 {
+                        match sp.mode {
+                            engine::graph::SplineMode::Bezier => {
+                                let q = norm(p);
+                                let c = sp.points[pi].p;
+                                let h = [q[0] - c[0], q[1] - c[1]];
+                                sp.points[pi].h_out = h;
+                                sp.points[pi].h_in = [-h[0], -h[1]];
+                            }
+                            engine::graph::SplineMode::CatmullRom => {
+                                // A short pull is a corner, ~80 px the
+                                // ordinary curve, further out looser.
+                                sp.points[pi].tension = (1.0 - d / 80.0).clamp(-1.0, 1.0);
+                                ink.seg(po, p, 1.0, 0.6, true);
+                                ink.circle_stroke(p, 3.5, 1.2, 0.9, true);
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -972,6 +1045,8 @@ impl Gfx {
                         let mut auth = full.single(shape_sel);
                         let structural = auth.points.len() != spw.points.len();
                         auth.mode = spw.mode;
+                        // Open/closed is authored, never keyed.
+                        auth.open = spw.open;
                         if structural {
                             // POINTS only. `spw` came from `live_kind`,
                             // so its matte controls and shape transform
@@ -984,6 +1059,8 @@ impl Gfx {
                             for (i, q) in spw.points.iter().enumerate() {
                                 auth.points[i].h_in = q.h_in;
                                 auth.points[i].h_out = q.h_out;
+                                // Tension is authored like the handles.
+                                auth.points[i].tension = q.tension;
                             }
                         }
                         let mut auth_kind = NodeKind::Spline(auth);
