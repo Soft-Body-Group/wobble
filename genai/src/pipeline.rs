@@ -192,6 +192,20 @@ impl Op {
         matches!(self, Op::Generate { .. })
     }
 
+    /// What a step is called as a node in the pipeline's dive (and in its
+    /// add menu): its kind, or the model's own name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Op::Prompt { .. } => "Prompt",
+            Op::PromptIn => "Prompt In",
+            Op::Reference => "Input",
+            Op::Matte => "Matte",
+            Op::Generate { model, .. } => catalog::get(model).map(|m| m.label).unwrap_or("Unknown Model"),
+            Op::Comfy { .. } => "ComfyUI",
+            Op::Output => "Output",
+        }
+    }
+
     /// Short label for the inner node.
     pub fn label(&self) -> String {
         match self {

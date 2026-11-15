@@ -318,6 +318,10 @@ pub enum NodeKind {
     /// by the app; the picked take plays through its reader slot like a
     /// bake. See `crate::nodes::genai`.
     GenAi(GenAiParams),
+    /// One step INSIDE a GenAI Pipeline's dive (a prompt, the node's input,
+    /// a model call, Output…). Never appears in a comp graph: the dive
+    /// writes the steps back into the owner's `genai::Pipeline`.
+    GenAiStep(genai::Op),
     /// Text on the text pipe: a prompt as a node of its own.
     Prompt(PromptParams),
     /// A camera on the scene pipe (`crate::scene3d`).
@@ -5907,6 +5911,7 @@ impl NodeKind {
             NodeKind::Plasma(_) => PlasmaParams::INPUTS,
             NodeKind::Particles(_) => ParticlesParams::INPUTS,
             NodeKind::ParticleNode(n) => n.inputs().len(),
+            NodeKind::GenAiStep(op) => op.ports().len(),
             NodeKind::Scene3D(p) => p.input_count(),
             NodeKind::Render3D(p) => p.input_count(),
             NodeKind::Grain(_) => GrainParams::INPUTS,
@@ -6840,6 +6845,13 @@ impl NodeKind {
                 n.inputs().get(input).map(|i| i.name).unwrap_or("input")
             }
             NodeKind::ParticleNode(n) => n.inputs().get(input).copied().unwrap_or("input"),
+            // A model's second port is its source picture: named, so it
+            // does not read as a bare "image input" beside the prompt.
+            NodeKind::GenAiStep(op) => match op.ports().get(input).map(|p| p.1) {
+                Some("image") if input > 0 => "source",
+                Some(n) => n,
+                None => "input",
+            },
             _ => {
                 if input == 0 { "image" } else { "input" }
             }
@@ -6857,7 +6869,11 @@ impl NodeKind {
     pub fn labels_inputs(&self) -> bool {
         matches!(
             self,
-            NodeKind::Field(_) | NodeKind::GeoNode(_) | NodeKind::SdfNode(_) | NodeKind::ParticleNode(_)
+            NodeKind::Field(_)
+                | NodeKind::GeoNode(_)
+                | NodeKind::SdfNode(_)
+                | NodeKind::ParticleNode(_)
+                | NodeKind::GenAiStep(_)
         )
     }
 
@@ -6918,6 +6934,14 @@ impl NodeKind {
         // A GenAI's port 2 takes a prompt off a Prompt node.
         if matches!(self, NodeKind::GenAi(_)) && input == 2 {
             return PortKind::Text;
+        }
+        // Inside a pipeline's dive: a step's prompt port is the text pipe,
+        // everything else a picture.
+        if let NodeKind::GenAiStep(op) = self {
+            return match op.ports().get(input) {
+                Some((genai::Pipe::Text, _)) => PortKind::Text,
+                _ => PortKind::Image,
+            };
         }
         // A Text's words can come off one too.
         if matches!(self, NodeKind::Text(_)) && input == crate::nodes::text::WORDS_INPUT {
@@ -7044,6 +7068,12 @@ impl NodeKind {
         }
         if let NodeKind::SdfNode(n) = self {
             return sdf_pipe(n.out_pipe());
+        }
+        if let NodeKind::GenAiStep(op) = self {
+            return match op.output() {
+                Some(genai::Pipe::Text) => PortKind::Text,
+                _ => PortKind::Image,
+            };
         }
         // A Read switched to all-channels output carries the fat cable.
         if matches!(self, NodeKind::Read { multi: true, .. }) {
@@ -7203,6 +7233,7 @@ impl NodeKind {
             NodeKind::Plasma(_) => PlasmaParams::NAME,
             NodeKind::Particles(_) => ParticlesParams::NAME,
             NodeKind::ParticleNode(n) => n.name(),
+            NodeKind::GenAiStep(op) => op.name(),
             NodeKind::GlintKernel(_) => GlintKernelParams::NAME,
             NodeKind::BokehKernel(_) => BokehKernelParams::NAME,
             NodeKind::Grain(_) => GrainParams::NAME,
@@ -7430,6 +7461,8 @@ impl NodeKind {
             NodeKind::Particles(p) => p.topo_tag(),
             // A particle node never reaches a comp graph's topology.
             NodeKind::ParticleNode(n) => 0x9A00 ^ n.topo_tag(),
+            // Never compiled (dive-only); a stable tag all the same.
+            NodeKind::GenAiStep(_) => 0x6A2_0000,
             NodeKind::GlintKernel(p) => p.topo_tag(),
             NodeKind::BokehKernel(p) => p.topo_tag(),
             NodeKind::Prompt(p) => p.topo_tag(),

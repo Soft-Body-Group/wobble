@@ -101,8 +101,6 @@ pub fn provider(kind: &NodeKind) -> Option<&'static dyn Provider> {
     match kind {
         NodeKind::Tracker(_) => Some(&crate::tracker::POINTS),
         NodeKind::Spline(_) => Some(&crate::rotoshapes::SHAPES),
-        // A one-model GenAI node IS its model: nothing inside to edit.
-        NodeKind::GenAi(p) if p.model.is_none() => Some(&crate::genaiui::STEPS),
         _ => None,
     }
 }

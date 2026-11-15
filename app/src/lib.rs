@@ -1452,6 +1452,8 @@ enum DiveKind {
     Sdf,
     /// A Particles node's emitters, forces and renders, the same way.
     Particles,
+    /// A GenAI Pipeline's steps, the same way.
+    GenAi,
 }
 
 /// The vector HUD's memo inside a 2dini dive: everything the geometry
@@ -15946,6 +15948,8 @@ impl Gfx {
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Sdf);
                 self.node_editor.in_particles =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Particles);
+                self.node_editor.in_genai =
+                    self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
                     self.node_editor.harp_layers = self.harp_layer_lists();
                     self.feed_wire_ranges();
                     self.feed_tvs();
@@ -20141,6 +20145,8 @@ impl Gfx {
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Sdf);
                 self.node_editor.in_particles =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Particles);
+                self.node_editor.in_genai =
+                    self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
                 self.node_editor.harp_layers = self.harp_layer_lists();
                 self.feed_wire_ranges();
                 self.node_editor.lit_inputs = self.lit_layer_inputs();
@@ -21767,6 +21773,9 @@ impl Gfx {
             | Some(NodeKind::Geo(_))
             | Some(NodeKind::Sdf(_))
             | Some(NodeKind::Particles(_)) => Some(n),
+            // A GenAI Pipeline opens onto its steps; a one-model node IS
+            // its model and has nothing inside.
+            Some(NodeKind::GenAi(p)) if p.model.is_none() => Some(n),
             // A Noise inside a drawing opens onto its field graph, one
             // level further down — the field nodes live there.
             Some(NodeKind::GeoNode(engine::geo::GeoNode::Noise { .. })) => Some(n),
@@ -21818,6 +21827,10 @@ impl Gfx {
                 },
                 DiveKind::Particles => match g.node_mut(inst).map(|e| &mut e.kind) {
                     Some(NodeKind::Particles(p)) => p.graph = nodes::particles::from_editor(&cur),
+                    _ => return None,
+                },
+                DiveKind::GenAi => match g.node_mut(inst).map(|e| &mut e.kind) {
+                    Some(NodeKind::GenAi(p)) => p.pipeline.steps = genaiui::from_editor(&cur),
                     _ => return None,
                 },
                 DiveKind::Noise => match g.node_mut(inst).map(|e| &mut e.kind) {
@@ -21931,6 +21944,13 @@ impl Gfx {
                 p.preview = looked;
             }
             g.view = Some(owner);
+            return Some(g);
+        }
+        // Inside a GenAI Pipeline: its steps make no pixels until a run, so
+        // the picture is the node's own (its take, or its input).
+        if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::GenAi) {
+            let mut g = d.graph.clone();
+            g.view = Some(d.from?);
             return Some(g);
         }
         // Authoring particles: the live graph spliced into its node, the
@@ -22623,6 +22643,31 @@ impl Gfx {
             });
             return Ok(());
         }
+        // So is a GenAI Pipeline's step graph.
+        if let Some(NodeKind::GenAi(p)) = self.egraph.node(node).map(|n| &n.kind).filter(|k| {
+            matches!(k, NodeKind::GenAi(p) if p.model.is_none())
+        }) {
+            let mut body = genaiui::to_editor(&p.pipeline);
+            body.node_status_min = self.egraph.node_status_min;
+            let parked_graph = std::mem::replace(&mut self.egraph, body);
+            let parked_last = std::mem::replace(&mut self.undo_last, self.egraph.clone());
+            self.dive.push(Dive {
+                kind: DiveKind::GenAi,
+                type_id: String::new(),
+                from: Some(node),
+                tiles: 1,
+                tiles_h: 1,
+                path: None,
+                graph: parked_graph,
+                undo_stack: std::mem::take(&mut self.undo_stack),
+                redo_stack: std::mem::take(&mut self.redo_stack),
+                undo_last: parked_last,
+                selected: std::mem::take(&mut self.selected),
+                zoom: self.node_editor.zoom,
+                pan: self.node_editor.pan,
+            });
+            return Ok(());
+        }
         // A geometry graph is owned by its node the same way.
         if let Some(NodeKind::Geo(g)) = self.egraph.node(node).map(|n| &n.kind) {
             let mut body = geo_to_editor(&g.graph);
@@ -22771,6 +22816,24 @@ impl Gfx {
             if let Some(node) = d.from {
                 if let Some(NodeKind::Sdf(p)) = self.egraph.node_mut(node).map(|e| &mut e.kind) {
                     p.graph = sdf;
+                }
+            }
+            self.undo_stack = d.undo_stack;
+            self.redo_stack = d.redo_stack;
+            self.undo_last = d.undo_last;
+            self.selected = d.selected;
+            self.node_editor.zoom = d.zoom;
+            self.node_editor.pan = d.pan;
+            self.playback_dirty = true;
+            return Ok(());
+        }
+        if d.kind == DiveKind::GenAi {
+            let body = std::mem::replace(&mut self.egraph, d.graph);
+            self.egraph.node_status_min = body.node_status_min;
+            let steps = genaiui::from_editor(&body);
+            if let Some(node) = d.from {
+                if let Some(NodeKind::GenAi(p)) = self.egraph.node_mut(node).map(|e| &mut e.kind) {
+                    p.pipeline.steps = steps;
                 }
             }
             self.undo_stack = d.undo_stack;
@@ -22962,6 +23025,7 @@ impl Gfx {
                 DiveKind::Geo => "2dini".into(),
                 DiveKind::Sdf => "SDF".into(),
                 DiveKind::Particles => "Particles".into(),
+                DiveKind::GenAi => "GenAI Pipeline".into(),
             };
             let text = egui::RichText::new(name).color(theme::highlight());
             if i + 1 < depth {
@@ -24233,7 +24297,11 @@ impl Gfx {
                     self.planar_job.as_ref().filter(|(n, _)| *n == node).map(|(_, j)| j.state());
                 let blender_view = self.blender_view(node);
                 let mut blender_click: Option<blenderui::Action> = None;
-                let genai_view = self.genai_view(node);
+                // A step inside a pipeline's dive shows its OWNER's view.
+                let genai_view = match self.egraph.node(node).map(|n| &n.kind) {
+                    Some(NodeKind::GenAiStep(_)) => self.genai_step_view(),
+                    _ => self.genai_view(node),
+                };
                 let mut genai_click: Option<genaiui::Action> = None;
                 let corridor_view = self.corridor_view(node);
                 let mut corridor_click: Option<corridorkey::Action> = None;
@@ -24901,6 +24969,7 @@ impl Gfx {
                     NodeKind::GenAi(gp) => {
                         genai_click = genaiui::panel(ui, node, gp, &genai_view);
                     }
+                    NodeKind::GenAiStep(op) => genaiui::step_panel(ui, node, op, &genai_view),
                     NodeKind::Camera3D(cp) => {
                         let (h, act) = nodes::scene3d::camera_panel(ui, &mut rcx, cp, r3d_range, &r3d_blenders, &r3d_trackers);
                         if let Some(h) = h {

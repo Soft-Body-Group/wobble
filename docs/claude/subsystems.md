@@ -1308,8 +1308,12 @@ Rules that are easy to break:
 ## GenAI node (`genai/`, `engine/src/nodes/genai.rs`, `app/src/genaiui.rs`)
 
 A generative-AI pipeline as a node: a small step graph (Prompt, Reference,
-Matte, Generate, Comfy, Output) carried as DATA on the node and drawn in
-place through `innards` (the Tracker precedent), run on a click, its takes
+Matte, Generate, Comfy, Output) carried as DATA on the node and edited by
+a DIVE (`DiveKind::GenAi`, the Particles/SDF pattern: `genaiui::to_editor`
+/ `from_editor`, inner kind `NodeKind::GenAiStep(Op)`, its own add-menu
+world `NodeCat::GenAiStep` / `NodeEditor::in_genai` / `editor::offered_in`;
+step index + 1 is the node id going in, id order is the step order coming
+out, takes never move), run on a click, its takes
 played back through a reader slot like a GraphBake. `.agents/genai.md` is
 the design note (relay protocol, what is next). The `genai` crate has no
 egui, no wgpu and no engine; `http.rs` is the only file that knows wasm

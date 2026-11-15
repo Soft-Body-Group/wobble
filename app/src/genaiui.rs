@@ -40,8 +40,6 @@ pub const TILES: usize = 2;
 pub const TILE_ROWS: usize = 2;
 /// Largest reference we send, in megapixels (see `genai::image::shrink`).
 pub const REF_MP: f32 = 2.0;
-/// Inner graphs stay legible at this many steps.
-pub const MAX_STEPS: usize = 12;
 
 /// Can this build play a video take? Only a build that decodes movies
 /// (`--features app/movie`) offers a video step: one it cannot play back
@@ -76,88 +74,77 @@ fn params_mut(kind: &mut NodeKind) -> Option<&mut GenAiParams> {
     }
 }
 
-// ------------------------------------------------------------ inner graph
+// ------------------------------------------------------------ the dive
 
-/// The pipeline as an inner graph: one node per step, every step an ITEM
-/// (selecting it puts its fields in the panel).
-pub struct Steps;
-pub static STEPS: Steps = Steps;
-
-impl innards::Provider for Steps {
-    fn mini(&self, kind: &NodeKind) -> innards::Mini {
-        use innards::{Mini, MiniEdge, MiniNode};
-        let Some(p) = params(kind) else { return Mini::default() };
-        let steps = &p.pipeline.steps;
-        let nodes = steps
-            .iter()
-            .enumerate()
-            .map(|(i, s)| MiniNode {
-                id: i,
-                at: s.at,
-                label: s.op.label(),
-                inputs: s.op.ports().len(),
-                output: s.op.output().is_some(),
-                item: true,
-                removable: !matches!(s.op, Op::Output),
-            })
-            .collect();
-        let edges = steps
-            .iter()
-            .enumerate()
-            .flat_map(|(to, s)| {
-                s.inputs
-                    .iter()
-                    .enumerate()
-                    .filter_map(move |(port, src)| src.map(|from| MiniEdge { from, to, port }))
-            })
-            .collect();
-        Mini { nodes, edges }
+/// A GenAI Pipeline's steps are opened like a Noise's field graph: Enter
+/// on the node dives into an ordinary node graph whose nodes are
+/// `NodeKind::GenAiStep`s, one per step, wired like any other graph. The
+/// steps live on the owner as a `genai::Pipeline`; these two functions are
+/// the round trip (the Particles/SDF pattern). Step index + 1 is the node
+/// id going in; coming out, steps are re-indexed by id order.
+pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
+    let mut g = crate::editor::EditorGraph::default();
+    // Pipelines drawn inside the node face (before the dive) kept their
+    // positions in the face's [-1, 1] square; spread those out.
+    let face = pl.steps.iter().all(|s| s.at[0].abs() <= 1.0 && s.at[1].abs() <= 1.0);
+    let k = if face { 260.0 } else { 1.0 };
+    for (i, s) in pl.steps.iter().enumerate() {
+        let id = i as u64 + 1;
+        let pos = egui::pos2(s.at[0] * k, s.at[1] * k);
+        g.nodes.insert(id, crate::editor::ENode::new(NodeKind::GenAiStep(s.op.clone()), pos));
     }
-
-    fn can_add(&self, kind: &NodeKind) -> bool {
-        params(kind).is_some_and(|p| p.pipeline.steps.len() < MAX_STEPS)
-    }
-
-    /// `+` adds a model step — the thing a pipeline most often grows by.
-    /// The panel's "+ step" menu adds the rest.
-    fn add(&self, graph: &mut crate::editor::EditorGraph, node: u64) -> Option<usize> {
-        let p = params_mut(&mut graph.node_mut(node)?.kind)?;
-        let op = Op::Generate { model: catalog::DEFAULT_MODEL.into(), seed: 1, opts: Opts::default() };
-        Some(push_near(&mut p.pipeline, op))
-    }
-
-    fn remove(&self, graph: &mut crate::editor::EditorGraph, node: u64, id: usize) -> bool {
-        graph
-            .node_mut(node)
-            .and_then(|n| params_mut(&mut n.kind))
-            .is_some_and(|p| p.pipeline.remove(id))
-    }
-
-    fn move_to(&self, kind: &mut NodeKind, id: usize, at: [f32; 2]) {
-        if let Some(s) = params_mut(kind).and_then(|p| p.pipeline.steps.get_mut(id)) {
-            s.at = at;
+    for (to, s) in pl.steps.iter().enumerate() {
+        for (port, src) in s.inputs.iter().enumerate() {
+            if let Some(from) = src {
+                g.edges.push((to as u64 + 1, port, *from as u64 + 1));
+            }
         }
     }
-
-    fn connect(&self, kind: &mut NodeKind, from: usize, to: usize, port: usize) -> bool {
-        params_mut(kind).is_some_and(|p| p.pipeline.connect(from, to, port))
-    }
-
-    fn disconnect(&self, kind: &mut NodeKind, to: usize, port: usize) {
-        if let Some(p) = params_mut(kind) {
-            p.pipeline.disconnect(to, port);
-        }
-    }
+    g.next_id = pl.steps.len() as u64 + 1;
+    g
 }
 
-/// Add a step somewhere free-ish: along a row above Output, so a new step
-/// never lands on top of the last one.
-fn push_near(pl: &mut Pipeline, op: Op) -> usize {
-    let n = pl.steps.len() as f32;
-    let x: f32 = -0.6 + 0.3 * (n % 5.0);
-    let y: f32 = -0.4 + 0.2 * ((n / 5.0).floor() % 3.0);
-    let at = [x.clamp(-0.85, 0.85), y.clamp(-0.85, 0.85)];
-    pl.push(op, at)
+/// The other direction: the dive's graph back into steps. Anything that is
+/// not a step is dropped, and so is a wire into a port the step lacks or of
+/// the wrong pipe (`Op::accepts`, the pipeline's one wiring rule).
+pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
+    let ids: Vec<u64> =
+        g.nodes.iter().filter(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(_))).map(|(id, _)| *id).collect();
+    let index = |id: u64| ids.iter().position(|&x| x == id);
+    let mut steps: Vec<genai::Step> = ids
+        .iter()
+        .map(|id| {
+            let n = &g.nodes[id];
+            let NodeKind::GenAiStep(op) = &n.kind else { unreachable!() };
+            genai::Step { op: op.clone(), at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()] }
+        })
+        .collect();
+    for &(dst, port, src) in &g.edges {
+        let (Some(to), Some(from)) = (index(dst), index(src)) else { continue };
+        let Some(pipe) = steps[from].op.output() else { continue };
+        if steps[to].op.accepts(port, pipe) {
+            steps[to].inputs[port] = Some(from);
+        }
+    }
+    steps
+}
+
+/// The step nodes the dive's add menu offers: the node's inputs, one node
+/// per model (no model menu, the same rule as the comp), ComfyUI, Output.
+pub fn step_entries() -> Vec<(&'static str, Op)> {
+    let mut v = vec![Op::Prompt { text: String::new() }, Op::PromptIn, Op::Reference, Op::Matte];
+    v.extend(offered_models().map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }));
+    v.push(Op::Comfy { workflow: String::new(), seed: 1, commercial: false });
+    v.push(Op::Output);
+    v.into_iter().map(|op| (op.name(), op)).collect()
+}
+
+/// A step node's properties, inside the dive. `v` is the OWNER's view.
+pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) {
+    let id = move |what: &str| egui::Id::new(("genai-step", node, what.to_string()));
+    let _ = op_fields(ui, &id, op, v, false);
+    ui.add_space(4.0);
+    ui.weak(small("run… is on the pipeline node: step out (U) to run"));
 }
 
 // ------------------------------------------------------------ graph marks
@@ -330,13 +317,11 @@ fn state_words(s: &StepState) -> String {
 /// The node's properties: steps on the left, billing + run + takes right.
 pub fn panel(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Action> {
     let mut act = None;
-    let n = p.pipeline.steps.len();
-    let sel = innards::selected(ui.ctx(), node, n);
     ui.columns(2, |cols| {
         if p.model.is_some() {
             model_column(&mut cols[0], node, p, v);
         } else {
-            steps_column(&mut cols[0], node, p, sel, v);
+            pipeline_column(&mut cols[0], p, v);
         }
         if let Some(a) = run_column(&mut cols[1], node, p, v) {
             act = Some(a);
@@ -371,67 +356,33 @@ fn model_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) {
     op_fields(ui, &id, &mut pl.steps[g].op, v, false);
 }
 
-fn steps_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, sel: usize, v: &View) {
-    let pl = &mut p.pipeline;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
-        for i in 0..pl.steps.len() {
-            let label = pl.steps[i].op.label();
-            if ui.add(egui::Button::selectable(i == sel, small(label))).clicked() {
-                innards::select(ui.ctx(), node, i);
-            }
-        }
-        ui.menu_button(small("+ step"), |ui| {
-            let mut add: Option<Op> = None;
-            if ui.button("prompt").clicked() {
-                add = Some(Op::Prompt { text: String::new() });
-            }
-            if ui.button("prompt in (the node's prompt port)").clicked() {
-                add = Some(Op::PromptIn);
-            }
-            if ui.button("input (the node's image)").clicked() {
-                add = Some(Op::Reference);
-            }
-            if ui.button("matte (the node's matte)").clicked() {
-                add = Some(Op::Matte);
-            }
-            ui.separator();
-            for t in Task::ALL {
-                if let Some(m) = catalog::for_task(t).find(|m| offered(m)) {
-                    if ui.button(t.label()).clicked() {
-                        add = Some(Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() });
+/// A GenAI Pipeline's left column: what its steps are, in run order, and
+/// how to open them. The steps themselves are edited inside (Enter).
+fn pipeline_column(ui: &mut Ui, p: &GenAiParams, v: &View) {
+    let pl = &p.pipeline;
+    ui.label(small("steps (Enter opens them, like a Noise)"));
+    match pl.output().map(|o| pl.plan(o)) {
+        Some(Ok(order)) => {
+            for i in order {
+                let s = &pl.steps[i];
+                let state = v.steps.get(&i).map(state_words).unwrap_or_default();
+                ui.horizontal(|ui| {
+                    ui.label(small(s.op.name()));
+                    if let Op::Prompt { text } = &s.op {
+                        ui.weak(small(text.chars().take(40).collect::<String>()));
                     }
-                }
+                    if !state.is_empty() {
+                        ui.weak(small(state));
+                    }
+                });
             }
-            ui.separator();
-            if ui.button("ComfyUI workflow").clicked() {
-                add = Some(Op::Comfy { workflow: String::new(), seed: 1, commercial: false });
-            }
-            if let Some(op) = add {
-                if pl.steps.len() < MAX_STEPS {
-                    let i = push_near(pl, op);
-                    innards::select(ui.ctx(), node, i);
-                }
-                ui.close();
-            }
-        });
-    });
-    ui.add_space(4.0);
-    let Some(is_output) = pl.steps.get(sel).map(|s| matches!(s.op, Op::Output)) else { return };
-    let mut remove = false;
-    let id = |what: &str| egui::Id::new(("genai", node, sel, what.to_string()));
-    let model_change = op_fields(ui, &id, &mut pl.steps[sel].op, v, true);
-    if !is_output {
-        ui.add_space(4.0);
-        if ui.small_button("remove step").clicked() {
-            remove = true;
         }
-    }
-    if let Some(m) = model_change {
-        pl.set_model(sel, m);
-    }
-    if remove {
-        pl.remove(sel);
+        Some(Err(e)) => {
+            ui.colored_label(theme::warn(), small(e));
+        }
+        None => {
+            ui.colored_label(theme::warn(), small("no Output step: open the pipeline and add one"));
+        }
     }
 }
 
@@ -836,6 +787,19 @@ fn key_row(ui: &mut Ui, label: &str, which: Key, origin: Option<Origin>) -> Opti
 
 /// Working-space RGBA -> linear Rec.709, the space `genai::image` encodes
 /// from.
+/// The text on `node`'s prompt port: a String node wired in, through Dots.
+fn wired_prompt(g: &crate::editor::EditorGraph, node: u64) -> Option<String> {
+    let mut src = g.input_of(node, 2)?;
+    for _ in 0..64 {
+        match &g.node(src)?.kind {
+            NodeKind::Prompt(p) => return Some(p.text.clone()),
+            NodeKind::Dot { .. } => src = g.input_of(src, 0)?,
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn to_rec709(rgba: &mut [f32], working: engine::color::Colorspace) {
     let t = engine::color::Transform::new(working, engine::color::Colorspace::LINEAR_REC709);
     if t.is_identity() {
@@ -1335,15 +1299,26 @@ impl Gfx {
     }
 
     pub(crate) fn genai_wired_prompt(&self, node: u64) -> Option<String> {
-        let mut src = self.egraph.input_of(node, 2)?;
-        for _ in 0..64 {
-            match &self.egraph.node(src)?.kind {
-                NodeKind::Prompt(p) => return Some(p.text.clone()),
-                NodeKind::Dot { .. } => src = self.egraph.input_of(src, 0)?,
-                _ => return None,
-            }
+        wired_prompt(&self.egraph, node)
+    }
+
+    /// The view a step inside a GenAI Pipeline's dive shows: its owner's,
+    /// with the owner's wiring read off the graph the dive parked.
+    pub(crate) fn genai_step_view(&self) -> View {
+        let Some((owner, g)) = self
+            .dive
+            .last()
+            .filter(|d| d.kind == crate::DiveKind::GenAi)
+            .and_then(|d| Some((d.from?, &d.graph)))
+        else {
+            return self.genai_view(0);
+        };
+        View {
+            has_input: g.input_of(owner, 0).is_some(),
+            has_matte: g.input_of(owner, 1).is_some(),
+            prompt: wired_prompt(g, owner),
+            ..self.genai_view(owner)
         }
-        None
     }
 
     /// Has the wired prompt changed since the quote was made? Then the
@@ -1498,6 +1473,8 @@ pub struct TestGenai {
     t0: web_time::Instant,
     since: web_time::Instant,
     node: u64,
+    /// The free-form pipeline node, once a one-model node takes `node`.
+    pipe: u64,
     /// The plate through the node before anything is generated.
     before: Option<f32>,
     /// A probe waiting for a second one that agrees.
@@ -1508,7 +1485,7 @@ pub struct TestGenai {
 impl Default for TestGenai {
     fn default() -> Self {
         let now = web_time::Instant::now();
-        Self { stage: 0, t0: now, since: now, node: 0, before: None, last: None, fake: None }
+        Self { stage: 0, t0: now, since: now, node: 0, pipe: 0, before: None, last: None, fake: None }
     }
 }
 
@@ -1739,6 +1716,7 @@ impl Gfx {
                     // The String on the port, the same model, seed and size:
                     // the same request as the pipeline's, so a cache hit.
                     self.genai_action(m, Action::Prepare);
+                    t.pipe = t.node;
                     t.node = m;
                     next(&mut t, 8);
                 }
@@ -1753,6 +1731,28 @@ impl Gfx {
                     if submits != 1 || takes != Some(1) {
                         fail(format!("the one-model node sent {} request(s) and has {takes:?} take(s)", submits - 1));
                     }
+                    // The pipeline opens like a Noise: its steps are nodes.
+                    let before = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).cloned().unwrap();
+                    self.dive_into(t.pipe).unwrap_or_else(|e| fail(format!("the pipeline would not open: {e}")));
+                    let steps = self.egraph.nodes.values().filter(|n| matches!(n.kind, NodeKind::GenAiStep(_))).count();
+                    if steps != before.pipeline.steps.len() || !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
+                        fail(format!("the dive shows {steps} step node(s) for {} steps", before.pipeline.steps.len()));
+                    }
+                    let input = crate::editor::node_catalog()
+                        .into_iter()
+                        .find(|e| e.cat == crate::editor::NodeCat::GenAiStep && e.label == "Input")
+                        .unwrap_or_else(|| fail("no Input step in the dive's menu".into()));
+                    self.egraph.add((input.make)(0), egui::pos2(0.0, -400.0));
+                    self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
+                    let after = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).cloned().unwrap();
+                    if after.pipeline.steps.len() != before.pipeline.steps.len() + 1
+                        || !matches!(after.pipeline.steps.last().map(|s| &s.op), Some(Op::Reference))
+                    {
+                        fail("a step added inside did not come back out as a step".into());
+                    }
+                    if after.pipeline.takes != before.pipeline.takes {
+                        fail("opening and closing the pipeline changed its takes".into());
+                    }
                     println!(
                         "GENAI TEST PASS: a local pipeline captured the plate at the playhead and \
                          played it back through the node within the 8-bit round trip; a fal \
@@ -1760,7 +1760,9 @@ impl Gfx {
                          once on pay & run, showed the returned grey card in the working space, \
                          and a re-run of the unchanged pipeline was a cache hit that sent nothing; \
                          one-model nodes from the add menu are named for their model, refuse to \
-                         run below an un-run model, and read a wired String as the same request"
+                         run below an un-run model, and read a wired String as the same request; \
+                         the pipeline opens as a graph of step nodes and a step added there comes \
+                         back out as a step"
                     );
                     std::process::exit(0);
                 }
@@ -1787,44 +1789,50 @@ impl Gfx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use innards::Provider;
-
     fn kind() -> NodeKind {
         NodeKind::GenAi(GenAiParams::new(0))
     }
 
     #[test]
-    fn the_inner_graph_mirrors_the_pipeline() {
-        let k = kind();
-        let m = STEPS.mini(&k);
-        // prompt, generate, output
-        assert_eq!(m.nodes.len(), 3);
-        assert_eq!(m.edges.len(), 2);
-        let out = m.nodes.iter().find(|n| n.label == "out").unwrap();
-        assert!(!out.removable && !out.output && out.inputs == 1);
-        assert!(m.edge_into(out.id, 0).is_some());
+    fn the_dive_round_trips_the_pipeline() {
+        let NodeKind::GenAi(p) = kind() else { unreachable!() };
+        let g = to_editor(&p.pipeline);
+        // prompt, generate, output, two wires, spread out of the face.
+        assert_eq!(g.nodes.len(), 3);
+        assert_eq!(g.edges.len(), 2);
+        assert!(g.nodes.values().any(|n| n.pos.x.abs() > 1.5 || n.pos.y.abs() > 1.5));
+        let back = from_editor(&g);
+        assert_eq!(back.len(), 3);
+        for (a, b) in back.iter().zip(&p.pipeline.steps) {
+            assert_eq!((&a.op, &a.inputs), (&b.op, &b.inputs));
+        }
+        // Graph positions survive a second trip untouched.
+        let mut pl = p.pipeline.clone();
+        pl.steps = back.clone();
+        assert_eq!(from_editor(&to_editor(&pl)), back);
     }
 
     #[test]
-    fn inner_wiring_goes_through_the_pipeline_s_rule() {
-        let mut k = kind();
-        // The prompt's text into Output's image port is refused.
-        assert!(!STEPS.connect(&mut k, 0, 2, 0));
-        STEPS.disconnect(&mut k, 2, 0);
-        assert!(STEPS.mini(&k).edge_into(2, 0).is_none());
-        assert!(STEPS.connect(&mut k, 1, 2, 0));
+    fn coming_out_drops_a_wire_of_the_wrong_pipe() {
+        let NodeKind::GenAi(p) = kind() else { unreachable!() };
+        let mut g = to_editor(&p.pipeline);
+        // Ids are step + 1: the prompt's text into Output's image port.
+        g.edges.retain(|e| e.0 != 3);
+        g.edges.push((3, 0, 1));
+        let back = from_editor(&g);
+        assert_eq!(back[2].inputs, vec![None]);
     }
 
     #[test]
-    fn add_and_remove_through_the_editor_graph() {
-        let mut g = crate::editor::EditorGraph::default();
-        let n = g.add(kind(), Pos2::ZERO);
-        let i = STEPS.add(&mut g, n).unwrap();
-        assert_eq!(i, 3);
-        assert!(STEPS.remove(&mut g, n, 0), "the prompt goes");
-        // Output is not removable.
-        let out = params(&g.node(n).unwrap().kind).unwrap().pipeline.output().unwrap();
-        assert!(!STEPS.remove(&mut g, n, out));
+    fn every_step_kind_is_in_the_dive_menu_and_no_model_twice() {
+        let e = step_entries();
+        for want in ["Prompt", "Prompt In", "Input", "Matte", "ComfyUI", "Output"] {
+            assert!(e.iter().any(|(l, _)| *l == want), "{want}");
+        }
+        let mut labels: Vec<_> = e.iter().map(|(l, _)| *l).collect();
+        labels.sort();
+        labels.dedup();
+        assert_eq!(labels.len(), e.len());
     }
 
     fn view(state: ViewState) -> View {
@@ -1946,13 +1954,5 @@ mod tests {
             Some(path) => println!("wrote {}", path.display()),
             None => println!("SKIP: no GPU adapter"),
         }
-    }
-
-    #[test]
-    fn a_new_step_never_lands_on_the_last_one() {
-        let mut p = Pipeline::default();
-        let a = push_near(&mut p, Op::Reference);
-        let b = push_near(&mut p, Op::Matte);
-        assert_ne!(p.steps[a].at, p.steps[b].at);
     }
 }

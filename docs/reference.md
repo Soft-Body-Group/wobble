@@ -3494,10 +3494,11 @@ are as below.
 A **GenAI Pipeline** node is the free-form version: a small generative
 pipeline — a prompt,
 the node's own input as a reference, one or more model calls, an Output —
-and plays the result back like a bake. Zoom into the node to see and wire
-its steps in place (the Tracker's inner-graph gestures: drag to move, drag
-output to input to wire, `+` adds a model step, alt-click removes);
-select a step and its fields are in the panel.
+and plays the result back like a bake. Its steps are NODES: Enter on the
+pipeline opens it like a Noise or a 2dini (U steps back out), and inside
+you add, wire and delete step nodes with the ordinary graph gestures — the
+add menu there lists the steps below, one node per model. Select a step
+and its fields are in the panel; run… is on the pipeline node itself.
 
 | step | what it is |
 |---|---|
