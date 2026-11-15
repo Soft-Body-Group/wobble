@@ -775,7 +775,7 @@ path. README has the user story. What must stay true:
 
 ## Splat node (`engine/src/splat.rs`, `engine/src/splatgpu.rs`, `engine/src/nodes/splat.rs`, `app/src/nodes/splat.rs`)
 
-A 3D Gaussian splat capture (`.ply`, `.spz` v1–3) drawn through a Camera:
+A 3D Gaussian splat capture (`.ply`, `.spz` v1–4) drawn through a Camera:
 the picture, and its depth on output 2. No training. README has the user
 story. What must stay true:
 
@@ -820,7 +820,7 @@ story. What must stay true:
   distance, a `.ply` is turned Y up, a shuffled 150k capture renders the
   same, a still camera draws once. `WOBBLE_SPLAT_PERF=1` prints the time for
   4M splats at 1080p (≈41 ms on the M-series dev Mac).
-- Not built: `.spz` v4 (zstd), compressed `.ply`, motion blur across the
+- Not built: compressed `.ply`, SH band 4 (read, not drawn), motion blur across the
   shutter, a viewer gizmo for the placement, a tile rasteriser (big
   near-camera splats are fill-rate bound).
 

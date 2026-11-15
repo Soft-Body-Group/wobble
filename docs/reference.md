@@ -1154,7 +1154,7 @@ fit is honoured, its lens shift is not.
 ## Splat — a Gaussian splat capture through a camera
 
 **3D → Splat.** Pick a `.ply` (the layout 3DGS training writes) or an
-`.spz` (versions 1–3) and the capture is drawn on the GPU through whatever
+`.spz` and the capture is drawn on the GPU through whatever
 **Camera** is wired into the node's input — a CameraTrack's solve, a
 file's, Blender's. Unwired, it is the default Camera. Output 1 is the
 picture (premultiplied RGBA, scene-linear); output 2 is **depth**, the

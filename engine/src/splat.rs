@@ -1,5 +1,6 @@
 //! 3D Gaussian splat captures: reading `.ply` (the 3DGS training layout)
-//! and `.spz` (Niantic's packed format, gzip versions 1–3) into one
+//! and `.spz` (Niantic's packed format: the gzip versions 1–3 and the
+//! zstd-stream version 4) into one
 //! GPU-ready cloud, loaded off the UI thread and cached per path.
 //!
 //! The cloud keeps the file's OWN coordinate frame. A 3DGS `.ply` is
@@ -70,7 +71,8 @@ pub fn sh_coeffs(degree: u32) -> usize {
         0 => 0,
         1 => 3,
         2 => 8,
-        _ => 15,
+        3 => 15,
+        _ => 24,
     }
 }
 
@@ -133,8 +135,10 @@ pub fn pack(
     while degree > 0 && (file_count as u64) * sh_words(degree) as u64 * 4 > budget {
         degree -= 1;
     }
-    if degree < file_degree {
+    if degree < file_degree.min(3) {
         notes.push(format!("SH kept to band {degree} of {file_degree} to fit the GPU"));
+    } else if file_degree > 3 {
+        notes.push("SH band 4 is not drawn".to_string());
     }
     // Then splats: every k-th, so what is left still covers the scene.
     let mut stride = 1usize;
@@ -388,8 +392,7 @@ const NGSP: u32 = 0x5053_474e;
 /// (positions, alphas, colours, scales, rotations, SH).
 pub fn parse_spz(bytes: &[u8]) -> Result<Cloud, String> {
     if bytes.len() >= 8 && u32::from_le_bytes(bytes[0..4].try_into().unwrap()) == NGSP {
-        let v = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        return Err(format!("SPZ version {v} (zstd streams) is not supported yet; re-save as version 3"));
+        return parse_spz_v4(bytes);
     }
     let mut raw = Vec::new();
     {
@@ -401,7 +404,55 @@ pub fn parse_spz(bytes: &[u8]) -> Result<Cloud, String> {
     decode_spz(&raw)
 }
 
-/// The decompressed body of an `.spz`.
+/// Version 4: a 32-byte header, a table of (compressed, uncompressed)
+/// sizes, then one zstd frame per attribute stream, in the same order as
+/// the older layout (an empty stream is left out).
+fn parse_spz_v4(bytes: &[u8]) -> Result<Cloud, String> {
+    if bytes.len() < 32 {
+        return Err("SPZ is too short".into());
+    }
+    let u = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+    let version = u(4);
+    if version != 4 {
+        return Err(format!("SPZ version {version} is not supported"));
+    }
+    let n = u(8) as usize;
+    let (degree, frac, flags, streams) = (bytes[12] as u32, bytes[13] as i32, bytes[14], bytes[15] as usize);
+    let toc = u(16) as usize;
+    if degree > 4 {
+        return Err(format!("SPZ SH degree {degree} is not supported"));
+    }
+    let sizes = [9, 1, 3, 3, 4, sh_coeffs(degree) * 3].map(|s| s * n);
+    let want: Vec<usize> = sizes.iter().copied().filter(|s| *s > 0).collect();
+    if n == 0 || want.len() != streams {
+        return Err("SPZ stream table does not match its header".into());
+    }
+    let toc_end = toc.checked_add(streams * 16).filter(|e| toc >= 32 && *e <= bytes.len());
+    let Some(mut at) = toc_end else { return Err("SPZ stream table is out of the file".into()) };
+    let mut bufs: Vec<Vec<u8>> = Vec::new();
+    for (i, size) in want.iter().enumerate() {
+        let e = toc + i * 16;
+        let comp = u64::from_le_bytes(bytes[e..e + 8].try_into().unwrap()) as usize;
+        let raw = u64::from_le_bytes(bytes[e + 8..e + 16].try_into().unwrap()) as usize;
+        let end = at.checked_add(comp).filter(|x| *x <= bytes.len()).ok_or("SPZ stream runs past the file")?;
+        if raw != *size {
+            return Err("SPZ stream size does not match its header".into());
+        }
+        // One frame: anything after it in the stream is an extension.
+        let mut out = vec![0u8; raw];
+        let mut dec = ruzstd::decoding::StreamingDecoder::new(&bytes[at..end])
+            .map_err(|e| format!("SPZ stream {i} is not zstd: {e}"))?;
+        std::io::Read::read_exact(&mut dec, &mut out).map_err(|e| format!("SPZ stream {i} is cut short: {e}"))?;
+        bufs.push(out);
+        at = end;
+    }
+    let empty: &[u8] = &[];
+    let mut it = bufs.iter();
+    let s: Vec<&[u8]> = sizes.iter().map(|z| if *z > 0 { it.next().unwrap().as_slice() } else { empty }).collect();
+    spz_streams(version, n, degree, frac, flags, [s[0], s[1], s[2], s[3], s[4], s[5]])
+}
+
+/// The decompressed body of a gzip `.spz` (versions 1–3).
 pub fn decode_spz(raw: &[u8]) -> Result<Cloud, String> {
     if raw.len() < 16 {
         return Err("SPZ is too short".into());
@@ -435,8 +486,15 @@ pub fn decode_spz(raw: &[u8]) -> Result<Cloud, String> {
         at += s * n;
         r
     };
-    let (pos, alpha, col, scl, rot, shb) =
-        (stream(sizes[0]), stream(sizes[1]), stream(sizes[2]), stream(sizes[3]), stream(sizes[4]), stream(sizes[5]));
+    let all =
+        [stream(sizes[0]), stream(sizes[1]), stream(sizes[2]), stream(sizes[3]), stream(sizes[4]), stream(sizes[5])];
+    spz_streams(version, n, degree, frac, flags, all)
+}
+
+/// The attribute streams (positions, alphas, colours, scales, rotations,
+/// SH) of any version, into a cloud.
+fn spz_streams(version: u32, n: usize, degree: u32, frac: i32, flags: u8, s: [&[u8]; 6]) -> Result<Cloud, String> {
+    let [pos, alpha, col, scl, rot, shb] = s;
     let fscale = 1.0 / (1i64 << frac.clamp(0, 30)) as f32;
     const COLOR_SCALE: f32 = 0.15;
     let mut raws = Vec::with_capacity(n);
@@ -699,5 +757,73 @@ mod tests {
         assert!(c.sh_degree < 3);
         assert!(c.count < 40_000 && c.count * SPLAT_WORDS * 4 <= 1 << 20);
         assert_eq!(c.notes.len(), 2, "{:?}", c.notes);
+    }
+
+    /// The streams of a two-splat capture, as `an_spz_v3_reads` lays them out.
+    fn streams() -> [Vec<u8>; 5] {
+        let mut pos = Vec::new();
+        for i in 0..2i32 {
+            for k in 0..3 {
+                let v: i32 = if k == 0 { (i + 1) << 12 } else { -(1 << 11) };
+                pos.extend_from_slice(&v.to_le_bytes()[..3]);
+            }
+        }
+        let mut rot = Vec::new();
+        for _ in 0..2 {
+            rot.extend_from_slice(&(3u32 << 30).to_le_bytes());
+        }
+        [pos, vec![255, 0], vec![128; 6], vec![144, 144, 144, 0, 0, 0], rot]
+    }
+
+    #[test]
+    fn a_gzip_spz_reads_through_the_file_entry() {
+        use std::io::Write;
+        let mut body = Vec::new();
+        body.extend_from_slice(&NGSP.to_le_bytes());
+        body.extend_from_slice(&3u32.to_le_bytes());
+        body.extend_from_slice(&2u32.to_le_bytes());
+        body.extend_from_slice(&[0, 12, 0, 0]);
+        for s in streams() {
+            body.extend_from_slice(&s);
+        }
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&body).unwrap();
+        let c = parse_spz(&gz.finish().unwrap()).unwrap();
+        assert_eq!(c.count, 2);
+        assert_eq!(f32::from_bits(c.splats[SPLAT_WORDS]), 2.0);
+    }
+
+    #[test]
+    fn an_spz_v4_reads_its_zstd_streams() {
+        let raw = streams();
+        let comp: Vec<Vec<u8>> = raw
+            .iter()
+            .map(|s| ruzstd::encoding::compress_to_vec(s.as_slice(), ruzstd::encoding::CompressionLevel::Fastest))
+            .collect();
+        let mut b = Vec::new();
+        b.extend_from_slice(&NGSP.to_le_bytes());
+        b.extend_from_slice(&4u32.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&[0, 12, 1, comp.len() as u8]);
+        b.extend_from_slice(&32u32.to_le_bytes());
+        b.extend_from_slice(&[0; 12]);
+        for (c, r) in comp.iter().zip(&raw) {
+            b.extend_from_slice(&(c.len() as u64).to_le_bytes());
+            b.extend_from_slice(&(r.len() as u64).to_le_bytes());
+        }
+        for c in &comp {
+            b.extend_from_slice(c);
+        }
+        let c = parse_spz(&b).unwrap();
+        assert_eq!(c.count, 2);
+        assert!(c.antialiased);
+        assert_eq!(c.native, Native::Rub);
+        assert_eq!(f32::from_bits(c.splats[0]), 1.0);
+        assert_eq!(f32::from_bits(c.splats[1]), -0.5);
+        assert!((word_f16(c.splats[6], true) - 1.0).abs() < 1e-3);
+        // A table that lies about a stream is refused, not read past.
+        let mut bad = b.clone();
+        bad[32 + 8] ^= 1;
+        assert!(parse_spz(&bad).is_err());
     }
 }
