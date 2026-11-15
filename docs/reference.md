@@ -3479,7 +3479,20 @@ remember to wire up.
 
 ## GenAI — generative models as a node
 
-A **GenAI** node (Sources) holds a small generative pipeline — a prompt,
+**One node per model.** The AI menu lists every remote model as its own
+node — *FLUX.1 [schnell]*, *FLUX.1 Kontext [pro]*, *Nano Banana Pro*,
+*GPT Image 2 inpaint*, … — named for the model, with the model's inputs
+(image, matte, prompt port) and its own fields: a prompt box, seed, size,
+extra JSON. No model menu: to try another model, add that node. A String
+wired into the prompt port wins over the typed prompt. Chain them in the
+comp (a FLUX text-to-image into a Kontext edit into an upscale) and
+collapse the chain into a subwob (alt+G) to reuse it. Each node runs on its
+own click; a node whose upstream model has no take yet refuses to run
+rather than send the raw plate in its place. Billing, caching and takes
+are as below.
+
+A **GenAI Pipeline** node is the free-form version: a small generative
+pipeline — a prompt,
 the node's own input as a reference, one or more model calls, an Output —
 and plays the result back like a bake. Zoom into the node to see and wire
 its steps in place (the Tracker's inner-graph gestures: drag to move, drag

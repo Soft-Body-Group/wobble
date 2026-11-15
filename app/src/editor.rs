@@ -515,7 +515,9 @@ pub struct NodeEntry {
     /// plays a bake through one).
     pub reader: bool,
     /// Built with the next free reader slot; ignored by kinds without one.
-    pub make: fn(usize) -> NodeKind,
+    /// A closure, not a fn pointer, so an entry generated from a table
+    /// (one per GenAI model) can carry its row.
+    pub make: std::sync::Arc<dyn Fn(usize) -> NodeKind + Send + Sync>,
     /// Maturity, read off the node `make` builds (see [`status_of`]).
     pub status: NodeStatus,
 }
@@ -544,7 +546,7 @@ pub fn search_aliases() -> Vec<NodeEntry> {
         cat: NodeCat::Matte,
         label,
         reader: false,
-        make,
+        make: std::sync::Arc::new(make),
         status: status_of(&make(0)),
     };
     vec![
@@ -572,10 +574,10 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         cat,
         label,
         reader,
-        make,
+        make: std::sync::Arc::new(make),
         status: status_of(&make(0)),
     };
-    vec![
+    let mut v = vec![
         // --- source -----------------------------------------------------
         e(Source, "Load", true, |s| NodeKind::read(s, "")),
         e(Source, "Grid", false, |_| NodeKind::Grid(GridParams::default())),
@@ -598,9 +600,10 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // ripples and bevels over its input.
         e(Source, "SDF", false, |_| NodeKind::Sdf(Default::default())),
         e(Source, "Blender", false, |_| NodeKind::Blender(Default::default())),
-        // A generative-AI pipeline, run on a click; its takes play back
-        // through the reader slot like a bake.
-        e(Ai, "GenAI", true, |s| NodeKind::GenAi(engine::graph::GenAiParams::new(s))),
+        // A free-form generative-AI pipeline (several steps, ComfyUI), run
+        // on a click; its takes play back through the reader slot like a
+        // bake. The one-model nodes are appended below, one per model.
+        e(Ai, "GenAI Pipeline", true, |s| NodeKind::GenAi(engine::graph::GenAiParams::new(s))),
         // --- geometry (inside a 2dini node only) ------------------------
         e(GeoCreate, "Spline", false, |_| {
             NodeKind::GeoNode(geo::GeoNode::Spline {
@@ -1099,7 +1102,16 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // A routing anchor. Costs nothing: it is elided before the engine
         // sees a graph, so it is tidiness with no frame-rate attached.
         e(Utility, "Dot", false, |_| NodeKind::dot(PortKind::Image)),
-    ]
+    ];
+    // One node per remote model, named for it: the model is the node, not
+    // a dropdown inside one. Chain them in the comp, collapse a chain into
+    // a subwob. Video models only where a video take can play.
+    v.extend(crate::genaiui::offered_models().map(|m| {
+        let id = m.id;
+        let make = move |s| NodeKind::GenAi(engine::graph::GenAiParams::for_model(s, id));
+        NodeEntry { cat: Ai, label: m.label, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
+    }));
+    v
 }
 
 /// Which of `selection` a node just added from the Tab search takes as its
@@ -1354,6 +1366,12 @@ pub fn node_label(kind: &NodeKind) -> String {
         NodeKind::Read { source, .. } => format!("Read {}", source + 1),
         NodeKind::GraphBake { source, .. } => format!("Bake {}", source + 1),
         NodeKind::Layer(p) => format!("Layer ×{}", p.layers.len()),
+        // A one-model GenAI node is called by its model.
+        NodeKind::GenAi(p) => match (&p.model, p.remote_model()) {
+            (_, Some(m)) => m.label.to_string(),
+            (Some(id), None) => format!("unknown model {id}"),
+            (None, None) => "GenAI Pipeline".to_string(),
+        },
         NodeKind::Custom { type_id, .. } => match engine::plugins::get(type_id) {
             Some(def) => def.label.clone(),
             None => format!("missing: {type_id}"),
@@ -13400,7 +13418,7 @@ mod catalog_tests {
     #[test]
     fn search_aliases_find_edge_extend_in_the_right_mode() {
         use engine::graph::ExtendMode;
-        let all: Vec<(String, fn(usize) -> NodeKind)> = node_catalog()
+        let all: Vec<(String, std::sync::Arc<dyn Fn(usize) -> NodeKind + Send + Sync>)> = node_catalog()
             .into_iter()
             .chain(search_aliases())
             .map(|e| (e.label.to_string(), e.make))

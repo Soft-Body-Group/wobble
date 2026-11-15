@@ -55,6 +55,11 @@ fn offered(m: &catalog::RemoteModel) -> bool {
     !m.task.is_video() || video_ok()
 }
 
+/// The models this build adds as one-model nodes (`editor::node_catalog`).
+pub fn offered_models() -> impl Iterator<Item = &'static catalog::RemoteModel> {
+    catalog::CATALOG.iter().filter(|m| offered(m))
+}
+
 const NO_VIDEO: &str = "this build cannot play a video take: build with --features app/movie";
 
 fn params(kind: &NodeKind) -> Option<&GenAiParams> {
@@ -328,12 +333,42 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Ac
     let n = p.pipeline.steps.len();
     let sel = innards::selected(ui.ctx(), node, n);
     ui.columns(2, |cols| {
-        steps_column(&mut cols[0], node, p, sel, v);
+        if p.model.is_some() {
+            model_column(&mut cols[0], node, p, v);
+        } else {
+            steps_column(&mut cols[0], node, p, sel, v);
+        }
         if let Some(a) = run_column(&mut cols[1], node, p, v) {
             act = Some(a);
         }
     });
     act
+}
+
+/// A one-model node's left column: its inputs, then the model's own
+/// fields. No step list, no model menu: the node IS the model.
+fn model_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) {
+    let pl = &mut p.pipeline;
+    let Some(g) = pl.model_step() else {
+        ui.colored_label(theme::error(), small("this node's pipeline has lost its model step"));
+        return;
+    };
+    for i in 0..pl.steps.len() {
+        if i == g || matches!(pl.steps[i].op, Op::Output) {
+            continue;
+        }
+        let id = move |what: &str| egui::Id::new(("genai", node, i, what.to_string()));
+        if matches!(pl.steps[i].op, Op::Prompt { .. }) && v.prompt.is_some() {
+            // A wired String node wins over the typed prompt (the run reads
+            // the port instead), so say so rather than offer a dead box.
+            op_fields(ui, &id, &mut Op::PromptIn, v, false);
+        } else {
+            op_fields(ui, &id, &mut pl.steps[i].op, v, false);
+        }
+        ui.add_space(2.0);
+    }
+    let id = move |what: &str| egui::Id::new(("genai", node, g, what.to_string()));
+    op_fields(ui, &id, &mut pl.steps[g].op, v, false);
 }
 
 fn steps_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, sel: usize, v: &View) {
@@ -384,9 +419,28 @@ fn steps_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, sel: usize, v: &Vie
     ui.add_space(4.0);
     let Some(is_output) = pl.steps.get(sel).map(|s| matches!(s.op, Op::Output)) else { return };
     let mut remove = false;
-    let mut model_change: Option<&'static str> = None;
     let id = |what: &str| egui::Id::new(("genai", node, sel, what.to_string()));
-    match &mut pl.steps[sel].op {
+    let model_change = op_fields(ui, &id, &mut pl.steps[sel].op, v, true);
+    if !is_output {
+        ui.add_space(4.0);
+        if ui.small_button("remove step").clicked() {
+            remove = true;
+        }
+    }
+    if let Some(m) = model_change {
+        pl.set_model(sel, m);
+    }
+    if remove {
+        pl.remove(sel);
+    }
+}
+
+/// One step's fields. `pick_model` offers the model menu on a model step
+/// (the free-form pipeline); a one-model node passes false. Returns the
+/// model picked from that menu, if one was.
+fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, pick_model: bool) -> Option<&'static str> {
+    let mut model_change: Option<&'static str> = None;
+    match op {
         Op::Prompt { text } => {
             ui.add(
                 egui::TextEdit::multiline(text)
@@ -431,19 +485,23 @@ fn steps_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, sel: usize, v: &Vie
         }
         Op::Generate { model, seed, opts } => {
             let cur = catalog::get(model);
-            egui::ComboBox::from_id_salt(id("model"))
-                .width(ui.available_width())
-                .selected_text(small(cur.map(|m| m.label).unwrap_or("unknown model")))
-                .show_ui(ui, |ui| {
-                    for t in Task::ALL {
-                        ui.label(small(t.label()).weak());
-                        for m in catalog::for_task(t).filter(|m| offered(m)) {
-                            if ui.add(egui::Button::selectable(cur.is_some_and(|c| c.id == m.id), m.label)).clicked() {
-                                model_change = Some(m.id);
+            if !pick_model {
+                ui.label(egui::RichText::new(cur.map(|m| m.label).unwrap_or("unknown model")).strong());
+            } else {
+                egui::ComboBox::from_id_salt(id("model"))
+                    .width(ui.available_width())
+                    .selected_text(small(cur.map(|m| m.label).unwrap_or("unknown model")))
+                    .show_ui(ui, |ui| {
+                        for t in Task::ALL {
+                            ui.label(small(t.label()).weak());
+                            for m in catalog::for_task(t).filter(|m| offered(m)) {
+                                if ui.add(egui::Button::selectable(cur.is_some_and(|c| c.id == m.id), m.label)).clicked() {
+                                    model_change = Some(m.id);
+                                }
                             }
                         }
-                    }
-                });
+                    });
+            }
             match cur {
                 Some(m) => {
                     ui.weak(small(m.about));
@@ -540,18 +598,7 @@ fn steps_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, sel: usize, v: &Vie
             ui.checkbox(commercial, small("its models are free for commercial use (my word)"));
         }
     }
-    if !is_output {
-        ui.add_space(4.0);
-        if ui.small_button("remove step").clicked() {
-            remove = true;
-        }
-    }
-    if let Some(m) = model_change {
-        pl.set_model(sel, m);
-    }
-    if remove {
-        pl.remove(sel);
-    }
+    model_change
 }
 
 fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Action> {
@@ -827,11 +874,7 @@ impl Gfx {
             Some(Phase::Quoting { .. }) => ViewState::Quoting,
             Some(Phase::Ready { plan, quote, inputs }) => {
                 let r = mine.unwrap();
-                let stale = self
-                    .egraph
-                    .node(node)
-                    .and_then(|n| params(&n.kind))
-                    .is_none_or(|p| p.pipeline.steps != r.pipeline.steps)
+                let stale = self.genai_runnable(node).is_none_or(|p| p.steps != r.pipeline.steps)
                     || self.genai_prompt_moved(node, &r.pipeline, inputs);
                 ViewState::Ready { quote: quote.clone(), billed: plan.billed(&r.pipeline).len(), stale }
             }
@@ -934,8 +977,7 @@ impl Gfx {
         if self.jobs.genai.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
-        let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else { return };
-        let pl = p.pipeline;
+        let Some(pl) = self.genai_runnable(node) else { return };
         // Everything that can be said without rendering or sending, first.
         let Some(out) = pl.output() else {
             return self.genai_fail(node, pl, "the pipeline has no Output step");
@@ -967,6 +1009,11 @@ impl Gfx {
                     return self.genai_fail(node, pl, format!("the pipeline reads the node's {what}: wire one in"));
                 }
                 todo.push(port);
+            }
+        }
+        if !todo.is_empty() {
+            if let Some(up) = self.genai_unrun_upstream(node) {
+                return self.genai_fail(node, pl, format!("{up} upstream has no take yet: run it first"));
             }
         }
         if !todo.is_empty() && self.graph_bake.is_some() {
@@ -1115,7 +1162,7 @@ impl Gfx {
     }
 
     fn genai_confirm(&mut self, node: u64) {
-        let current = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.steps.clone());
+        let current = self.genai_runnable(node).map(|p| p.steps);
         let moved = match self.jobs.genai.run.as_ref().filter(|r| r.node == node) {
             Some(Run { pipeline, phase: Phase::Ready { inputs, .. }, .. }) => {
                 self.genai_prompt_moved(node, pipeline, inputs)
@@ -1245,6 +1292,48 @@ impl Gfx {
 
     /// The text on a GenAI node's prompt port: the String node wired there,
     /// through any dots on the way.
+    /// The pipeline a run of `node` would walk: the node's own, except that
+    /// a one-model node with a String wired into its prompt port reads the
+    /// port instead of its typed prompt. Never written back to the node;
+    /// staleness compares against this, not the stored steps.
+    pub(crate) fn genai_runnable(&self, node: u64) -> Option<Pipeline> {
+        let p = self.egraph.node(node).and_then(|n| params(&n.kind))?;
+        let mut pl = p.pipeline.clone();
+        if p.model.is_some() && self.genai_wired_prompt(node).is_some() {
+            for s in &mut pl.steps {
+                if matches!(s.op, Op::Prompt { .. }) {
+                    s.op = Op::PromptIn;
+                }
+            }
+        }
+        Some(pl)
+    }
+
+    /// A one-model node upstream of `node`'s image or matte that has no take
+    /// yet: it would pass its own input through, and the capture would send
+    /// the raw plate instead of that model's result. Its name, if there is
+    /// one. (Bypassed nodes pass through on purpose and are skipped.)
+    fn genai_unrun_upstream(&self, node: u64) -> Option<String> {
+        let mut todo: Vec<u64> = [0, 1].iter().filter_map(|&i| self.egraph.input_of(node, i)).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(n) = todo.pop() {
+            if !seen.insert(n) {
+                continue;
+            }
+            let Some(en) = self.egraph.node(n) else { continue };
+            if let NodeKind::GenAi(p) = &en.kind {
+                if !en.disabled && p.pipeline.picked().is_none() {
+                    return Some(crate::editor::display_label(en));
+                }
+                if p.pipeline.picked().is_some() {
+                    continue; // its take is what renders; above it is not read
+                }
+            }
+            todo.extend(self.egraph.edges.iter().filter(|e| e.0 == n).map(|e| e.2));
+        }
+        None
+    }
+
     pub(crate) fn genai_wired_prompt(&self, node: u64) -> Option<String> {
         let mut src = self.egraph.input_of(node, 2)?;
         for _ in 0..64 {
@@ -1612,12 +1701,66 @@ impl Gfx {
                     if takes != Some(2) {
                         fail(format!("the cached re-run changed the takes: {takes:?}, expected 2"));
                     }
+                    // One-model nodes, made the way the add menu makes them.
+                    self.genai_action(t.node, Action::Dismiss);
+                    let entry = |label: &str| {
+                        crate::editor::node_catalog()
+                            .into_iter()
+                            .find(|e| e.label == label)
+                            .unwrap_or_else(|| fail(format!("no \"{label}\" in the add menu")))
+                    };
+                    let mut slot = || {
+                        self.next_read_slot += 1;
+                        self.next_read_slot - 1
+                    };
+                    let (s1, s2) = (slot(), slot());
+                    let flux = (entry("FLUX.1 [schnell]").make)(s1);
+                    let kontext = (entry("FLUX.1 Kontext [pro]").make)(s2);
+                    if crate::editor::node_label(&flux) != "FLUX.1 [schnell]" || innards::provider(&flux).is_some() {
+                        fail("a one-model node is not called by its model, or still has steps inside".into());
+                    }
+                    let m = self.egraph.add(flux, egui::pos2(360.0, 360.0));
+                    let k = self.egraph.add(kontext, egui::pos2(360.0, 480.0));
+                    let pn = self.egraph.input_of(t.node, 2).unwrap();
+                    self.egraph.connect(m, 2, pn);
+                    self.egraph.connect(k, 0, m);
+                    self.egraph.connect(k, 2, pn);
+                    // A chain whose upstream model never ran must not send
+                    // the raw plate in its place.
+                    self.genai_action(k, Action::Prepare);
+                    match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                        Some(Phase::Failed(e)) if e.contains("no take yet") => {}
+                        _ => fail(format!(
+                            "a model downstream of an un-run one was let through ({})",
+                            self.genai_state_words()
+                        )),
+                    }
+                    self.genai_action(k, Action::Dismiss);
+                    // The String on the port, the same model, seed and size:
+                    // the same request as the pipeline's, so a cache hit.
+                    self.genai_action(m, Action::Prepare);
+                    t.node = m;
+                    next(&mut t, 8);
+                }
+                _ => {}
+            },
+            8 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the one-model node's run failed: {e}")),
+                Some(Phase::Ready { .. }) => fail("a one-model node re-billed a request the pipeline already made".into()),
+                Some(Phase::Done(_)) => {
+                    let submits = t.fake.as_ref().unwrap().submits();
+                    let takes = self.egraph.node(t.node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
+                    if submits != 1 || takes != Some(1) {
+                        fail(format!("the one-model node sent {} request(s) and has {takes:?} take(s)", submits - 1));
+                    }
                     println!(
                         "GENAI TEST PASS: a local pipeline captured the plate at the playhead and \
                          played it back through the node within the 8-bit round trip; a fal \
                          pipeline prompted by a Prompt node on the text pipe stopped at a $0.003 quote with nothing sent, submitted exactly \
                          once on pay & run, showed the returned grey card in the working space, \
-                         and a re-run of the unchanged pipeline was a cache hit that sent nothing"
+                         and a re-run of the unchanged pipeline was a cache hit that sent nothing; \
+                         one-model nodes from the add menu are named for their model, refuse to \
+                         run below an un-run model, and read a wired String as the same request"
                     );
                     std::process::exit(0);
                 }
@@ -1712,9 +1855,16 @@ mod tests {
     fn the_panel_fits_the_tiles_it_asks_for() {
         let span = |n: usize| crate::widgets::TILE * n as f32 + crate::widgets::TILE_GAP * (n as f32 - 1.0);
         let (w, hgt) = (span(TILES) - 14.0, span(TILE_ROWS) - 14.0 - 22.0);
-        for keys_open in [false, true] {
-            let mut p = GenAiParams::new(0);
-            p.pipeline.set_model(1, "fal/flux-dev");
+        // The free-form pipeline, and the busiest one-model node (prompt,
+        // image AND matte inputs).
+        for (keys_open, model) in [(false, None), (true, None), (false, Some("fal/gpt-image-2-inpaint"))] {
+            let mut p = match model {
+                Some(id) => GenAiParams::for_model(0, id),
+                None => GenAiParams::new(0),
+            };
+            if model.is_none() {
+                p.pipeline.set_model(1, "fal/flux-dev");
+            }
             for k in 0..5 {
                 p.pipeline.takes.push(genai::Take {
                     key: format!("k{k}"),
@@ -1746,7 +1896,11 @@ mod tests {
                 over.set(out.content_size.y - out.inner_rect.height());
                 wide.set(out.content_size.x - out.inner_rect.width());
             });
-            shot.save(if keys_open { "genai-panel-keys" } else { "genai-panel" });
+            shot.save(match (keys_open, model) {
+                (_, Some(_)) => "genai-panel-model",
+                (true, _) => "genai-panel-keys",
+                _ => "genai-panel",
+            });
             assert!(
                 over.get() <= 0.5,
                 "the panel (keys open: {keys_open}) overflows its tiles by {}pt",

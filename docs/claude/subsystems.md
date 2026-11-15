@@ -1315,6 +1315,17 @@ the design note (relay protocol, what is next). The `genai` crate has no
 egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
 (a stub transport there — the app needs no cfg of its own).
 
+- **A one-model node is the same `NodeKind::GenAi`, not a new kind.**
+  `GenAiParams::model = Some(catalog id)` and its pipeline is
+  `Pipeline::for_model` (sources → Generate → Output), fixed: no innards
+  (`innards::provider` returns None), no model menu, `node_label` is the
+  model's label. The add menu gets one entry per `genaiui::offered_models()`
+  row, which is why `NodeEntry::make` is an `Arc<dyn Fn>`, not a fn
+  pointer. A wired String swaps Prompt for PromptIn only in
+  `genai_runnable` (the run's copy, and what staleness compares) — never
+  written back. `genai_unrun_upstream` refuses a capture through a GenAI
+  node with no take (it would pass the plate through and bill for that).
+
 - **Nothing runs or bills without a click, and the quote comes first.**
   `run…` = capture + `run::plan` + `run::quote`, all free; only "pay & run"
   calls `run::start` with the APPROVED per-step prices, and the relay

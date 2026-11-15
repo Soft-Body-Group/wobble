@@ -309,6 +309,36 @@ impl Default for Pipeline {
 }
 
 impl Pipeline {
+    /// The fixed pipeline of a one-model node: the model's inputs, each fed
+    /// by the source its port names (a typed Prompt, the node's image, the
+    /// node's matte), into the model, into Output. `None` for an id this
+    /// build does not know.
+    pub fn for_model(id: &str) -> Option<Self> {
+        let m = catalog::get(id)?;
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        let gen = p.push(Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let ports = task_ports(m.task);
+        let n = ports.len().max(1) as f32;
+        for (port, (pipe, name)) in ports.into_iter().enumerate() {
+            let op = match (pipe, name) {
+                (Pipe::Text, _) => Op::Prompt { text: String::new() },
+                (_, "mask") => Op::Matte,
+                _ => Op::Reference,
+            };
+            let x = -0.6 + 1.2 * (port as f32 + 0.5) / n;
+            let src = p.push(op, [x, -0.55]);
+            p.connect(src, gen, port);
+        }
+        let out = p.push(Op::Output, [0.0, 0.55]);
+        p.connect(gen, out, 0);
+        Some(p)
+    }
+
+    /// The one model step of a one-model pipeline (see `for_model`).
+    pub fn model_step(&self) -> Option<usize> {
+        self.steps.iter().position(|s| matches!(s.op, Op::Generate { .. }))
+    }
+
     /// Append a step, ports empty. Returns its index.
     pub fn push(&mut self, op: Op, at: [f32; 2]) -> usize {
         let n = op.ports().len();
@@ -518,6 +548,22 @@ mod tests {
         assert_eq!(plan.len(), 3);
         assert!(matches!(p.steps[plan[0]].op, Op::Prompt { .. }));
         assert!(matches!(p.steps[plan[2]].op, Op::Output));
+    }
+
+    #[test]
+    fn every_model_has_a_one_model_pipeline_with_every_port_fed() {
+        for m in catalog::CATALOG {
+            let p = Pipeline::for_model(m.id).unwrap();
+            let out = p.output().unwrap();
+            let plan = p.plan(out).unwrap_or_else(|e| panic!("{}: {e}", m.id));
+            let g = p.model_step().unwrap();
+            assert!(p.steps[g].inputs.iter().all(|i| i.is_some()), "{}", m.id);
+            assert_eq!(plan.len(), p.steps.len(), "{}: every step is on the way out", m.id);
+            let ports = task_ports(m.task);
+            assert_eq!(p.wants_matte(), ports.iter().any(|&(_, n)| n == "mask"), "{}", m.id);
+            assert_eq!(p.wants_reference(), ports.iter().any(|&(k, n)| k == Pipe::Image && n != "mask"), "{}", m.id);
+        }
+        assert!(Pipeline::for_model("no/such-model").is_none());
     }
 
     #[test]

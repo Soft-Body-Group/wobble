@@ -36,6 +36,13 @@ pub struct GenAiParams {
     pub source: usize,
     #[cfg_attr(feature = "serde", serde(default))]
     pub pipeline: genai::Pipeline,
+    /// A ONE-MODEL node: the catalog id it was made for, from the add
+    /// menu's per-model entries. Its pipeline is `Pipeline::for_model`'s,
+    /// fixed — the panel shows the model's own fields and no step editor,
+    /// and the node is called by the model's name. `None` = the free-form
+    /// pipeline node, steps and all.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub model: Option<String>,
     /// TRANSIENT: a take is loaded in the reader slot. Set by the app on the
     /// engine-graph copy only; flipping it recompiles (sample vs pass
     /// through), exactly like a GraphBake's `baked`.
@@ -45,7 +52,7 @@ pub struct GenAiParams {
 
 impl Default for GenAiParams {
     fn default() -> Self {
-        Self { source: 0, pipeline: genai::Pipeline::default(), loaded: false }
+        Self { source: 0, pipeline: genai::Pipeline::default(), model: None, loaded: false }
     }
 }
 
@@ -60,6 +67,20 @@ impl GenAiParams {
 
     pub fn new(source: usize) -> Self {
         Self { source, ..Default::default() }
+    }
+
+    /// A one-model node for catalog id `id`; the free-form node when the
+    /// id is unknown (so a menu built from the catalog can never panic).
+    pub fn for_model(source: usize, id: &str) -> Self {
+        match genai::Pipeline::for_model(id) {
+            Some(pipeline) => Self { source, pipeline, model: Some(id.to_string()), loaded: false },
+            None => Self::new(source),
+        }
+    }
+
+    /// The catalog model of a one-model node.
+    pub fn remote_model(&self) -> Option<&'static genai::catalog::RemoteModel> {
+        self.model.as_deref().and_then(genai::catalog::get)
     }
 
     /// Topology: only whether a take is loaded changes the shader. Which
