@@ -6996,7 +6996,8 @@ fn node_step_h(
         // in the same chain.
         NodeKind::Reformat(rf) => {
             let src = g.input_of(cur, 0).map(res).unwrap_or_else(|| res(cur));
-            let dst = [rf.size.0.max(1) as f32, rf.size.1.max(1) as f32];
+            let out = rf.out_size((src.0.max(1.0) as u32, src.1.max(1.0) as u32));
+            let dst = [out.0.max(1) as f32, out.1.max(1) as f32];
             let [sx, sy] = engine::codegen::reformat_scale(rf, [src.0, src.1], dst);
             let (px, py) = if rf.center {
                 ((dst[0] - src.0 * sx) * 0.5, (dst[1] - src.1 * sy) * 0.5)
@@ -11547,7 +11548,10 @@ impl Gfx {
             NodeKind::Sdf(p) if !p.inherit && self.egraph.input_of(id, 0).is_none() => {
                 Some(p.size)
             }
-            NodeKind::Reformat(r) => Some(r.size),
+            NodeKind::Reformat(r) if !r.by_factor => Some(r.size),
+            // Sized by a factor: the input's format, scaled (nothing in,
+            // nothing to scale: it inherits like any node).
+            NodeKind::Reformat(r) => self.input_res(id, 0, visited).map(|s| r.out_size(s)),
             // A Crop in reformat mode: the stream is the box, at full res
             // (the proxy halves it at the boundary like every format).
             NodeKind::SoftCrop(p) if p.mode() == engine::graph::CropMode::Reformat => self

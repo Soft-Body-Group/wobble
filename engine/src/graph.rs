@@ -2112,6 +2112,25 @@ pub struct ReformatParams {
     /// Centre the scaled image in the new format (off = anchor top-left).
     #[cfg_attr(feature = "serde", serde(default = "yes"))]
     pub center: bool,
+    /// Size the output by `factor` x the input's format instead of `size`
+    /// (0.5 = half res). The picture scales with it, so `mode` is moot.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub by_factor: bool,
+    #[cfg_attr(feature = "serde", serde(default = "one_f32"))]
+    pub factor: f32,
+}
+
+impl ReformatParams {
+    /// The format this node outputs, given its input's.
+    pub fn out_size(&self, src: (u32, u32)) -> (u32, u32) {
+        if self.by_factor {
+            let f = self.factor.abs().max(1e-4) as f64;
+            let r = |v: u32| ((v as f64 * f).round() as u32).clamp(1, 32768);
+            (r(src.0), r(src.1))
+        } else {
+            self.size
+        }
+    }
 }
 
 #[allow(dead_code)] // serde default (feature-gated)
@@ -2121,7 +2140,7 @@ fn one_f32() -> f32 {
 
 impl Default for ReformatParams {
     fn default() -> Self {
-        Self { size: (1920, 1080), mode: ResizeMode::Fit, scale: 1.0, center: true }
+        Self { size: (1920, 1080), mode: ResizeMode::Fit, scale: 1.0, center: true, by_factor: false, factor: 0.5 }
     }
 }
 

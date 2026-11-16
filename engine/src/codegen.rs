@@ -4499,7 +4499,8 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                     .and_then(|s| graph.formats.get(&s))
                     .map(|(w, h)| [*w as f32, *h as f32])
                     .unwrap_or(out_size);
-                let dst = [rf.size.0.max(1) as f32, rf.size.1.max(1) as f32];
+                let out = rf.out_size((src[0].max(1.0) as u32, src[1].max(1.0) as u32));
+                let dst = [out.0.max(1) as f32, out.1.max(1) as f32];
                 let [sx, sy] = reformat_scale(rf, src, dst);
                 // The shader maps forward through the INVERSE of the fit.
                 let (ix, iy) = (1.0 / sx.max(1e-6), 1.0 / sy.max(1e-6));
@@ -4739,6 +4740,10 @@ pub fn reformat_scale(
     let (sw, sh) = (src[0].max(1.0), src[1].max(1.0));
     let (rx, ry) = (dst[0] / sw, dst[1] / sh);
     let k = rf.scale.abs().max(1e-4);
+    if rf.by_factor {
+        // The format followed the input, so the picture fills it exactly.
+        return [rx * k, ry * k];
+    }
     match rf.mode {
         ResizeMode::Distort => [rx * k, ry * k],
         ResizeMode::Fit => [rx.min(ry) * k; 2],
@@ -5765,7 +5770,7 @@ mod node_pack_tests {
         let dst = [200.0, 100.0];
         let fit = |mode| {
             reformat_scale(
-                &ReformatParams { size: (200, 100), mode, scale: 1.0, center: true },
+                &ReformatParams { size: (200, 100), mode, scale: 1.0, center: true, ..Default::default() },
                 src,
                 dst,
             )
@@ -5784,6 +5789,7 @@ mod node_pack_tests {
             mode: ResizeMode::Fit,
             scale: 1.0,
             center: true,
+            ..Default::default()
         }));
         g.formats.insert(1, (1000, 1000));
         g.formats.insert(7, (200, 100));
@@ -5793,6 +5799,36 @@ mod node_pack_tests {
         let map = |p: [f32; 2]| [p[0] * v[b] + v[b + 2], p[1] * v[b + 1] + v[b + 3]];
         let c = map([100.0, 50.0]);
         assert!((c[0] - 500.0).abs() < 1e-3 && (c[1] - 500.0).abs() < 1e-3, "{c:?}");
+    }
+
+    /// Sized by a factor: the output is the input's format times it, and
+    /// the picture fills it whatever the mode says.
+    #[test]
+    fn reformat_by_factor_scales_the_input_format() {
+        let rf = ReformatParams { by_factor: true, factor: 0.5, mode: ResizeMode::None, ..Default::default() };
+        assert_eq!(rf.out_size((2048, 1080)), (1024, 540));
+        assert_eq!(rf.out_size((1, 1)), (1, 1));
+        assert_eq!(reformat_scale(&rf, [2048.0, 1080.0], [1024.0, 540.0]), [0.5, 0.5]);
+        // Off, the absolute size stands.
+        assert_eq!(ReformatParams::default().out_size((2048, 1080)), (1920, 1080));
+        let mut g = one_node(NodeKind::Reformat(rf));
+        g.formats.insert(1, (1000, 800));
+        g.formats.insert(7, (500, 400));
+        let plan = generate(&g);
+        let v = pack_params(&g, &plan.layout, [500.0, 400.0]);
+        let b = plan.layout.node_slot[&7] * 4;
+        // Output px -> source px: a plain x2, no offset.
+        assert_eq!([v[b], v[b + 1], v[b + 2], v[b + 3]], [2.0, 2.0, 0.0, 0.0]);
+    }
+
+    /// A file saved before the factor existed loads with it off.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn old_reformat_loads_without_a_factor() {
+        let rf: ReformatParams =
+            serde_json::from_str(r#"{"size":[1280,720],"mode":"Fit","scale":1.0,"center":true}"#).unwrap();
+        assert!(!rf.by_factor);
+        assert_eq!(rf.out_size((4096, 2160)), (1280, 720));
     }
 
     #[test]

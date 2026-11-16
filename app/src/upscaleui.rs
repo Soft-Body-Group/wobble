@@ -399,6 +399,7 @@ impl Gfx {
                         mode: engine::graph::ResizeMode::Distort,
                         scale: 1.0,
                         center: true,
+                        ..Default::default()
                     }),
                     egui::pos2(300.0, 100.0),
                 );
