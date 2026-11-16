@@ -310,6 +310,9 @@ pub enum Channel {
     /// A roto container's shape `s` (>= 1), shape-level value `w`: an index
     /// into `ROTO_SHAPE_CHANS`, the shape-0 channel it stands in for.
     RotoSh(u16, u8),
+    /// A roto container's axis `k`, transform value `w`: 0..3 translate,
+    /// 3..6 rotate, 6..9 scale (`rotodive::AXIS_CHANNELS` inside the dive).
+    RotoAx(u16, u8),
     /// The Spline's SHAPE TRANSFORM, which every control point rides on.
     /// A shape that merely moves keys these five instead of two curves per
     /// point — and they are what a Tracker patches into.
@@ -600,6 +603,7 @@ impl Channel {
             Channel::SplinePtB(i) => format!("SplinePtB:{i}"),
             Channel::RotoPt(s, i, w) => format!("RotoPt:{s}.{i}.{w}"),
             Channel::RotoSh(s, w) => format!("RotoSh:{s}.{w}"),
+            Channel::RotoAx(k, w) => format!("RotoAx:{k}.{w}"),
             Channel::KeyCenterL(i) => format!("KeyCenterL:{i}"),
             Channel::KeyCenterA(i) => format!("KeyCenterA:{i}"),
             Channel::KeyCenterB(i) => format!("KeyCenterB:{i}"),
@@ -668,9 +672,10 @@ impl Channel {
                     _ => None,
                 };
             }
-            if name == "RotoPt" || name == "RotoSh" {
+            if name == "RotoPt" || name == "RotoSh" || name == "RotoAx" {
                 let n: Vec<u16> = idx.split('.').map(|x| x.parse().ok()).collect::<Option<_>>()?;
                 return match (name, n.as_slice()) {
+                    ("RotoAx", [k, w]) => Some(Channel::RotoAx(*k, (*w).min(8) as u8)),
                     ("RotoPt", [s, i, w]) => Some(Channel::RotoPt(*s, *i, (*w).min(3) as u8)),
                     ("RotoSh", [s, w]) => Some(Channel::RotoSh(*s, (*w).min(255) as u8)),
                     _ => None,
@@ -1847,7 +1852,7 @@ pub fn shape_removed(anim: &mut Anim, s: usize) -> impl Fn(Channel) -> Option<Ch
 }
 
 /// A shape-0 spline channel (per point or per shape).
-fn is_shape_chan(c: Channel) -> bool {
+pub fn is_shape_chan(c: Channel) -> bool {
     matches!(
         c,
         Channel::SplinePtX(_) | Channel::SplinePtY(_) | Channel::SplinePtF(_) | Channel::SplinePtB(_)
@@ -1998,6 +2003,10 @@ pub fn channels_for(kind: &NodeKind) -> Vec<Channel> {
             v.push(Channel::SplinePtY(i));
             v.push(Channel::SplinePtF(i));
             v.push(Channel::SplinePtB(i));
+        }
+        // Its axes' transforms.
+        for k in 0..sp.axes.len().min(u16::MAX as usize) as u16 {
+            v.extend((0..9).map(|w| Channel::RotoAx(k, w)));
         }
         // A container's other shapes: the same set, renamed per shape.
         for (k, sh) in sp.more.iter().enumerate() {
@@ -2327,8 +2336,32 @@ fn layer(
     }
 }
 
+fn axis_get(x: &engine::scene3d::Xform, w: usize) -> f32 {
+    match w {
+        0..=2 => x.translate[w],
+        3..=5 => x.rotate[w - 3],
+        _ => x.scale[(w - 6).min(2)],
+    }
+}
+
+fn axis_set(x: &mut engine::scene3d::Xform, w: usize, v: f32) {
+    match w {
+        0..=2 => x.translate[w] = v,
+        3..=5 => x.rotate[w - 3] = v,
+        _ => x.scale[(w - 6).min(2)] = v,
+    }
+}
+
 pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
     use Channel::*;
+    // A roto axis: on its owner by index, inside the dive as itself.
+    if let (NodeKind::Spline(sp), RotoAx(k, w)) = (kind, ch) {
+        return sp.axes.get(k as usize).map(|a| axis_get(&a.xform, w as usize));
+    }
+    if let NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) = kind {
+        let w = crate::rotodive::AXIS_CHANNELS.iter().position(|c| *c == ch)?;
+        return Some(axis_get(&a.xform, w));
+    }
     // A container's other shapes read through the one-shape view.
     if let Some((s, base)) = shape_base(ch) {
         let NodeKind::Spline(sp) = kind else { return None };
@@ -2601,6 +2634,18 @@ pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
 /// Write a channel value into a node kind (used by transient evaluation and
 /// by key capture). A mismatched channel/kind pair is a no-op.
 pub fn set(kind: &mut NodeKind, ch: Channel, v: f32) {
+    if let (NodeKind::Spline(sp), Channel::RotoAx(k, w)) = (&mut *kind, ch) {
+        if let Some(a) = sp.axes.get_mut(k as usize) {
+            axis_set(&mut a.xform, w as usize, v);
+        }
+        return;
+    }
+    if let NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) = kind {
+        if let Some(w) = crate::rotodive::AXIS_CHANNELS.iter().position(|c| *c == ch) {
+            axis_set(&mut a.xform, w, v);
+        }
+        return;
+    }
     if let Some((s, base)) = shape_base(ch) {
         if let NodeKind::Spline(sp) = kind {
             if s < sp.shape_count() {

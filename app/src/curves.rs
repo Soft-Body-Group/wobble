@@ -367,6 +367,10 @@ pub(crate) fn ch_label(ch: Channel) -> std::borrow::Cow<'static, str> {
     if let Some((s, base)) = crate::anim::shape_base(ch) {
         return std::borrow::Cow::Owned(format!("shape {} {}", s + 1, ch_label(base)));
     }
+    if let RotoAx(k, w) = ch {
+        let what = ["tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz"].get(w as usize).unwrap_or(&"?");
+        return std::borrow::Cow::Owned(format!("axis {} {what}", k + 1));
+    }
     if let SplinePtX(i) | SplinePtY(i) | SplinePtF(i) | SplinePtB(i) = ch {
         let what = match ch {
             SplinePtX(_) => "x",
@@ -447,7 +451,7 @@ pub(crate) fn ch_label(ch: Channel) -> std::borrow::Cow<'static, str> {
     }
     std::borrow::Cow::Borrowed(match ch {
         Custom(_) | Shader(_) => unreachable!(),
-        SplinePtX(_) | SplinePtY(_) | SplinePtF(_) | SplinePtB(_) | RotoPt(..) | RotoSh(..) => {
+        SplinePtX(_) | SplinePtY(_) | SplinePtF(_) | SplinePtB(_) | RotoPt(..) | RotoSh(..) | RotoAx(..) => {
             unreachable!()
         }
         TrackPtX(_) | TrackPtY(_) | TrackPinX(_) | TrackPinY(_) => unreachable!(),

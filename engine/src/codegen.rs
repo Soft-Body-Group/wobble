@@ -326,7 +326,7 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::Plasma(_) => crate::graph::PlasmaParams::VEC4_SLOTS,
         NodeKind::Splat(_) => crate::graph::SplatParams::VEC4_SLOTS,
         NodeKind::Particles(_) => crate::graph::ParticlesParams::VEC4_SLOTS,
-        NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) => 0,
+        NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) | NodeKind::RotoNode(_) => 0,
         NodeKind::GlintKernel(_) => crate::graph::GlintKernelParams::VEC4_SLOTS,
         NodeKind::BokehKernel(_) => crate::graph::BokehKernelParams::VEC4_SLOTS,
         NodeKind::Prompt(_) => 0,
@@ -454,7 +454,25 @@ pub fn spline_band(
 }
 
 /// The walk both of the above read: (position, feather, bias) per sample.
+/// A roto shape the lowering placed (`SplineParams::proj`: its axes and
+/// camera) has every SAMPLE carried through that homography — samples, not
+/// control points, because a projected curve is not the curve of the
+/// projected points.
 fn spline_outline(
+    sp: &crate::graph::SplineParams,
+    size: [f32; 2],
+) -> Vec<([f32; 2], f32, f32)> {
+    let mut out = spline_outline_flat(sp, size);
+    if let Some(pr) = sp.proj.filter(|p| !p.is_identity()) {
+        let hm = pr.homography(size);
+        for s in &mut out {
+            s.0 = crate::graph::homography_point(&hm, s.0, size);
+        }
+    }
+    out
+}
+
+fn spline_outline_flat(
     sp: &crate::graph::SplineParams,
     size: [f32; 2],
 ) -> Vec<([f32; 2], f32, f32)> {
@@ -2782,7 +2800,7 @@ fn emit(
         NodeKind::Plasma(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Splat(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Particles(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
-        NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) => "vec4f(0.0)".into(),
+        NodeKind::ParticleNode(_) | NodeKind::GenAiStep(_) | NodeKind::RotoNode(_) => "vec4f(0.0)".into(),
         NodeKind::GlintKernel(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::BokehKernel(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Prompt(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
@@ -6312,7 +6330,8 @@ mod spline_curve_tests {
                 hashes.insert(g.topology_hash());
             }
             // Unwired, the shape is still there to combine WITH nothing.
-            assert_eq!(NodeKind::Spline(tri(SplineMode::Linear)).input_count(), 1);
+            // (Port 1 is the camera, lowered away before codegen.)
+            assert_eq!(NodeKind::Spline(tri(SplineMode::Linear)).input_count(), 2);
         }
         // The op picks the expression, so it is structural, like a Blend's:
         // every op x wired/unwired is a distinct program.

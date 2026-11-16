@@ -324,6 +324,11 @@ pub enum NodeKind {
     /// a model call, Output…). Never appears in a comp graph: the dive
     /// writes the steps back into the owner's `genai::Pipeline`.
     GenAiStep(genai::Op),
+    /// One node INSIDE a Roto's dive that is not a shape or a combine (those
+    /// are plain Splines and MatteCombines in there): an Axis, or Out. Never
+    /// appears in a comp graph: the dive writes them back into the owner's
+    /// `SplineParams`.
+    RotoNode(RotoInner),
     /// Text on the text pipe: a prompt as a node of its own.
     Prompt(PromptParams),
     /// A camera on the scene pipe (`crate::scene3d`).
@@ -4735,6 +4740,147 @@ pub struct SplineParams {
     /// a shape can sit unconnected: drawn in the node, not rendered.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub out: Option<Vec<usize>>,
+    /// The container's AXES: groups that union what is wired into them and
+    /// move it by a 3D transform — a Flame-style hierarchy, an axis wired
+    /// into another axis inheriting its parent's move. Mini ids
+    /// `ROTO_AXIS + k`. With a Camera on the node's port 1 the shapes live
+    /// on planes in 3D and are seen through it; without one an axis is a
+    /// 2D move (its Z ignored). See `crate::roto`.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub axes: Vec<RotoAxis>,
+    /// TRANSIENT, never saved: where the lowering put this shape — its
+    /// axes and the camera — for the frame. `codegen::spline_outline`
+    /// carries every outline sample through it. Only `crate::roto` sets it.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub proj: Option<ShapeProj>,
+}
+
+/// An axis inside a roto container: a group with a transform. What is wired
+/// into it (shapes, combine ops, other axes) is unioned in port order and
+/// moved, about `pivot`, by `xform` (scene units: the frame is one unit
+/// wide, Y up, centred — the 3D cards' convention, so a default Camera sees
+/// an unmoved shape exactly where it was drawn).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(default))]
+pub struct RotoAxis {
+    pub name: String,
+    pub xform: crate::scene3d::Xform,
+    pub pivot: [f32; 3],
+    /// Mini ids wired into it, in port order (`None`: an empty port).
+    pub inputs: Vec<Option<usize>>,
+    pub at: [f32; 2],
+}
+
+impl Default for RotoAxis {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            xform: Default::default(),
+            pivot: [0.0; 3],
+            inputs: vec![None, None],
+            at: [0.0, 0.0],
+        }
+    }
+}
+
+impl RotoAxis {
+    /// Local -> parent: `T(translate) T(pivot) R S T(-pivot)`.
+    pub fn matrix(&self) -> crate::scene3d::Mat4 {
+        use crate::scene3d::{mat_mul, Xform};
+        let t = |v: [f32; 3]| {
+            Xform { translate: v, ..Default::default() }.matrix()
+        };
+        let rs = Xform { translate: [0.0; 3], ..self.xform }.matrix();
+        let back = [-self.pivot[0], -self.pivot[1], -self.pivot[2]];
+        let piv = [
+            self.xform.translate[0] + self.pivot[0],
+            self.xform.translate[1] + self.pivot[1],
+            self.xform.translate[2] + self.pivot[2],
+        ];
+        mat_mul(&t(piv), &mat_mul(&rs, &t(back)))
+    }
+}
+
+/// A camera as a roto shape sees it: world -> camera, and the lens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RotoCam {
+    pub view: crate::scene3d::Mat4,
+    pub focal: f32,
+    pub aperture: f32,
+}
+
+impl RotoCam {
+    pub fn of(c: &crate::scene3d::CameraParams) -> Self {
+        let x = crate::scene3d::Xform { scale: [1.0; 3], ..c.xform };
+        Self { view: x.inverse_scaled([1.0; 3]), focal: c.focal, aperture: c.aperture[0] }
+    }
+}
+
+/// Where a roto shape lands for a frame: its plane moved by `world` (the
+/// product of its axes) and, with a camera, projected through it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShapeProj {
+    pub world: crate::scene3d::Mat4,
+    pub cam: Option<RotoCam>,
+}
+
+impl ShapeProj {
+    /// Nothing to do: no move, no camera.
+    pub fn is_identity(&self) -> bool {
+        self.cam.is_none() && self.world == crate::scene3d::identity()
+    }
+
+    /// The OUTPUT-PIXEL homography: a pixel of the shape's own (undrawn,
+    /// unmoved) frame to where it lands. A plane through a pinhole is a
+    /// homography, so this is exact for every sample of the outline.
+    pub fn homography(&self, size: [f32; 2]) -> [[f32; 3]; 3] {
+        let (w, h) = (size[0].max(1.0), size[1].max(1.0));
+        // Pixel -> the plane's scene units (one unit wide, Y up, centred).
+        let a = [[1.0 / w, 0.0, -0.5], [0.0, -1.0 / w, 0.5 * h / w], [0.0, 0.0, 1.0]];
+        let m3 = |m: &crate::scene3d::Mat4, rows: [usize; 3]| {
+            let mut q = [[0.0f32; 3]; 3];
+            for (i, r) in rows.iter().enumerate() {
+                q[i] = [m[*r][0], m[*r][1], m[*r][3]];
+            }
+            q
+        };
+        let (q, k) = match &self.cam {
+            Some(c) => {
+                let f = c.focal.max(1e-3) / c.aperture.max(1e-3) * w;
+                (
+                    m3(&crate::scene3d::mat_mul(&c.view, &self.world), [0, 1, 2]),
+                    [[f, 0.0, -0.5 * w], [0.0, -f, -0.5 * h], [0.0, 0.0, -1.0]],
+                )
+            }
+            None => (m3(&self.world, [0, 1, 3]), [[w, 0.0, 0.5 * w], [0.0, -w, 0.5 * h], [0.0, 0.0, 1.0]]),
+        };
+        mat3_mul(&k, &mat3_mul(&q, &a))
+    }
+
+    /// A normalized point through [`Self::homography`]. A point that would
+    /// land behind the camera is held just in front of it.
+    pub fn point(&self, p: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+        homography_point(&self.homography(size), p, size)
+    }
+}
+
+fn mat3_mul(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut m = [[0.0f32; 3]; 3];
+    for (r, row) in m.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            *v = (0..3).map(|k| a[r][k] * b[k][c]).sum();
+        }
+    }
+    m
+}
+
+/// A normalized point through an output-pixel homography.
+pub fn homography_point(hm: &[[f32; 3]; 3], p: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+    let (x, y) = (p[0] * size[0], p[1] * size[1]);
+    let u = hm[0][0] * x + hm[0][1] * y + hm[0][2];
+    let v = hm[1][0] * x + hm[1][1] * y + hm[1][2];
+    let z = (hm[2][0] * x + hm[2][1] * y + hm[2][2]).max(1e-4);
+    [u / z / size[0].max(1e-6), v / z / size[1].max(1e-6)]
 }
 
 /// One shape of a roto container: everything a single Spline's shape is,
@@ -4797,6 +4943,50 @@ impl Default for RotoOp {
 
 /// Mini-node ids at and above this are ops (`ROTO_OP + k`); below, shapes.
 pub const ROTO_OP: usize = 1 << 12;
+/// ...and at and above this, axes (`ROTO_AXIS + k`).
+pub const ROTO_AXIS: usize = 2 << 12;
+/// Axes a container may hold.
+pub const ROTO_AXES_MAX: usize = 32;
+
+/// A roto dive's own nodes (see [`NodeKind::RotoNode`]). Each is a bar
+/// that takes any number of wires: the last port is always the free one.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum RotoInner {
+    /// `inputs` stands for the port count only: in the dive the wiring is
+    /// the editor's own edges.
+    Axis(RotoAxis),
+    Out { inputs: usize },
+}
+
+impl RotoInner {
+    pub fn input_count(&self) -> usize {
+        match self {
+            RotoInner::Axis(a) => a.inputs.len().clamp(1, 64),
+            RotoInner::Out { inputs } => (*inputs).clamp(1, 64),
+        }
+    }
+}
+
+/// What a roto mini id names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RotoRef {
+    Shape(usize),
+    Op(usize),
+    Axis(usize),
+}
+
+impl RotoRef {
+    pub fn of(id: usize) -> Self {
+        if id >= ROTO_AXIS {
+            RotoRef::Axis(id - ROTO_AXIS)
+        } else if id >= ROTO_OP {
+            RotoRef::Op(id - ROTO_OP)
+        } else {
+            RotoRef::Shape(id)
+        }
+    }
+}
 /// Shapes a container may hold.
 pub const ROTO_SHAPES_MAX: usize = 32;
 
@@ -4807,7 +4997,7 @@ impl SplineParams {
 
     /// More than a plain Spline: something for `crate::roto` to lower.
     pub fn is_container(&self) -> bool {
-        !self.more.is_empty() || !self.ops.is_empty()
+        !self.more.is_empty() || !self.ops.is_empty() || !self.axes.is_empty()
     }
 
     /// Shape `s` on its own (shape 0 is the node's own fields).
@@ -4965,6 +5155,9 @@ impl SplineParams {
             slide(&mut o.a);
             slide(&mut o.b);
         }
+        for a in &mut self.axes {
+            a.inputs.iter_mut().for_each(slide);
+        }
         if let Some(out) = &mut self.out {
             out.retain(|x| *x != s);
             for x in out.iter_mut() {
@@ -4988,11 +5181,17 @@ impl SplineParams {
             return false;
         }
         self.ops.remove(k);
-        let gone = ROTO_OP + k;
+        self.slide_out(ROTO_OP + k, ROTO_AXIS);
+        true
+    }
+
+    /// Mini id `gone` is no more: every reference to it unplugs, and the
+    /// ids above it (below `ceil`, its own kind's range) slide down one.
+    fn slide_out(&mut self, gone: usize, ceil: usize) {
         let slide = |r: &mut Option<usize>| {
             *r = match *r {
                 Some(x) if x == gone => None,
-                Some(x) if x > gone => Some(x - 1),
+                Some(x) if x > gone && x < ceil => Some(x - 1),
                 other => other,
             };
         };
@@ -5000,15 +5199,80 @@ impl SplineParams {
             slide(&mut o.a);
             slide(&mut o.b);
         }
+        for a in &mut self.axes {
+            a.inputs.iter_mut().for_each(slide);
+        }
         if let Some(out) = &mut self.out {
             out.retain(|x| *x != gone);
             for x in out.iter_mut() {
-                if *x > gone {
+                if *x > gone && *x < ceil {
                     *x -= 1;
                 }
             }
         }
+    }
+
+    /// A new axis; its mini id.
+    pub fn add_axis(&mut self, axis: RotoAxis) -> Option<usize> {
+        if self.axes.len() >= ROTO_AXES_MAX {
+            return None;
+        }
+        self.axes.push(axis);
+        Some(ROTO_AXIS + self.axes.len() - 1)
+    }
+
+    /// Drop axis `k`, sliding later axes' ids down wherever they are read.
+    pub fn remove_axis(&mut self, k: usize) -> bool {
+        if k >= self.axes.len() {
+            return false;
+        }
+        self.axes.remove(k);
+        self.slide_out(ROTO_AXIS + k, usize::MAX);
         true
+    }
+
+    /// The mini ids `r` reads, in port order (`None`: an empty port).
+    pub fn mini_inputs(&self, r: usize) -> Vec<Option<usize>> {
+        match RotoRef::of(r) {
+            RotoRef::Shape(_) => Vec::new(),
+            RotoRef::Op(k) => self.ops.get(k).map(|o| vec![o.a, o.b]).unwrap_or_default(),
+            RotoRef::Axis(k) => self.axes.get(k).map(|a| a.inputs.clone()).unwrap_or_default(),
+        }
+    }
+
+    /// Does mini id `r` name something that exists?
+    pub fn mini_exists(&self, r: usize) -> bool {
+        match RotoRef::of(r) {
+            RotoRef::Shape(s) => s < self.shape_count(),
+            RotoRef::Op(k) => k < self.ops.len(),
+            RotoRef::Axis(k) => k < self.axes.len(),
+        }
+    }
+
+    /// Where shape `s` lands, through the axes on its way to Out (the
+    /// first way, if it is wired more than once) and the camera: what the
+    /// gizmo draws it through. `None`: not moved at all.
+    pub fn shape_proj(&self, s: usize, cam: Option<RotoCam>) -> Option<ShapeProj> {
+        fn walk(sp: &SplineParams, r: usize, s: usize, m: crate::scene3d::Mat4, depth: usize) -> Option<crate::scene3d::Mat4> {
+            if r == s {
+                return Some(m);
+            }
+            if depth > 64 {
+                return None;
+            }
+            let m2 = match RotoRef::of(r) {
+                RotoRef::Axis(k) => crate::scene3d::mat_mul(&m, &sp.axes.get(k)?.matrix()),
+                _ => m,
+            };
+            sp.mini_inputs(r).into_iter().flatten().find_map(|x| walk(sp, x, s, m2, depth + 1))
+        }
+        let m = self
+            .out_inputs()
+            .into_iter()
+            .find_map(|r| walk(self, r, s, crate::scene3d::identity(), 0))
+            .unwrap_or_else(crate::scene3d::identity);
+        let p = ShapeProj { world: m, cam };
+        (!p.is_identity()).then_some(p)
     }
 
     /// Does mini node `from` feed (directly or through ops) mini node `to`?
@@ -5017,22 +5281,13 @@ impl SplineParams {
         if from == to {
             return true;
         }
-        let Some(o) = to.checked_sub(ROTO_OP).and_then(|k| self.ops.get(k)) else {
-            return false;
-        };
-        [o.a, o.b].into_iter().flatten().any(|x| self.feeds(from, x))
+        self.mini_inputs(to).into_iter().flatten().any(|x| self.feeds(from, x))
     }
 
     /// What Out unions, in port order: the written-down list, or every
     /// loose end while there is none. Ids that no longer exist drop out.
     pub fn out_inputs(&self) -> Vec<usize> {
-        let valid = |x: &usize| {
-            if *x >= ROTO_OP {
-                *x - ROTO_OP < self.ops.len()
-            } else {
-                *x < self.shape_count()
-            }
-        };
+        let valid = |x: &usize| self.mini_exists(*x);
         match &self.out {
             Some(v) => v.iter().copied().filter(valid).collect(),
             None => self.loose_ends(),
@@ -5051,10 +5306,16 @@ impl SplineParams {
     /// Every mini node nothing consumes, shapes first then ops, in id
     /// order: what Out unions until its list is written down.
     pub fn loose_ends(&self) -> Vec<usize> {
-        let used: std::collections::HashSet<usize> =
-            self.ops.iter().flat_map(|o| [o.a, o.b]).flatten().collect();
+        let used: std::collections::HashSet<usize> = self
+            .ops
+            .iter()
+            .flat_map(|o| [o.a, o.b])
+            .chain(self.axes.iter().flat_map(|a| a.inputs.iter().copied()))
+            .flatten()
+            .collect();
         (0..self.shape_count())
             .chain((0..self.ops.len()).map(|k| ROTO_OP + k))
+            .chain((0..self.axes.len()).map(|k| ROTO_AXIS + k))
             .filter(|id| !used.contains(id))
             .collect()
     }
@@ -5080,6 +5341,8 @@ impl Default for SplineParams {
             layout: Vec::new(),
             out_at: None,
             out: None,
+            axes: Vec::new(),
+            proj: None,
         }
     }
 }
@@ -5200,6 +5463,8 @@ enum SplineRepr {
         out_at: Option<[f32; 2]>,
         #[serde(default)]
         out: Option<Vec<usize>>,
+        #[serde(default)]
+        axes: Vec<RotoAxis>,
     },
     Old {
         points: Vec<[f32; 2]>,
@@ -5229,6 +5494,7 @@ impl<'de> serde::Deserialize<'de> for SplineParams {
                 layout,
                 out_at,
                 out,
+                axes,
             } => Self {
                 points,
                 mode,
@@ -5247,6 +5513,8 @@ impl<'de> serde::Deserialize<'de> for SplineParams {
                 layout,
                 out_at,
                 out,
+                axes,
+                proj: None,
             },
             SplineRepr::Old { points, feather } => Self {
                 points: points.into_iter().map(|p| SplinePoint::new(p, feather)).collect(),
@@ -5920,6 +6188,7 @@ impl NodeKind {
             NodeKind::Particles(_) => ParticlesParams::INPUTS,
             NodeKind::ParticleNode(n) => n.inputs().len(),
             NodeKind::GenAiStep(op) => op.ports().len(),
+            NodeKind::RotoNode(r) => r.input_count(),
             NodeKind::Scene3D(p) => p.input_count(),
             NodeKind::Render3D(p) => p.input_count(),
             NodeKind::Grain(_) => GrainParams::INPUTS,
@@ -5937,7 +6206,9 @@ impl NodeKind {
             // what the shape combines WITH, so several Splines chain into one
             // roto. Unwired it reads as empty coverage and the node is the
             // bare shape it always was.
-            NodeKind::Spline(_) => 1,
+            // The matte it combines with, and a Camera its shapes are seen
+            // through (lowered away by `crate::roto`).
+            NodeKind::Spline(_) => 2,
             // A generator with ONE input, and it is a matte: the field graph
             // reads it as a number per pixel, which is how a noise gets to
             // be finer inside a shape.
@@ -6484,6 +6755,10 @@ impl NodeKind {
                 return s("a matte the field graph reads as a number per pixel (its \
                           Field In) — e.g. a finer noise inside a shape")
             }
+            NodeKind::Spline(_) if input == 1 => {
+                return s("a Camera the shapes are seen through: with one, the roto's \
+                          Axis nodes move its shapes in 3D; unwired, flat")
+            }
             NodeKind::Spline(_) => {
                 return s("a matte this shape combines with, so several Splines chain \
                           into one roto; unwired, the bare shape")
@@ -6775,6 +7050,7 @@ impl NodeKind {
         // Mask ports whose matte is the node's own operand, not a limit.
         match self {
             NodeKind::Noise(_) => return "matte (read by the field)",
+            NodeKind::Spline(_) if input == 1 => return "camera",
             NodeKind::Spline(_) => return "matte (combined with)",
             NodeKind::MatteIn if input == 1 => return "alpha",
             NodeKind::Keyer(_) if input == 1 => return "garbage",
@@ -6964,6 +7240,8 @@ impl NodeKind {
             NodeKind::Refract(_) if input == crate::nodes::refract::CAMERA_INPUT => return PortKind::Scene,
             // A Starfield's camera (lowered away before codegen).
             NodeKind::Starfield(_) => return PortKind::Scene,
+            // A Roto's camera, the same (`crate::roto`).
+            NodeKind::Spline(_) if input == 1 => return PortKind::Scene,
             // A Splat's camera, the same.
             NodeKind::Splat(_) => return PortKind::Scene,
             _ => {}
@@ -7151,6 +7429,7 @@ impl NodeKind {
         }
         match self {
             NodeKind::Spline(_)
+            | NodeKind::RotoNode(_)
             | NodeKind::LumaKey(_)
             | NodeKind::Keyer(_)
             | NodeKind::Cryptomatte(_)
@@ -7275,6 +7554,8 @@ impl NodeKind {
             NodeKind::Particles(_) => ParticlesParams::NAME,
             NodeKind::ParticleNode(n) => n.name(),
             NodeKind::GenAiStep(op) => op.name(),
+            NodeKind::RotoNode(RotoInner::Axis(_)) => "Axis",
+            NodeKind::RotoNode(RotoInner::Out { .. }) => "Out",
             NodeKind::GlintKernel(_) => GlintKernelParams::NAME,
             NodeKind::BokehKernel(_) => BokehKernelParams::NAME,
             NodeKind::Grain(_) => GrainParams::NAME,
@@ -7506,6 +7787,7 @@ impl NodeKind {
             NodeKind::ParticleNode(n) => 0x9A00 ^ n.topo_tag(),
             // Never compiled (dive-only); a stable tag all the same.
             NodeKind::GenAiStep(_) => 0x6A2_0000,
+            NodeKind::RotoNode(_) => 0x7A2_0000,
             NodeKind::GlintKernel(p) => p.topo_tag(),
             NodeKind::BokehKernel(p) => p.topo_tag(),
             NodeKind::Prompt(p) => p.topo_tag(),

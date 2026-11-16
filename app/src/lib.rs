@@ -22,6 +22,7 @@ mod filedialog;
 mod webmain;
 mod innards;
 mod rotoshapes;
+mod rotodive;
 mod nodectl;
 mod aovs;
 mod cryptoui;
@@ -1454,6 +1455,8 @@ enum DiveKind {
     Particles,
     /// A GenAI Pipeline's steps, the same way.
     GenAi,
+    /// A Roto's shapes, combines and axes (`rotodive`), the same way.
+    Roto,
 }
 
 /// The vector HUD's memo inside a 2dini dive: everything the geometry
@@ -7866,6 +7869,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             layerpick: opts.test_layerpick.then_some((0, 0, [0, 0])),
             roto: opts.test_roto.then_some((0, 0, 0)),
             roto_drag: (egui::Pos2::ZERO, egui::Pos2::ZERO),
+            roto_dived: false,
             roto_clock: None,
             eyedrop: opts.test_eyedrop.then_some((0, 0, 0)),
             text: opts.test_text.then(Default::default),
@@ -15956,6 +15960,8 @@ impl Gfx {
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Particles);
                 self.node_editor.in_genai =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
+                self.node_editor.in_roto =
+                    self.dive.last().is_some_and(|d| d.kind == DiveKind::Roto);
                     self.node_editor.harp_layers = self.harp_layer_lists();
                     self.feed_wire_ranges();
                     self.feed_tvs();
@@ -20157,6 +20163,8 @@ impl Gfx {
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Particles);
                 self.node_editor.in_genai =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
+                self.node_editor.in_roto =
+                    self.dive.last().is_some_and(|d| d.kind == DiveKind::Roto);
                 self.node_editor.harp_layers = self.harp_layer_lists();
                 self.feed_wire_ranges();
                 self.node_editor.lit_inputs = self.lit_layer_inputs();
@@ -21369,6 +21377,17 @@ impl Gfx {
                         p.inputs = want;
                     }
                 }
+                // A Roto's Axis and Out: one bar each, the last port free.
+                Some(NodeKind::RotoNode(r)) => {
+                    let want = (wired + 1).clamp(1, 64);
+                    match r {
+                        engine::graph::RotoInner::Axis(a) if a.inputs.len() != want => {
+                            a.inputs = vec![None; want];
+                        }
+                        engine::graph::RotoInner::Out { inputs } if *inputs != want => *inputs = want,
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -21786,6 +21805,11 @@ impl Gfx {
             // A GenAI Pipeline opens onto its steps; a one-model node IS
             // its model and has nothing inside.
             Some(NodeKind::GenAi(p)) if p.model.is_none() => Some(n),
+            // A Roto opens onto its shapes — but not a shape inside one,
+            // which is a Spline too and has nothing further inside.
+            Some(NodeKind::Spline(_)) if !self.dive.last().is_some_and(|d| d.kind == DiveKind::Roto) => {
+                Some(n)
+            }
             // A Noise inside a drawing opens onto its field graph, one
             // level further down — the field nodes live there.
             Some(NodeKind::GeoNode(engine::geo::GeoNode::Noise { .. })) => Some(n),
@@ -21843,6 +21867,13 @@ impl Gfx {
                     Some(NodeKind::GenAi(p)) => p.pipeline.steps = genaiui::from_editor(&cur),
                     _ => return None,
                 },
+                DiveKind::Roto => {
+                    let n = g.node_mut(inst)?;
+                    let NodeKind::Spline(sp) = &n.kind else { return None };
+                    let (sp, anim) = rotodive::from_editor(&cur, sp, &n.anim);
+                    n.kind = NodeKind::Spline(sp);
+                    n.anim = anim;
+                }
                 DiveKind::Noise => match g.node_mut(inst).map(|e| &mut e.kind) {
                     Some(NodeKind::Noise(p)) => p.graph = editor_to_field(&cur),
                     Some(NodeKind::GeoNode(engine::geo::GeoNode::Noise { graph, .. })) => {
@@ -21961,6 +21992,21 @@ impl Gfx {
         if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::GenAi) {
             let mut g = d.graph.clone();
             g.view = Some(d.from?);
+            return Some(g);
+        }
+        // Inside a Roto: the live shapes spliced back into the node (curves
+        // and all), the node viewed — the matte it will render, through its
+        // camera, combined with what is on its input.
+        if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::Roto) {
+            let owner = d.from?;
+            let mut g = d.graph.clone();
+            let n = g.node_mut(owner)?;
+            if let NodeKind::Spline(sp) = &n.kind {
+                let (sp, anim) = rotodive::from_editor(&self.egraph, sp, &n.anim);
+                n.kind = NodeKind::Spline(sp);
+                n.anim = anim;
+            }
+            g.view = Some(owner);
             return Some(g);
         }
         // Authoring particles: the live graph spliced into its node, the
@@ -22653,6 +22699,41 @@ impl Gfx {
             });
             return Ok(());
         }
+        // So is a Roto's: its shapes as Splines, its combines, its axes and
+        // Out. The shape the in-node view had picked comes in selected, so
+        // the viewer keeps editing what it was editing.
+        if let Some(n) = self.egraph.node(node).filter(|n| matches!(n.kind, NodeKind::Spline(_))) {
+            let NodeKind::Spline(sp) = &n.kind else { unreachable!() };
+            let picked = innards::selected(&self.egui_ctx, node, sp.shape_count());
+            let mut body = rotodive::to_editor(sp, &n.anim);
+            body.node_status_min = self.egraph.node_status_min;
+            let mut shapes: Vec<u64> = body
+                .nodes
+                .iter()
+                .filter(|(_, e)| matches!(e.kind, NodeKind::Spline(_)))
+                .map(|(id, _)| *id)
+                .collect();
+            shapes.sort_unstable();
+            let parked_graph = std::mem::replace(&mut self.egraph, body);
+            let parked_last = std::mem::replace(&mut self.undo_last, self.egraph.clone());
+            self.dive.push(Dive {
+                kind: DiveKind::Roto,
+                type_id: String::new(),
+                from: Some(node),
+                tiles: 1,
+                tiles_h: 1,
+                path: None,
+                graph: parked_graph,
+                undo_stack: std::mem::take(&mut self.undo_stack),
+                redo_stack: std::mem::take(&mut self.redo_stack),
+                undo_last: parked_last,
+                selected: std::mem::take(&mut self.selected),
+                zoom: self.node_editor.zoom,
+                pan: self.node_editor.pan,
+            });
+            self.selected = shapes.get(picked).copied().into_iter().collect();
+            return Ok(());
+        }
         // So is a GenAI Pipeline's step graph.
         if let Some(NodeKind::GenAi(p)) = self.egraph.node(node).map(|n| &n.kind).filter(|k| {
             matches!(k, NodeKind::GenAi(p) if p.model.is_none())
@@ -22855,6 +22936,25 @@ impl Gfx {
             self.playback_dirty = true;
             return Ok(());
         }
+        if d.kind == DiveKind::Roto {
+            let body = std::mem::replace(&mut self.egraph, d.graph);
+            self.egraph.node_status_min = body.node_status_min;
+            if let Some(n) = d.from.and_then(|node| self.egraph.node_mut(node)) {
+                if let NodeKind::Spline(sp) = &n.kind {
+                    let (sp, anim) = rotodive::from_editor(&body, sp, &n.anim);
+                    n.kind = NodeKind::Spline(sp);
+                    n.anim = anim;
+                }
+            }
+            self.undo_stack = d.undo_stack;
+            self.redo_stack = d.redo_stack;
+            self.undo_last = d.undo_last;
+            self.selected = d.selected;
+            self.node_editor.zoom = d.zoom;
+            self.node_editor.pan = d.pan;
+            self.playback_dirty = true;
+            return Ok(());
+        }
         if d.kind == DiveKind::Particles {
             let body = std::mem::replace(&mut self.egraph, d.graph);
             self.egraph.node_status_min = body.node_status_min;
@@ -23036,6 +23136,7 @@ impl Gfx {
                 DiveKind::Sdf => "SDF".into(),
                 DiveKind::Particles => "Particles".into(),
                 DiveKind::GenAi => "GenAI Pipeline".into(),
+                DiveKind::Roto => "Roto".into(),
             };
             let text = egui::RichText::new(name).color(theme::highlight());
             if i + 1 < depth {
@@ -24985,6 +25086,14 @@ impl Gfx {
                         genai_click = genaiui::panel(ui, node, gp, &genai_view);
                     }
                     NodeKind::GenAiStep(op) => genaiui::step_panel(ui, node, op, &genai_view),
+                    NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) => {
+                        if let Some(h) = rotodive::axis_panel(ui, &mut rcx, a) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::RotoNode(_) => {
+                        ui.weak("what the Roto renders: everything wired in, unioned");
+                    }
                     NodeKind::Camera3D(cp) => {
                         let (h, act) = nodes::scene3d::camera_panel(ui, &mut rcx, cp, r3d_range, &r3d_blenders, &r3d_trackers);
                         if let Some(h) = h {

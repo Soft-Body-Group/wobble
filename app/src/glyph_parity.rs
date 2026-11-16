@@ -133,7 +133,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::Shader(_) => Icon::Shader,
         NodeKind::Custom { .. } => Icon::Plugin,
         NodeKind::Prompt(_) => Icon::Prompt,
-        NodeKind::Dot { .. } | NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => return None,
+        NodeKind::Dot { .. } | NodeKind::GenAi(_) | NodeKind::GenAiStep(_) | NodeKind::RotoNode(_) => return None,
     })
 }
 

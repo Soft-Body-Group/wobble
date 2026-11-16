@@ -346,9 +346,78 @@ impl Gfx {
                     if self.egraph.node(sid).is_none() {
                         fail("Delete over the inner graph deleted the roto itself".into());
                     }
-                    next = 12;
+                    next = 13;
                 }
             }
+            // Enter: the roto opens as a graph — each shape a Spline, an
+            // Out — and an Axis wired between them and Out moves them all.
+            13 => {
+                if frames == 1 {
+                    if let Err(e) = self.dive_into(sid) {
+                        fail(format!("the roto would not open: {e}"));
+                    }
+                    let shapes: Vec<u64> = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .filter(|(_, n)| matches!(n.kind, NodeKind::Spline(_)))
+                        .map(|(id, _)| *id)
+                        .collect();
+                    let out = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| matches!(n.kind, NodeKind::RotoNode(engine::graph::RotoInner::Out { .. })))
+                        .map(|(id, _)| *id);
+                    let Some(out) = out.filter(|_| shapes.len() == 2) else {
+                        fail(format!("inside the roto: {} shapes and no Out", shapes.len()))
+                    };
+                    if self.selected.len() != 1 || !shapes.contains(&self.selected[0]) {
+                        fail(format!("the picked shape did not come in selected: {:?}", self.selected));
+                    }
+                    let mut axis = crate::rotodive::new_axis();
+                    if let NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) = &mut axis {
+                        a.xform.translate = [0.1, 0.0, 0.0];
+                    }
+                    let ax = self.egraph.add(axis, egui::pos2(0.0, 100.0));
+                    self.egraph.edges.retain(|(d, _, _)| *d != out);
+                    self.egraph.edges.push((ax, 0, shapes[0]));
+                    self.egraph.edges.push((ax, 1, shapes[1]));
+                    self.egraph.edges.push((out, 0, ax));
+                } else if frames > 6 {
+                    // A few frames drawn dived (preview + gizmo), then out.
+                    if let Err(e) = self.dive_out() {
+                        fail(format!("could not come back out: {e}"));
+                    }
+                    let s = sp(self).unwrap_or_default();
+                    let ax = engine::graph::ROTO_AXIS;
+                    if s.axes.len() != 1 || s.out != Some(vec![ax]) || s.axes[0].inputs.iter().flatten().count() != 2 {
+                        fail(format!("back out: axes {:?}, out {:?}", s.axes, s.out));
+                    }
+                    // Lowered, both shapes ride the axis; with a Camera on
+                    // port 1 they go through it, and the wire is gone.
+                    let cam = self.egraph.add(NodeKind::Camera3D(Default::default()), egui::pos2(-200.0, 0.0));
+                    self.egraph.edges.push((sid, engine::roto::CAMERA_INPUT, cam));
+                    let g = self.egraph.to_engine_graph();
+                    let projs: Vec<_> = g
+                        .nodes
+                        .values()
+                        .filter_map(|k| match k {
+                            NodeKind::Spline(one) => Some(one.proj),
+                            _ => None,
+                        })
+                        .collect();
+                    if projs.len() != 2 || !projs.iter().all(|p| p.is_some_and(|p| p.cam.is_some() && p.world[0][3] == 0.1)) {
+                        fail(format!("lowered roto shapes did not ride the axis through the camera: {projs:?}"));
+                    }
+                    if g.input_of(sid, engine::roto::CAMERA_INPUT) == Some(cam) {
+                        fail("the camera wire reached the engine".into());
+                    }
+                    next = 12;
+                    self.test.roto_dived = true;
+                }
+            }
+            12 if !self.test.roto_dived => next = 13,
             12 => {
                 println!(
                     "ROTO TEST PASS: zoomed in, + added shape 2 and picked it; S-clicks drew it \
@@ -357,7 +426,9 @@ impl Gfx {
                      and the node lowers to one Subtract over the two splines; the soft crop boxed \
                      what the roto draws (shape 1, the cut taken out of it); a ctrl-drag cut the \
                      op's wire into Out (all three left unconnected); Delete over the node took \
-                     the picked op and left the roto"
+                     the picked op and left the roto; Enter opened it as Splines + Out with the \
+                     picked shape selected, an Axis wired in moved both shapes, and back out a \
+                     Camera on its port projected them"
                 );
                 std::process::exit(0);
             }

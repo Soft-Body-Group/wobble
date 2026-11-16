@@ -173,7 +173,7 @@ pub fn label(ch: Channel) -> Option<&'static str> {
     })
 }
 
-fn xform_rows(ui: &mut egui::Ui, rcx: &mut RowCtx, x: &mut Xform, ch: &[Channel], scale: bool) -> Option<HudSlider> {
+pub fn xform_rows(ui: &mut egui::Ui, rcx: &mut RowCtx, x: &mut Xform, ch: &[Channel], scale: bool) -> Option<HudSlider> {
     let [tx, ty, tz] = &mut x.translate;
     let h1 = widgets::drags(ui, rcx, "translate", &mut [tx, ty, tz], 0.01, (-10.0, 10.0), &ch[0..3]);
     let [rx, ry, rz] = &mut x.rotate;

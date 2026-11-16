@@ -296,21 +296,22 @@ fn merge(into: &mut Value, patch: &Value) {
 
 /// The catalog the open graph takes, as `editor::offered` reads it: inside
 /// a Noise, a 2dini or an SDF its own node types; anywhere else the comp's.
-fn cats_for(dive: Option<crate::DiveKind>) -> (bool, bool, bool, bool, bool) {
+fn cats_for(dive: Option<crate::DiveKind>) -> (bool, bool, bool, bool, bool, bool) {
     match dive {
-        Some(crate::DiveKind::Noise) => (true, false, false, false, false),
-        Some(crate::DiveKind::Geo) => (false, true, false, false, false),
-        Some(crate::DiveKind::Sdf) => (false, false, true, false, false),
-        Some(crate::DiveKind::Particles) => (false, false, false, true, false),
-        Some(crate::DiveKind::GenAi) => (false, false, false, false, true),
-        _ => (false, false, false, false, false),
+        Some(crate::DiveKind::Noise) => (true, false, false, false, false, false),
+        Some(crate::DiveKind::Geo) => (false, true, false, false, false, false),
+        Some(crate::DiveKind::Sdf) => (false, false, true, false, false, false),
+        Some(crate::DiveKind::Particles) => (false, false, false, true, false, false),
+        Some(crate::DiveKind::GenAi) => (false, false, false, false, true, false),
+        Some(crate::DiveKind::Roto) => (false, false, false, false, false, true),
+        _ => (false, false, false, false, false, false),
     }
 }
 
 /// The catalog entry a type name means HERE: the open graph's own types
 /// first, so inside a 2dini `Noise` is the 2dini's Noise and `Transform`
 /// its Transform, not the comp nodes of the same name.
-fn find_entry(want: &str, (n, g, s, p, a): (bool, bool, bool, bool, bool)) -> Option<editor::NodeEntry> {
+fn find_entry(want: &str, (n, g, s, p, a, r): (bool, bool, bool, bool, bool, bool)) -> Option<editor::NodeEntry> {
     let mut lower = want.to_ascii_lowercase();
     // The names these types had before they were renamed in the UI.
     if let Some(now) = [("write", "render"), ("shuffle", "reorder"), ("read", "load"), ("scene", "blend 3d"), ("softcrop", "crop"), ("soft crop", "crop")].iter().find(|(was, _)| *was == lower) {
@@ -320,7 +321,7 @@ fn find_entry(want: &str, (n, g, s, p, a): (bool, bool, bool, bool, bool)) -> Op
         e.label.to_ascii_lowercase() == lower || (e.make)(0).name().to_ascii_lowercase() == lower
     };
     let all = editor::node_catalog();
-    let own = all.iter().position(|e| editor::offered_in(e.cat, n, g, s, p, a) && hit(e));
+    let own = all.iter().position(|e| editor::offered_in(e.cat, n, g, s, p, a, r) && hit(e));
     let any = all.iter().position(hit);
     own.or(any).map(|i| all.into_iter().nth(i).expect("indexed"))
 }
@@ -339,10 +340,10 @@ its nodes directly (app_info.dive says which), and view_set its Output to see th
 
 /// One sub-graph catalog: each type with its input names and the default
 /// node JSON `node_patch` / a graph's `nodes` take.
-fn subgraph_types(cats: (bool, bool, bool, bool, bool)) -> Vec<Value> {
+fn subgraph_types(cats: (bool, bool, bool, bool, bool, bool)) -> Vec<Value> {
     editor::node_catalog()
         .into_iter()
-        .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4))
+        .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
         .map(|e| {
             let kind = (e.make)(0);
             let inputs: Vec<&str> = match &kind {
@@ -902,6 +903,7 @@ impl Gfx {
                     crate::DiveKind::Sdf => "sdf",
                     crate::DiveKind::Particles => "particles",
                     crate::DiveKind::GenAi => "genai",
+                    crate::DiveKind::Roto => "roto",
                 }),
                 "dive_depth": self.dive.len(),
                 "nodes": self.egraph.nodes.len(),
@@ -1439,10 +1441,10 @@ impl Gfx {
 
     fn api_node_types(&self) -> Value {
         let cats = cats_for(self.dive.last().map(|d| d.kind));
-        let dived = cats != (false, false, false, false, false);
+        let dived = cats != (false, false, false, false, false, false);
         let mut types: Vec<Value> = editor::node_catalog()
             .into_iter()
-            .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4))
+            .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
             .map(|e| {
                 let kind = (e.make)(0);
                 json!({
@@ -1474,11 +1476,12 @@ impl Gfx {
             // What goes INSIDE a 2dini / Noise / SDF node.
             "subgraphs": {
                 "notes": SUBGRAPH_NOTES,
-                "2dini": subgraph_types((false, true, false, false, false)),
-                "noise": subgraph_types((true, false, false, false, false)),
-                "sdf": subgraph_types((false, false, true, false, false)),
-                "particles": subgraph_types((false, false, false, true, false)),
-                "genai": subgraph_types((false, false, false, false, true)),
+                "2dini": subgraph_types((false, true, false, false, false, false)),
+                "noise": subgraph_types((true, false, false, false, false, false)),
+                "sdf": subgraph_types((false, false, true, false, false, false)),
+                "particles": subgraph_types((false, false, false, true, false, false)),
+                "genai": subgraph_types((false, false, false, false, true, false)),
+                "roto": subgraph_types((false, false, false, false, false, true)),
             },
         })
     }
@@ -2634,7 +2637,7 @@ mod tests {
     #[test]
     fn old_type_names_still_resolve() {
         for (was, now) in [("Read", "Load"), ("Write", "Render"), ("Shuffle", "Reorder")] {
-            let e = find_entry(was, (false, false, false, false, false)).unwrap_or_else(|| panic!("{was} resolves to nothing"));
+            let e = find_entry(was, (false, false, false, false, false, false)).unwrap_or_else(|| panic!("{was} resolves to nothing"));
             assert_eq!(e.label, now);
         }
     }

@@ -10,7 +10,7 @@
 
 use crate::editor::{EditorGraph, PDst, PSrc, SwipeOp};
 use crate::innards::{Mini, MiniEdge, MiniNode, Provider};
-use engine::graph::{MatteOp, NodeKind, RotoOp, SplineParams, ROTO_OP};
+use engine::graph::{MatteOp, NodeKind, RotoOp, SplineParams, ROTO_AXIS, ROTO_OP};
 
 pub struct Shapes;
 pub static SHAPES: Shapes = Shapes;
@@ -79,6 +79,24 @@ impl Provider for Shapes {
                 }
             }
         }
+        // Axes (a Roto's dive makes them; here they are shown and wired
+        // like ops): a port per thing in it, and a free one.
+        for (k, a) in sp.axes.iter().enumerate() {
+            let id = ROTO_AXIS + k;
+            let ins: Vec<usize> = a.inputs.iter().flatten().copied().collect();
+            m.nodes.push(MiniNode {
+                id,
+                at: a.at,
+                label: if a.name.is_empty() { "axis".into() } else { a.name.clone() },
+                inputs: ins.len() + 1,
+                output: true,
+                item: false,
+                removable: true,
+            });
+            for (port, from) in ins.into_iter().enumerate() {
+                m.edges.push(MiniEdge { from, to: id, port });
+            }
+        }
         // Out: what is wired in, a port each — the union the node outputs,
         // drawn as wires so nothing is secretly combined — and one free
         // port to plug the next into. A shape wired nowhere is drawn here
@@ -110,6 +128,9 @@ impl Provider for Shapes {
     fn remove(&self, graph: &mut EditorGraph, node: u64, id: usize) -> bool {
         let Some(n) = graph.node_mut(node) else { return false };
         let Some(sp) = sp_mut(&mut n.kind) else { return false };
+        if (ROTO_AXIS..OUT).contains(&id) {
+            return sp.remove_axis(id - ROTO_AXIS);
+        }
         if id >= ROTO_OP {
             return id < OUT && sp.remove_op(id - ROTO_OP);
         }
@@ -145,6 +166,10 @@ impl Provider for Shapes {
         let Some(sp) = sp_mut(kind) else { return };
         if id == OUT {
             sp.out_at = Some(at);
+        } else if id >= ROTO_AXIS {
+            if let Some(a) = sp.axes.get_mut(id - ROTO_AXIS) {
+                a.at = at;
+            }
         } else if id >= ROTO_OP {
             if let Some(o) = sp.ops.get_mut(id - ROTO_OP) {
                 o.at = at;
@@ -167,9 +192,17 @@ impl Provider for Shapes {
             list.insert(at, from);
             return true;
         }
-        // Otherwise only an op takes wires, never from something it feeds.
+        // Otherwise only an op or an axis takes wires, never from
+        // something it feeds.
         if !(ROTO_OP..OUT).contains(&to) || sp.feeds(to, from) {
             return false;
+        }
+        if to >= ROTO_AXIS {
+            let Some(a) = sp.axes.get_mut(to - ROTO_AXIS) else { return false };
+            let mut list: Vec<usize> = a.inputs.iter().flatten().copied().filter(|x| *x != from).collect();
+            list.insert(port.min(list.len()), from);
+            a.inputs = list.into_iter().map(Some).collect();
+            return true;
         }
         let Some(o) = sp.ops.get_mut(to - ROTO_OP) else { return false };
         match port {
@@ -187,6 +220,14 @@ impl Provider for Shapes {
             if port < list.len() {
                 list.remove(port);
             }
+            return;
+        }
+        if let Some(a) = to.checked_sub(ROTO_AXIS).and_then(|k| sp.axes.get_mut(k)) {
+            let mut list: Vec<usize> = a.inputs.iter().flatten().copied().collect();
+            if port < list.len() {
+                list.remove(port);
+            }
+            a.inputs = list.into_iter().map(Some).collect();
             return;
         }
         if let Some(o) = to.checked_sub(ROTO_OP).and_then(|k| sp.ops.get_mut(k)) {
@@ -263,7 +304,9 @@ impl Provider for Shapes {
 }
 
 fn mini_at(sp: &SplineParams, id: usize) -> [f32; 2] {
-    if id >= ROTO_OP {
+    if id >= ROTO_AXIS {
+        sp.axes.get(id - ROTO_AXIS).map(|a| a.at).unwrap_or([0.0, 0.0])
+    } else if id >= ROTO_OP {
         sp.ops.get(id - ROTO_OP).map(|o| o.at).unwrap_or([0.0, 0.0])
     } else {
         sp.shape_at(id)

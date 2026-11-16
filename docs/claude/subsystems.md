@@ -1758,3 +1758,40 @@ normal map), input 2 a Camera on the scene pipe, lowered away by
 - **Format**: the map's under a latlong (the glass is the frame), the
   plate's otherwise (`node_resolution`).
 - A normal map must be loaded raw; the port's tooltip and the panel say so.
+
+## Roto dive + axes (`engine/src/roto.rs`, `app/src/rotodive.rs`)
+
+The Roto is still `NodeKind::Spline`; its shapes, combine ops, **axes** and
+Out list are DATA on `SplineParams` (`more`, `ops`, `axes`, `out`,
+`layout`). Mini ids: shapes `0..`, ops `ROTO_OP + k`, axes `ROTO_AXIS + k`
+(`RotoRef::of` decodes; never test `id >= ROTO_OP` to mean "op" — axes are
+above it too).
+
+- **Enter dives in** (`DiveKind::Roto`). The body is built by
+  `rotodive::to_editor` and written back by `from_editor`, every frame for
+  the preview and once on the way out. Inside, a shape IS a plain
+  `NodeKind::Spline` (so the gizmo, the pen tool and the panel work
+  unchanged), a combine IS a `MatteCombine`, and only Axis and Out are new
+  (`NodeKind::RotoNode`, dive-only, never compiled). Shape order = body id
+  order. Curves move with the items: a shape's `RotoPt`/`RotoSh` on the
+  owner are its `Spline*` inside; an axis's `RotoAx(k, w)` its `Card3d*`
+  transform channels. A Spline inside a Roto dive does NOT dive again.
+- **An Axis unions what is wired into it and moves it** (`RotoAxis::matrix`:
+  T·T(pivot)·R·S·T(−pivot), scene units: frame one unit wide, Y up, the 3D
+  cards' convention). Axes nest; the product is applied leaf-ward.
+- **Port 1 is a Camera** (scene pipe, lowered away in `roto::expand`, which
+  also drops the wire on a plain Spline). With one, shapes are planes in 3D;
+  a default Camera sees an unmoved shape exactly where it was drawn.
+  Without, the projection is orthographic (axis Z ignored).
+- **Projection is per outline SAMPLE**: `roto::expand` puts a transient
+  `SplineParams::proj` (`ShapeProj`, serde-skipped) on each minted Spline;
+  `codegen::spline_outline` carries every sample through its homography.
+  Never apply it to control points (a projected Bezier is not the Bezier of
+  projected points). Feather stays in output pixels.
+- **The gizmo composes the same homography** into its downstream chain
+  (`Gfx::roto_gizmo_h`), so points are drawn and dragged where they render,
+  and edits land in authored space.
+- Known gaps: `roto::bounds` (the SoftCrop box) ignores the camera; patch
+  cables on a shape's channels stay on the owner while dived; the in-node
+  `innards` view shows and wires axes but cannot add one (add them in the
+  dive).

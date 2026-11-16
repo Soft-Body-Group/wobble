@@ -154,11 +154,13 @@ pub enum NodeCat {
     /// Steps inside a GenAI Pipeline's dive: prompts, its inputs, a model
     /// call each, Output.
     GenAiStep,
+    /// Inside a Roto's dive: shapes, combines, axes.
+    Roto,
 }
 
 impl NodeCat {
     /// Menu order: roughly the order a comp gets built in.
-    pub const ALL: [NodeCat; 23] = [
+    pub const ALL: [NodeCat; 24] = [
         NodeCat::FieldPattern,
         NodeCat::FieldShape,
         NodeCat::FieldMath,
@@ -182,6 +184,7 @@ impl NodeCat {
         NodeCat::Utility,
         NodeCat::Ai,
         NodeCat::GenAiStep,
+        NodeCat::Roto,
     ];
 
     pub fn name(self) -> &'static str {
@@ -209,6 +212,7 @@ impl NodeCat {
             NodeCat::Utility => "utility",
             NodeCat::Ai => "AI / ML",
             NodeCat::GenAiStep => "steps",
+            NodeCat::Roto => "roto",
         }
     }
 }
@@ -241,18 +245,28 @@ impl NodeCat {
 /// inside any of them: four worlds, one menu each.
 #[cfg(test)]
 pub fn offered(cat: NodeCat, in_noise: bool, in_geo: bool, in_sdf: bool, in_particles: bool) -> bool {
-    offered_in(cat, in_noise, in_geo, in_sdf, in_particles, false)
+    offered_in(cat, in_noise, in_geo, in_sdf, in_particles, false, false)
 }
 
-/// [`offered`], with the GenAI Pipeline's dive as a sixth world.
-pub fn offered_in(cat: NodeCat, in_noise: bool, in_geo: bool, in_sdf: bool, in_particles: bool, in_genai: bool) -> bool {
+/// [`offered`], with the GenAI Pipeline's dive as a sixth world and a
+/// Roto's as a seventh.
+pub fn offered_in(
+    cat: NodeCat,
+    in_noise: bool,
+    in_geo: bool,
+    in_sdf: bool,
+    in_particles: bool,
+    in_genai: bool,
+    in_roto: bool,
+) -> bool {
     match cat {
         c if c.is_field() => in_noise,
         c if c.is_geo() => in_geo,
         NodeCat::Sdf => in_sdf,
         NodeCat::Particles => in_particles,
         NodeCat::GenAiStep => in_genai,
-        _ => !in_noise && !in_geo && !in_sdf && !in_particles && !in_genai,
+        NodeCat::Roto => in_roto,
+        _ => !in_noise && !in_geo && !in_sdf && !in_particles && !in_genai && !in_roto,
     }
 }
 
@@ -1126,6 +1140,11 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         let make = move |s| NodeKind::GenAi(engine::graph::GenAiParams::for_model(s, id));
         NodeEntry { cat: Ai, label: m.label, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
     }));
+    // Inside a Roto's dive: a shape is a Spline, a combine a MatteCombine,
+    // and an Axis groups and moves them.
+    v.push(e(Roto, "Shape", false, |_| NodeKind::Spline(SplineParams::default())));
+    v.push(e(Roto, "Combine", false, |_| NodeKind::MatteCombine(Default::default())));
+    v.push(e(Roto, "Axis", false, |_| crate::rotodive::new_axis()));
     // Inside a GenAI Pipeline's dive: its steps, one node each.
     v.extend(crate::genaiui::step_entries().into_iter().map(|(label, op)| {
         let make = move |_| NodeKind::GenAiStep(op.clone());
@@ -1900,6 +1919,8 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::Sdf(_) | NodeKind::SdfNode(_) => t::node_sdf(),
         NodeKind::Blender(_) => t::node_blender(),
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => t::node_genai(),
+        NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => t::node_scene3d(),
+        NodeKind::RotoNode(_) => t::node_spline(),
         NodeKind::Prompt(_) => t::node_prompt(),
         NodeKind::Curve(_) => t::node_curve(),
         NodeKind::Mask => t::node_mask(),
@@ -2613,6 +2634,10 @@ pub(crate) fn paint_body(
         NodeKind::Grain(_) => crate::nodes::grain::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Blender(_) => crate::blenderui::glyph(&painter, sp, r, fill, stroke),
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => crate::genaiui::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => {
+            crate::nodes::scene3d::scene_glyph(&painter, sp, r, fill, stroke)
+        }
+        NodeKind::RotoNode(_) => crate::nodes::scene3d::card_glyph(&painter, sp, r, fill, stroke),
         NodeKind::Prompt(_) => crate::nodes::prompt::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Grid(_) => {
             // Source triangle ruled into cells: a generated plate.
@@ -3145,6 +3170,8 @@ pub struct NodeEditor {
     pub in_particles: bool,
     /// Editing a GenAI Pipeline's steps.
     pub in_genai: bool,
+    /// Inside a Roto's dive: its shapes, combines and axes.
+    pub in_roto: bool,
     /// A 2dini geometry graph is being edited: geometry nodes only.
     pub in_geo: bool,
     /// A 2dini preset network picked from the add menu: (preset index,
@@ -3537,6 +3564,7 @@ impl Default for NodeEditor {
             in_sdf: false,
             in_particles: false,
             in_genai: false,
+            in_roto: false,
             hover_chan: None,
             s_armed: false,
             r_armed: false,
@@ -3917,7 +3945,10 @@ pub fn big_dot_options(graph: &EditorGraph, src: u64, out: u32, dst: u64) -> Vec
 /// One bar that takes any number of wires: 2dini's Merge, and a Blend 3D
 /// (whose cards are depth-sorted, so their order means nothing).
 pub fn multi_input(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::GeoNode(engine::geo::GeoNode::Merge { .. }) | NodeKind::Scene3D(_))
+    matches!(
+        kind,
+        NodeKind::GeoNode(engine::geo::GeoNode::Merge { .. }) | NodeKind::Scene3D(_) | NodeKind::RotoNode(_)
+    )
 }
 
 /// Pitch between wire ends on a multi-input bar, graph units at size 1:
@@ -7099,13 +7130,13 @@ impl NodeEditor {
                 && !self.in_noise
                 && !self.in_geo
                 && !self.in_sdf
-                && !self.in_particles && !self.in_genai
+                && !self.in_particles && !self.in_genai && !self.in_roto
                 && ui.input(|i| keymap::pressed(i, Act::GraphLinkMode))
             {
                 self.link_mode = !self.link_mode;
                 self.drag = None;
             }
-            if self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai {
+            if self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai || self.in_roto {
                 self.link_mode = false;
             }
             // Shift+`: node-patch mode. The ordinary noodles lock and grey,
@@ -7117,14 +7148,14 @@ impl NodeEditor {
                 && !self.in_noise
                 && !self.in_geo
                 && !self.in_sdf
-                && !self.in_particles && !self.in_genai
+                && !self.in_particles && !self.in_genai && !self.in_roto
                 && ui.input(|i| keymap::pressed(i, Act::GraphPatchMode))
             {
                 self.patch_mode = !self.patch_mode;
                 self.link_mode = false;
                 self.drag = None;
             }
-            if self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai || self.link_mode {
+            if self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai || self.in_roto || self.link_mode {
                 self.patch_mode = false;
             }
             // The source pies: a small orbit around the cursor, alive only
@@ -7151,7 +7182,7 @@ impl NodeEditor {
                 && !self.in_noise
                 && !self.in_geo
                 && !self.in_sdf
-                && !self.in_particles && !self.in_genai
+                && !self.in_particles && !self.in_genai && !self.in_roto
                 && self.pie.is_none()
                 && self.ops_pie.is_none()
                 && self.node_pie.is_none()
@@ -7166,7 +7197,7 @@ impl NodeEditor {
                 && !self.in_noise
                 && !self.in_geo
                 && !self.in_sdf
-                && !self.in_particles && !self.in_genai
+                && !self.in_particles && !self.in_genai && !self.in_roto
                 && self.pie.is_none()
                 && self.ops_pie.is_none()
                 && self.node_pie.is_none()
@@ -8000,14 +8031,14 @@ impl NodeEditor {
                     // Grouped by what a node is FOR: thirty-odd buttons in
                     // one column is a list you read rather than a menu you
                     // use.
-                    let (in_noise, in_geo, in_sdf, in_particles, in_genai) =
-                        (self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai);
+                    let (in_noise, in_geo, in_sdf, in_particles, in_genai, in_roto) =
+                        (self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai, self.in_roto);
                     // The project's maturity threshold hides what is below
                     // it — from every submenu, plugins and controls included.
                     let min_status = graph.node_status_min;
                     let catalog: Vec<NodeEntry> = node_catalog()
                         .into_iter()
-                        .filter(|e| offered_in(e.cat, in_noise, in_geo, in_sdf, in_particles, in_genai))
+                        .filter(|e| offered_in(e.cat, in_noise, in_geo, in_sdf, in_particles, in_genai, in_roto))
                         .filter(|e| min_status.admits(e.status))
                         .collect();
                     for cat in NodeCat::ALL {
@@ -8059,7 +8090,7 @@ impl NodeEditor {
                     let registered: Vec<_> = if self.in_noise
                         || self.in_geo
                         || self.in_sdf
-                        || self.in_particles || self.in_genai
+                        || self.in_particles || self.in_genai || self.in_roto
                         || !min_status.admits(custom_status)
                     {
                         Vec::new()
@@ -10596,7 +10627,7 @@ impl NodeEditor {
                                 .into_iter()
                                 .chain(search_aliases())
                                 .filter(|e| {
-                                    offered_in(e.cat, self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai)
+                                    offered_in(e.cat, self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai, self.in_roto)
                                 })
                                 .filter(|e| min_status.admits(e.status))
                                 .map(|e| {
@@ -10609,7 +10640,7 @@ impl NodeEditor {
                         // body-only input proxies stay hidden.
                         // Not inside a sub-graph, like the right-click
                         // menu: a plugin is an image node.
-                        let sub = self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai;
+                        let sub = self.in_noise || self.in_geo || self.in_sdf || self.in_particles || self.in_genai || self.in_roto;
                         all.extend(engine::plugins::all().into_iter().filter(|d| {
                             !sub && (self.in_tool || !crate::tools::is_proxy_id(&d.type_id))
                         }).map(|d| {

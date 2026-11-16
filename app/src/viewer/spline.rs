@@ -66,8 +66,12 @@ impl Gfx {
             // the gizmo draws its points moved and takes the move back
             // off on the way out: the overlay sits on what renders.
             let mut sdf_off = [0.0f32; 2];
+            let mut container: Option<engine::graph::SplineParams> = None;
             let (mut spw, is_field) = match ekind {
                 NodeKind::Spline(sp) => {
+                    if sp.is_container() {
+                        container = Some(sp.clone());
+                    }
                     shape_sel = innards::selected(ui.ctx(), node, sp.shape_count());
                     // A shape still being drawn has an end (pen tool).
                     open_curve = sp.single(shape_sel).open;
@@ -113,6 +117,43 @@ impl Gfx {
                 _ => continue,
             };
             let ydiv = if is_field { owf } else { ohf };
+            // A roto shape its Axis nodes (or the Roto's camera) move: the
+            // gizmo draws and drags it where it RENDERS, the same homography
+            // the lowering puts it through, ahead of the downstream chain.
+            // The container's other shapes are drawn through their own,
+            // brought back into this one's frame.
+            let (hd, hd_inv) = match (!is_field).then(|| self.roto_gizmo_h(node, shape_sel, cur_t, [owf, ohf])).flatten() {
+                Some((pm, cam)) => {
+                    let pm_inv = engine::codegen::mat3_inv(&pm);
+                    if let Some(c) = &container {
+                        for (k, poly) in others.iter_mut() {
+                            let mut one = c.single(*k);
+                            one.proj = c.shape_proj(*k, cam);
+                            *poly = engine::codegen::spline_polyline(&one, [owf, ohf])
+                                .into_iter()
+                                .map(|(p, f)| (engine::graph::homography_point(&pm_inv, p, [owf, ohf]), f))
+                                .collect();
+                        }
+                    }
+                    let h = mat3_mul3(&hd, &pm);
+                    (h, engine::codegen::mat3_inv(&h))
+                }
+                None => {
+                    // Others under axes while this one is not: their own
+                    // moves, nothing to undo.
+                    if let Some(c) = &container {
+                        let cam = crate::rotodive::camera_in(&self.egraph, node, cur_t);
+                        for (k, poly) in others.iter_mut() {
+                            if let Some(pr) = c.shape_proj(*k, cam) {
+                                let mut one = c.single(*k);
+                                one.proj = Some(pr);
+                                *poly = engine::codegen::spline_polyline(&one, [owf, ohf]);
+                            }
+                        }
+                    }
+                    (hd, hd_inv)
+                }
+            };
             let before_sp = spw.clone();
             let sp = &mut spw;
             let poly = engine::codegen::spline_polyline(sp, [owf, ydiv]);
@@ -1097,4 +1138,14 @@ impl Gfx {
             }
         }
     }
+}
+
+fn mat3_mul3(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let mut m = [[0.0f32; 3]; 3];
+    for (r, row) in m.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            *v = (0..3).map(|k| a[r][k] * b[k][c]).sum();
+        }
+    }
+    m
 }

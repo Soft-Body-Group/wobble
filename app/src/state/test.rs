@@ -332,6 +332,8 @@ pub(crate) struct SuiteState {
     pub(crate) roto: Option<(u32, u32, u64)>,
     /// --test-roto: a gesture's press and release points.
     pub(crate) roto_drag: (egui::Pos2, egui::Pos2),
+    /// `--test-roto` has been through the dive stage.
+    pub(crate) roto_dived: bool,
     pub(crate) roto_clock: Option<web_time::Instant>,
     /// --test-eyedrop: (stage, frames in stage, the Blank node).
     pub(crate) eyedrop: Option<(u32, u32, u64)>,
