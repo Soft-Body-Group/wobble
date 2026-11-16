@@ -485,6 +485,7 @@ slots! {
         node_mirror: "Mirror" = shade(S::family_transform, rgb(0x3e, 0x8e, 0x9e));
         node_lens_distort: "Lens Distortion" = shade(S::family_transform, rgb(0x4a, 0x86, 0xb4));
         node_flip_flop: "FlipFlop" = shade(S::family_transform, rgb(0x46, 0x7e, 0xa8));
+        node_turn: "Turn" = shade(S::family_transform, rgb(0x52, 0x78, 0xb0));
         node_gamma: "Gamma" = shade(S::family_colour, rgb(0x7e, 0x56, 0xa8));
         node_tonemap: "Tone Map" = shade(S::family_colour, rgb(0x9a, 0x6a, 0xb8));
         node_expression: "Expression" = shade(S::family_other, rgb(0x7a, 0x86, 0x9a));

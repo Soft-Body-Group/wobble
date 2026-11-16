@@ -11574,6 +11574,11 @@ impl Gfx {
                 self.input_res(id, 0, visited)
                     .map(|r| p.output_format(r))
             }
+            // A quarter turn swaps width and height (`TurnParams::output_format`).
+            NodeKind::Turn(p) => {
+                let p = *p;
+                self.input_res(id, 0, visited).map(|r| p.output_format(r))
+            }
             // Under a latlong the glass is the frame: the surface map's
             // format (the script's with no map). Over a plate, the plate's.
             NodeKind::Refract(p) if p.mode == engine::graph::RefractMode::Latlong => self
@@ -25555,6 +25560,11 @@ impl Gfx {
                     }
                     NodeKind::FlipFlop(p) => {
                         if let Some(h) = nodes::flipflop::panel(ui, &mut rcx, p) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::Turn(p) => {
+                        if let Some(h) = nodes::turn::panel(ui, &mut rcx, p) {
                             hud_drag_out = Some(h);
                         }
                     }

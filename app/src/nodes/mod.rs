@@ -41,6 +41,7 @@ pub mod burnin;
 pub mod mirror;
 pub mod lensdistort;
 pub mod flipflop;
+pub mod turn;
 pub mod gamma;
 pub mod tonemap;
 pub mod lightwrap;

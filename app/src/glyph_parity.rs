@@ -49,6 +49,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::Mirror(_) => Icon::Mirror,
         NodeKind::LensDistort(_) => Icon::LensDistort,
         NodeKind::FlipFlop(_) => Icon::FlipFlop,
+        NodeKind::Turn(_) => Icon::Turn,
         NodeKind::Gamma(_) => Icon::Gamma,
         NodeKind::ToneMap(_) => Icon::ToneMap,
         NodeKind::Expression(_) => Icon::Expression,

@@ -25,6 +25,7 @@ pub use crate::nodes::lut::{LutOut, LutParams, LutShaper, LutSource};
 pub use crate::nodes::text::TextParams;
 pub use crate::nodes::burnin::{BurninCorner, BurninParams};
 pub use crate::nodes::flipflop::{FlipFlopParams, FlipMode};
+pub use crate::nodes::turn::{TurnMode, TurnParams};
 pub use crate::nodes::mirror::{MirrorParams, MirrorSide};
 pub use crate::nodes::gamma::GammaParams;
 pub use crate::nodes::tonemap::{ToneMapParams, ToneMode, ToneOp};
@@ -447,6 +448,9 @@ pub enum NodeKind {
     /// The picture turned over: top to bottom, left to right, or both. See
     /// [`crate::nodes::flipflop`].
     FlipFlop(FlipFlopParams),
+    /// The picture rotated in quarter turns, its format turned with it
+    /// (90° swaps width and height). See [`crate::nodes::turn`].
+    Turn(TurnParams),
     /// A power curve per channel, `x^(1/γ)`, master times r/g/b (alpha its
     /// own), negatives untouched. See [`crate::nodes::gamma`].
     Gamma(GammaParams),
@@ -6269,6 +6273,7 @@ impl NodeKind {
             NodeKind::Burnin(_) => BurninParams::INPUTS,
             NodeKind::Mirror(_) => MirrorParams::INPUTS,
             NodeKind::FlipFlop(_) => FlipFlopParams::INPUTS,
+            NodeKind::Turn(_) => TurnParams::INPUTS,
             NodeKind::Gamma(_) => GammaParams::INPUTS,
             NodeKind::ToneMap(_) => ToneMapParams::INPUTS,
             NodeKind::UvWarp(_) => UvWarpParams::INPUTS,
@@ -6374,6 +6379,7 @@ impl NodeKind {
             NodeKind::Burnin(_) => BurninParams::MASK_INPUT,
             NodeKind::Mirror(_) => MirrorParams::MASK_INPUT,
             NodeKind::FlipFlop(_) => FlipFlopParams::MASK_INPUT,
+            NodeKind::Turn(_) => TurnParams::MASK_INPUT,
             NodeKind::Gamma(_) => GammaParams::MASK_INPUT,
             NodeKind::ToneMap(_) => ToneMapParams::MASK_INPUT,
             NodeKind::UvWarp(_) => UvWarpParams::MASK_INPUT,
@@ -6478,7 +6484,8 @@ impl NodeKind {
                 | NodeKind::Transform(_)
                 | NodeKind::CornerPin(_)
                 | NodeKind::Mirror(_)
-                | NodeKind::FlipFlop(_) => true,
+                | NodeKind::FlipFlop(_)
+                | NodeKind::Turn(_) => true,
                 NodeKind::Custom { type_id, .. } => {
                     crate::plugins::get(type_id).is_some_and(|d| d.mattes)
                 }
@@ -6506,6 +6513,7 @@ impl NodeKind {
             NodeKind::CornerPin(p) => p.matte,
             NodeKind::Mirror(p) => p.matte,
             NodeKind::FlipFlop(p) => p.matte,
+            NodeKind::Turn(p) => p.matte,
             NodeKind::Custom { params, .. } => {
                 params.get(CUSTOM_MATTE_KEY).is_some_and(|v| *v != 0.0)
             }
@@ -6536,6 +6544,7 @@ impl NodeKind {
             NodeKind::CornerPin(p) => p.matte = on,
             NodeKind::Mirror(p) => p.matte = on,
             NodeKind::FlipFlop(p) => p.matte = on,
+            NodeKind::Turn(p) => p.matte = on,
             NodeKind::Custom { params, .. } => {
                 if on {
                     params.insert(CUSTOM_MATTE_KEY.into(), 1.0);
@@ -7571,6 +7580,7 @@ impl NodeKind {
             NodeKind::Burnin(_) => BurninParams::NAME,
             NodeKind::Mirror(_) => MirrorParams::NAME,
             NodeKind::FlipFlop(_) => FlipFlopParams::NAME,
+            NodeKind::Turn(_) => TurnParams::NAME,
             NodeKind::Gamma(_) => GammaParams::NAME,
             NodeKind::ToneMap(_) => ToneMapParams::NAME,
             NodeKind::UvWarp(_) => UvWarpParams::NAME,
@@ -7806,6 +7816,7 @@ impl NodeKind {
             NodeKind::Burnin(p) => p.topo_tag(),
             NodeKind::Mirror(p) => p.topo_tag(),
             NodeKind::FlipFlop(p) => p.topo_tag(),
+            NodeKind::Turn(p) => p.topo_tag(),
             NodeKind::Gamma(p) => p.topo_tag(),
             NodeKind::ToneMap(p) => p.topo_tag(),
             NodeKind::UvWarp(p) => p.topo_tag(),

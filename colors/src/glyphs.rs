@@ -57,6 +57,7 @@ pub enum Icon {
     Mirror,
     LensDistort,
     FlipFlop,
+    Turn,
     Gamma,
     ToneMap,
     Expression,
@@ -192,6 +193,7 @@ pub const NODES: &[Node] = &[
     n(Icon::Mirror, "Mirror", Slot::node_mirror),
     n(Icon::LensDistort, "Lens Distortion", Slot::node_lens_distort),
     n(Icon::FlipFlop, "FlipFlop", Slot::node_flip_flop),
+    n(Icon::Turn, "Turn", Slot::node_turn),
     n(Icon::Gamma, "Gamma", Slot::node_gamma),
     n(Icon::ToneMap, "Tone Map", Slot::node_tonemap),
     n(Icon::Expression, "Expression", Slot::node_expression),
@@ -755,6 +757,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         Icon::Mirror => mirror(painter, sp, r, fill, stroke),
         Icon::LensDistort => lensdistort(painter, sp, r, fill, stroke),
         Icon::FlipFlop => flipflop(painter, sp, r, fill, stroke),
+        Icon::Turn => turn(painter, sp, r, fill, stroke),
         Icon::Gamma => gamma(painter, sp, r, fill, stroke),
         Icon::ToneMap => tonemap(painter, sp, r, fill, stroke),
         Icon::Expression => {
@@ -1377,6 +1380,24 @@ fn flipflop(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
             painter.line_segment([tip, tip + (d * s - n) * k], ink);
         }
     }
+}
+
+/// `app/src/nodes/turn.rs` `glyph`.
+fn turn(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    painter.circle(c, r * 0.9, fill, stroke);
+    let ink = Stroke::new((r * 0.12).max(1.0), crate::theme::node_ink());
+    let rad = r * 0.5;
+    let at = |a: f32| c + Vec2::new(a.cos(), a.sin()) * rad;
+    let (a0, a1) = (-std::f32::consts::FRAC_PI_2, std::f32::consts::PI);
+    let n = 12;
+    let pts: Vec<Pos2> = (0..=n).map(|i| at(a0 + (a1 - a0) * i as f32 / n as f32)).collect();
+    painter.add(egui::Shape::line(pts, ink));
+    let tip = at(a1);
+    let d = Vec2::new(-a1.sin(), a1.cos());
+    let side = Vec2::new(-d.y, d.x);
+    let k = r * 0.22;
+    painter.line_segment([tip, tip - d * k + side * k], ink);
+    painter.line_segment([tip, tip - d * k - side * k], ink);
 }
 
 /// `app/src/nodes/gamma.rs` `glyph`.

@@ -982,6 +982,8 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         e(Transform, "Mirror", false, |_| NodeKind::Mirror(Default::default())),
         e(Transform, "Lens Distortion", false, |_| NodeKind::LensDistort(Default::default())),
         e(Transform, "FlipFlop", false, |_| NodeKind::FlipFlop(Default::default())),
+        // Quarter turns, the format turned with them (1920x1080 -> 1080x1920).
+        e(Transform, "Turn", false, |_| NodeKind::Turn(Default::default())),
         e(Transform, "VectorWarp", false, |_| NodeKind::VectorWarp(Default::default())),
         e(Transform, "GridWarp", false, |_| NodeKind::GridWarp(Default::default())),
         e(Transform, "Warp", false, |_| NodeKind::Warp(Default::default())),
@@ -1801,6 +1803,7 @@ impl Reduced {
             | NodeKind::TimeRange(_)
             | NodeKind::FlipFlop(_)
             | NodeKind::Mirror(_)
+            | NodeKind::Turn(_)
             | NodeKind::Write(_) => up(0),
             // A retime keeps the 8 bits only while it snaps to frames.
             NodeKind::Speed(engine::graph::SpeedParams { interp, .. })
@@ -1994,6 +1997,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::Mirror(_) => t::node_mirror(),
         NodeKind::LensDistort(_) => t::node_lens_distort(),
         NodeKind::FlipFlop(_) => t::node_flip_flop(),
+        NodeKind::Turn(_) => t::node_turn(),
         NodeKind::Gamma(_) => t::node_gamma(),
         NodeKind::ToneMap(_) => t::node_tonemap(),
         NodeKind::Expression(_) => t::node_expression(),
@@ -2549,6 +2553,7 @@ pub(crate) fn paint_body(
         NodeKind::Mirror(_) => crate::nodes::mirror::glyph(&painter, sp, r, fill, stroke),
         NodeKind::LensDistort(_) => crate::nodes::lensdistort::glyph(&painter, sp, r, fill, stroke),
         NodeKind::FlipFlop(_) => crate::nodes::flipflop::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::Turn(_) => crate::nodes::turn::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Gamma(_) => crate::nodes::gamma::glyph(&painter, sp, r, fill, stroke),
         NodeKind::ToneMap(_) => crate::nodes::tonemap::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Expression(_) => {
