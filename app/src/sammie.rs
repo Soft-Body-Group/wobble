@@ -271,7 +271,8 @@ pub fn params(kind: &NodeKind) -> Option<&SammieParams> {
 }
 
 /// The command that runs the driver: `$WOBBLE_SAMMIE_CMD` (a suite's
-/// stand-in, whitespace-split) or `uv run --project <dir> python <driver>`.
+/// stand-in, whitespace-split) or `uv run --frozen --extra <torch> --project
+/// <dir> python <driver>`.
 fn command(dir: &Path) -> Result<std::process::Command, String> {
     if let Ok(s) = std::env::var("WOBBLE_SAMMIE_CMD") {
         let mut parts = s.split_whitespace();
@@ -284,7 +285,12 @@ fn command(dir: &Path) -> Result<std::process::Command, String> {
     let driver = dir.join(DRIVER_NAME);
     std::fs::write(&driver, DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
     let mut c = std::process::Command::new(uv);
-    c.arg("run").arg("--project").arg(dir).arg("python").arg(&driver);
+    // `uv run` syncs before it runs, and a bare one syncs to NO extra:
+    // torch then comes from PyPI (CPU-only on Windows and Linux) over the
+    // CUDA build the install chose, the torchvision beside it no longer
+    // matches, and the driver dies importing SAM 2. Run on the same lock
+    // and extra as the install (which also repairs an env a bare run broke).
+    c.args(["run", "--frozen", "--extra"]).arg(torch_extra()).arg("--project").arg(dir).arg("python").arg(&driver);
     c.current_dir(dir);
     Ok(c)
 }

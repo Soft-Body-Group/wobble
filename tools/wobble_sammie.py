@@ -34,6 +34,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -64,8 +65,28 @@ def fetch(path: str, key: str) -> None:
     if os.path.exists(path):
         return
     print(f"fetching {os.path.basename(path)} (first run only)", flush=True)
-    r = subprocess.run([sys.executable, os.path.join("sammie", "model_downloader.py"), key])
-    if r.returncode != 0 or not os.path.exists(path):
+    # Its progress is a tqdm bar on stderr, redrawn with CR and never a
+    # newline: relayed here as a line every 5%, or a big checkpoint
+    # downloads for minutes with nothing in the log.
+    p = subprocess.Popen(
+        [sys.executable, os.path.join("sammie", "model_downloader.py"), key],
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+    shown, buf = -5, b""
+    for chunk in iter(lambda: p.stderr.read1(4096), b""):
+        buf += chunk
+        *parts, buf = re.split(rb"[\r\n]", buf)
+        for part in parts:
+            m = re.match(rb"\s*(\d+)%", part)
+            if m and int(m.group(1)) >= shown + 5:
+                shown = int(m.group(1))
+                print(f"fetching {os.path.basename(path)}: {shown}%", flush=True)
+            elif not m and part.strip():
+                print(part.decode(errors="replace"), flush=True)
+    r = p.wait()
+    if r != 0 or not os.path.exists(path):
         raise RuntimeError(f"could not download the {key} weights")
 
 
@@ -109,6 +130,10 @@ def serve(model: str) -> int:
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
     pred = SAM2ImagePredictor(build_sam2(cfg, ckpt, device=device))
+    # The predictor hard-codes SAM 2's 1024 px backbone grid (256/128/64);
+    # EfficientTAM runs at 512, and a 64 vs 32 mismatch fails every mask.
+    s = pred.model.image_size
+    pred._bb_feat_sizes = [(s // 4, s // 4), (s // 8, s // 8), (s // 16, s // 16)]
     say("ready")
     last, h, w = None, 0, 0
     for line in sys.stdin:
