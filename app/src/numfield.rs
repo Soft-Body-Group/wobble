@@ -34,9 +34,14 @@ pub fn fixed(ui: &mut egui::Ui, w: f32, h: f32, dv: egui::DragValue<'_>) -> egui
     // the old value. So while the field has focus the parser only records
     // the text; egui parses once more when focus goes, and that one counts.
     let wid_key = id.with("numfield-wid");
-    let typing = ui
-        .data(|d| d.get_temp::<egui::Id>(wid_key))
-        .is_some_and(|wid| ui.memory(|m| m.has_focus(wid)));
+    // Tab leaves the field in the frame it is pressed (egui moves focus
+    // as the frame ends, and reports no loss the frame after), so a Tab
+    // frame is a commit frame, like the one after Enter.
+    let leaving = ui.input(|i| i.key_pressed(egui::Key::Tab));
+    let typing = !leaving
+        && ui
+            .data(|d| d.get_temp::<egui::Id>(wid_key))
+            .is_some_and(|wid| ui.memory(|m| m.has_focus(wid)));
     let dv = dv
         .update_while_editing(true)
         .custom_formatter(move |v, dec| fit_number(v, dec, fit))
@@ -217,15 +222,99 @@ pub fn forget_typed(ctx: &egui::Context, id: egui::Id) {
     ctx.data_mut(|d| d.remove::<String>(text_key(id)));
 }
 
-/// egui's own number parser (private there): whitespace ignored, the
-/// typographic minus read as a minus.
-fn default_parse(text: &str) -> Option<f64> {
-    let t: String = text
+/// What a typed field commits: a number, or arithmetic that makes one
+/// (`100/2`, `1920*0.5`, `(3+4)^2`, `-2.5e1`). Whitespace is ignored and
+/// the typographic minus / times / divide signs count as `-` `*` `/`.
+pub fn default_parse(text: &str) -> Option<f64> {
+    let t: Vec<char> = text
         .chars()
         .filter(|c| !c.is_whitespace())
-        .map(|c| if c == '\u{2212}' { '-' } else { c })
+        .map(|c| match c {
+            '\u{2212}' => '-',
+            '\u{00d7}' | 'x' | 'X' => '*',
+            '\u{00f7}' => '/',
+            c => c,
+        })
         .collect();
-    t.parse().ok()
+    if let Ok(v) = t.iter().collect::<String>().parse::<f64>() {
+        return Some(v);
+    }
+    let mut p = Expr { t: &t, i: 0 };
+    let v = p.sum()?;
+    (p.i == t.len() && v.is_finite()).then_some(v)
+}
+
+/// A tiny recursive-descent calculator: `+ - * / % ^`, unary minus,
+/// parentheses. `^` binds tightest and to the right.
+struct Expr<'a> {
+    t: &'a [char],
+    i: usize,
+}
+
+impl Expr<'_> {
+    fn peek(&self) -> Option<char> {
+        self.t.get(self.i).copied()
+    }
+    fn eat(&mut self, c: char) -> bool {
+        let hit = self.peek() == Some(c);
+        self.i += hit as usize;
+        hit
+    }
+    fn sum(&mut self) -> Option<f64> {
+        let mut v = self.product()?;
+        loop {
+            if self.eat('+') {
+                v += self.product()?;
+            } else if self.eat('-') {
+                v -= self.product()?;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+    fn product(&mut self) -> Option<f64> {
+        let mut v = self.unary()?;
+        loop {
+            if self.eat('*') {
+                v *= self.unary()?;
+            } else if self.eat('/') {
+                v /= self.unary()?;
+            } else if self.eat('%') {
+                v %= self.unary()?;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+    fn unary(&mut self) -> Option<f64> {
+        if self.eat('-') {
+            return Some(-self.unary()?);
+        }
+        if self.eat('+') {
+            return self.unary();
+        }
+        let b = self.atom()?;
+        if self.eat('^') {
+            return Some(b.powf(self.unary()?));
+        }
+        Some(b)
+    }
+    fn atom(&mut self) -> Option<f64> {
+        if self.eat('(') {
+            let v = self.sum()?;
+            return self.eat(')').then_some(v);
+        }
+        let start = self.i;
+        while let Some(c) = self.peek() {
+            let exp_sign = (c == '-' || c == '+') && self.i > start && matches!(self.t[self.i - 1], 'e' | 'E');
+            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || exp_sign {
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+        self.t[start..self.i].iter().collect::<String>().parse().ok()
+    }
 }
 
 /// `v` with as many of `dec`'s decimals as fit in `fit` characters (digits
@@ -273,6 +362,12 @@ mod tests {
 
     /// Drive `field` through a click, then type `typed`, then Enter.
     fn click_and_type(typed: &str, field: impl Fn(&mut egui::Ui, &mut f64) -> egui::Response) -> f64 {
+        click_type_key(typed, egui::Key::Enter, field)
+    }
+
+    /// Drive `field` through a click, then type `typed`, then press `end`.
+    /// A second field is drawn after it, so Tab has somewhere to go.
+    fn click_type_key(typed: &str, end: egui::Key, field: impl Fn(&mut egui::Ui, &mut f64) -> egui::Response) -> f64 {
         let ctx = egui::Context::default();
         let mut v = 1001.0f64;
         let mut centre = egui::Pos2::ZERO;
@@ -285,6 +380,8 @@ mod tests {
             let _ = ctx.run_ui(raw, |ui| {
                 let r = field(ui, v);
                 *centre = r.rect.center();
+                let mut other = 5.0f64;
+                fixed(ui, 54.0, 18.0, egui::DragValue::new(&mut other));
             });
         };
         frame(vec![], &mut v, &mut centre);
@@ -304,7 +401,7 @@ mod tests {
             frame(vec![egui::Event::Text(ch.to_string())], &mut v, &mut centre);
         }
         let enter = |pressed| egui::Event::Key {
-            key: egui::Key::Enter,
+            key: end,
             physical_key: None,
             pressed,
             repeat: false,
@@ -320,6 +417,40 @@ mod tests {
     fn typing_over_a_clicked_field_replaces_it() {
         let plain = click_and_type("57", |ui, v| ui.add(egui::DragValue::new(v)));
         let fixed_v = click_and_type("57", |ui, v| fixed(ui, 54.0, 18.0, egui::DragValue::new(v)));
+        assert_eq!((plain, fixed_v), (57.0, 57.0));
+    }
+
+    #[test]
+    fn typed_arithmetic_is_worked_out() {
+        let p = |t| default_parse(t);
+        assert_eq!(p("100/2"), Some(50.0));
+        assert_eq!(p(" 1920 * 0.5 "), Some(960.0));
+        assert_eq!(p("2+3*4"), Some(14.0));
+        assert_eq!(p("(2+3)*4"), Some(20.0));
+        assert_eq!(p("-2^2"), Some(-4.0));
+        assert_eq!(p("2^3^2"), Some(512.0));
+        assert_eq!(p("1e3/4"), Some(250.0));
+        assert_eq!(p("1.5e-1*2"), Some(0.3));
+        assert_eq!(p("10%3"), Some(1.0));
+        assert_eq!(p("\u{2212}3"), Some(-3.0));
+        assert_eq!(p("4x2"), Some(8.0));
+        assert_eq!(p("1/0"), None);
+        assert_eq!(p("2+"), None);
+        assert_eq!(p("(1"), None);
+        assert_eq!(p("abc"), None);
+    }
+
+    /// Arithmetic typed into a field commits as its answer.
+    #[test]
+    fn a_field_commits_the_answer() {
+        assert_eq!(click_and_type("100/2", |ui, v| fixed(ui, 54.0, 18.0, egui::DragValue::new(v))), 50.0);
+    }
+
+    /// Tab moves to the next field AND keeps what was typed.
+    #[test]
+    fn tab_commits_the_typing() {
+        let plain = click_type_key("57", egui::Key::Tab, |ui, v| ui.add(egui::DragValue::new(v)));
+        let fixed_v = click_type_key("57", egui::Key::Tab, |ui, v| fixed(ui, 54.0, 18.0, egui::DragValue::new(v)));
         assert_eq!((plain, fixed_v), (57.0, 57.0));
     }
 
