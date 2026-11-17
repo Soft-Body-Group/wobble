@@ -53,6 +53,9 @@ impl Gfx {
             let r = s.image_rect;
             r.min + egui::vec2(0.41, 0.47) * r.size()
         };
+        let spot_a = |s: &Self| s.image_rect.min + egui::vec2(0.25, 0.30) * s.image_rect.size();
+        let spot_b = |s: &Self| s.image_rect.min + egui::vec2(0.62, 0.66) * s.image_rect.size();
+        let spot_c = |s: &Self| s.image_rect.min + egui::vec2(0.75, 0.40) * s.image_rect.size();
         let swatch = |s: &Self| {
             colorpicker::last_geom(&s.egui_ctx, (bid, "blank-color"))
                 .map(|g| g.swatch)
@@ -93,6 +96,7 @@ impl Gfx {
                 next = 2;
             }
             2 if frames > 2 => {
+                raw.events.push(egui::Event::PointerMoved(swatch(self).unwrap().center()));
                 key(raw, egui::Key::E);
                 next = 3;
             }
@@ -112,20 +116,22 @@ impl Gfx {
                 next = 6;
             }
             // The sample lands a frame or two later. Alpha is the swatch's.
-            6 if colour(self) != START => {
+            6 if colour(self) != START && !eyedrop::armed(&self.egui_ctx) => {
                 let c = colour(self);
                 if c[3] != START[3] {
                     fail(format!("alpha changed to {} — it is never sampled", c[3]));
-                }
-                if eyedrop::armed(&self.egui_ctx) {
-                    fail("still armed after the sample landed".into());
                 }
                 // The readout at the same spot is the number to match.
                 self.picker.size = 0;
                 self.picker.on = true;
                 next = 7;
             }
-            7 if frames > 10 && self.picker.live.is_some() => {
+            // Hold the pointer on the spot: a real mouse over the window
+            // would otherwise move the readout off it.
+            7 if frames <= 10 => {
+                raw.events.push(egui::Event::PointerMoved(spot(self)));
+            }
+            7 if self.picker.live.is_some() => {
                 let want = self.picker.live.unwrap().rgba;
                 let got = colour(self);
                 for k in 0..3 {
@@ -139,6 +145,7 @@ impl Gfx {
             }
             // E, then Esc: armed and stood down, colour untouched.
             8 if frames > 2 => {
+                raw.events.push(egui::Event::PointerMoved(swatch(self).unwrap().center()));
                 key(raw, egui::Key::E);
                 next = 9;
             }
@@ -153,7 +160,95 @@ impl Gfx {
                 if eyedrop::armed(&self.egui_ctx) {
                     fail("Esc did not stand the eyedropper down".into());
                 }
-                println!("EYEDROP TEST PASS: {:?}", colour(self));
+                raw.events.push(egui::Event::PointerMoved(swatch(self).unwrap().center()));
+                key(raw, egui::Key::E);
+                next = 11;
+            }
+            // A plain drag FOLLOWS the pointer: press at A, move to B, and
+            // the swatch takes B's pixel while the button is still down.
+            11 if frames > 2 => {
+                if !eyedrop::armed(&self.egui_ctx) {
+                    fail("E did not arm for the drag".into());
+                }
+                self.test.rect.min = egui::pos2(colour(self)[0], colour(self)[1]);
+                button(raw, spot_a(self), true);
+                next = 12;
+            }
+            12 if frames > 2 => {
+                raw.events.push(egui::Event::PointerMoved(spot_b(self)));
+                self.picker.on = true;
+                next = 13;
+            }
+            13 if frames <= 20 => {
+                raw.events.push(egui::Event::PointerMoved(spot_b(self)));
+            }
+            13 if self.picker.live.is_some() => {
+                let want = self.picker.live.unwrap().rgba;
+                let got = colour(self);
+                if (0..3).any(|k| (got[k] - want[k]).abs() > 2e-3) {
+                    fail(format!("mid-drag swatch {got:?}, the pixel under the pointer is {want:?}"));
+                }
+                if !eyedrop::armed(&self.egui_ctx) {
+                    fail("a live sample disarmed mid-drag".into());
+                }
+                self.picker.on = false;
+                button(raw, spot_b(self), false);
+                next = 14;
+            }
+            14 if frames > 10 => {
+                if eyedrop::armed(&self.egui_ctx) {
+                    fail("still armed after the drag released".into());
+                }
+                self.test.rect.max = egui::pos2(colour(self)[0], colour(self)[1]);
+                raw.events.push(egui::Event::PointerMoved(swatch(self).unwrap().center()));
+                next = 15;
+            }
+            // Shift-drag draws a box: no live updates, the mean on release.
+            15 if frames > 2 => {
+                raw.events.push(egui::Event::PointerMoved(swatch(self).unwrap().center()));
+                key(raw, egui::Key::E);
+                next = 16;
+            }
+            16 if frames > 2 => {
+                raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+                raw.events.push(egui::Event::PointerMoved(spot_a(self)));
+                raw.events.push(egui::Event::PointerButton {
+                    pos: spot_a(self),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::SHIFT,
+                });
+                next = 17;
+            }
+            17 if frames > 2 => {
+                raw.events.push(egui::Event::PointerMoved(spot_c(self)));
+                if frames > 20 {
+                    let c = colour(self);
+                    if (c[0], c[1]) != (self.test.rect.max.x, self.test.rect.max.y) {
+                        fail(format!("a shift-drag sampled live ({c:?})"));
+                    }
+                    next = 18;
+                }
+            }
+            18 => {
+                raw.events.push(egui::Event::PointerButton {
+                    pos: spot_c(self),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::SHIFT,
+                });
+                next = 19;
+            }
+            19 if frames > 10 => {
+                raw.events.insert(0, egui::Event::ModifiersChanged(Default::default()));
+                if eyedrop::armed(&self.egui_ctx) {
+                    fail("still armed after the box".into());
+                }
+                let c = colour(self);
+                if (c[0], c[1]) == (self.test.rect.max.x, self.test.rect.max.y) {
+                    fail("the box did not land".into());
+                }
+                println!("EYEDROP TEST PASS: click samples the readout's pixel, drag follows the pointer live, shift-drag averages a box, Esc stands down");
                 std::process::exit(0);
             }
             _ => {}

@@ -3,8 +3,10 @@
 //! Blender's hands (manifesto 11): hover any colour control — a picker
 //! swatch or its open popup, an rgb slider row — and press **E**. The viewer
 //! arms: a click samples the pixel under the pointer (the pixel readout's
-//! box size), a drag averages the box it draws. Esc, right-click or a click
-//! outside the viewer stands it down.
+//! box size), a drag keeps sampling the pixel under the pointer as it moves
+//! (the control updates live; release keeps the last), and a SHIFT-drag
+//! averages the box it draws. Esc, right-click or a click outside the
+//! viewer stands it down.
 //!
 //! What lands is the comp's SCENE-LINEAR value in the working space — the
 //! numbers the node's shader sees — never the display value. Alpha is not
@@ -111,6 +113,16 @@ pub fn cancel(ctx: &Context) {
     set(ctx, s);
 }
 
+/// A live sample mid-drag: hand it to the armed control, stay armed.
+pub fn deliver_live(ctx: &Context, rgba: [f32; 4]) {
+    let mut s = state(ctx);
+    if let Some(t) = s.target {
+        s.delivered = Some((t, rgba));
+        set(ctx, s);
+        ctx.request_repaint();
+    }
+}
+
 /// A sample landed: hand it to the armed control and disarm.
 pub fn deliver(ctx: &Context, rgba: [f32; 4]) {
     let mut s = state(ctx);
@@ -161,6 +173,8 @@ struct Read {
     stride: u32,
     ready: Arc<AtomicBool>,
     mapped: bool,
+    /// The release's read (disarms) rather than a live one mid-drag.
+    last: bool,
 }
 
 /// The viewer side: the press in flight and the readback.
@@ -168,12 +182,30 @@ struct Read {
 pub struct Sampler {
     /// Where the press went down, comp pixels, while it is held.
     pub start: Option<(i32, i32)>,
-    /// A box waiting to be read on the next encode.
-    pub pending: Option<[u32; 4]>,
+    /// The held press is a shift-drag: it draws a box to average. A plain
+    /// press follows the pointer instead.
+    pub boxing: bool,
+    /// A box waiting to be read on the next encode, and whether it is the
+    /// release's (true) or a live one mid-drag.
+    pub pending: Option<([u32; 4], bool)>,
     read: Option<Read>,
 }
 
 impl Sampler {
+    /// A press, a pending box or a read is still in flight: the edit it
+    /// will make is not done, so history waits (one drag, one undo step).
+    pub fn busy(&self) -> bool {
+        self.start.is_some() || self.pending.is_some() || self.read.is_some()
+    }
+
+    /// Queue a live read mid-drag, only when nothing is in flight — the
+    /// release's read is never displaced, and live reads never pile up.
+    pub fn queue_live(&mut self, b: Option<[u32; 4]>) {
+        if self.read.is_none() && self.pending.is_none() {
+            self.pending = b.map(|b| (b, false));
+        }
+    }
+
     /// Queue the pending box's copy. `tex` is the comp output (rgba16f).
     pub fn encode(
         &mut self,
@@ -184,7 +216,7 @@ impl Sampler {
         if self.read.is_some() {
             return;
         }
-        let Some([x, y, w, h]) = self.pending.take() else { return };
+        let Some(([x, y, w, h], last)) = self.pending.take() else { return };
         if x + w > tex.width() || y + h > tex.height() || w == 0 || h == 0 {
             return;
         }
@@ -219,11 +251,13 @@ impl Sampler {
             stride,
             ready: Arc::new(AtomicBool::new(false)),
             mapped: false,
+            last,
         });
     }
 
-    /// The box's mean rgba once it has landed. Call once a frame.
-    pub fn poll(&mut self) -> Option<[f32; 4]> {
+    /// The box's mean rgba once it has landed, and whether it was the
+    /// release's read. Call once a frame.
+    pub fn poll(&mut self) -> Option<([f32; 4], bool)> {
         let r = self.read.as_mut()?;
         if !r.mapped {
             r.mapped = true;
@@ -257,7 +291,7 @@ impl Sampler {
             }
         }
         r.buffer.unmap();
-        (count > 0.0).then(|| std::array::from_fn(|k| (sum[k] / count) as f32))
+        (count > 0.0).then(|| (std::array::from_fn(|k| (sum[k] / count) as f32), r.last))
     }
 }
 

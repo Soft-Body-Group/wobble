@@ -11136,8 +11136,12 @@ impl Gfx {
 
         self.poll_luma_probes();
         self.picker.poll();
-        if let Some(rgba) = self.eyedrop.poll() {
-            eyedrop::deliver(&self.egui_ctx, rgba);
+        if let Some((rgba, last)) = self.eyedrop.poll() {
+            if last {
+                eyedrop::deliver(&self.egui_ctx, rgba);
+            } else {
+                eyedrop::deliver_live(&self.egui_ctx, rgba);
+            }
         }
         if let Some((node, z)) = self.focus_pick.poll() {
             self.apply_focus_pick(node, z);
@@ -14023,6 +14027,7 @@ impl Gfx {
             && !self.patch.ui.gesture_live()
             && self.wire_drag.is_none()
             && self.patch.drag.is_none()
+            && !self.eyedrop.busy()
             && self.egraph != self.undo_last
         {
             self.undo_stack.push(self.undo_last.clone());
