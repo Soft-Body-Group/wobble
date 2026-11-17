@@ -4,6 +4,8 @@ name: release
 # through the LGPL decode-only FFmpeg) — for macOS arm64, Windows x64 and
 # Linux x86_64, made by the same scripts a hand-run release uses:
 #
+# Each archive carries Scrub (scrub/app) beside wobble.
+#
 #   macOS    tools/release_public.sh        -> wobble-<ver>-<git>-macos-arm64.zip
 #   Windows  tools/release_public_win.ps1   -> wobble-<ver>-<git>-windows-x86_64.zip
 #   Linux    tools/release_public_linux.sh  -> wobble-<ver>-<git>-linux-x86_64.tar.gz
@@ -127,7 +129,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libwayland-dev \
-            nasm zlib1g-dev libbz2-dev clang libclang-dev
+            nasm zlib1g-dev libbz2-dev clang libclang-dev libasound2-dev
       - name: Build + package
         run: sh tools/release_public_linux.sh
         env:

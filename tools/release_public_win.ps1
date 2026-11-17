@@ -3,6 +3,8 @@
 # through an LGPL-only FFmpeg whose DLLs sit beside wobble.exe (dynamic, so a
 # user can swap them, which LGPL asks for). The licences (and FFMPEG.txt) sit
 # in licenses\, so the top level is the app and what it needs to run.
+# Scrub, the timeline editor (scrub/app), ships beside it as scrub.exe on the
+# same DLLs (wobble's scrub button starts the binary beside it).
 #
 #   powershell -File tools\release_public_win.ps1          # dist\public-win\wobble-<ver>-<git>-windows-x86_64.zip
 #   $env:WOBBLE_MOVIE="0"; powershell -File tools\release_public_win.ps1   # ...-nomovie, no FFmpeg
@@ -40,11 +42,14 @@ if (-not $env:WOBBLE_INGEST_KEY -and (Test-Path tools\feedback-worker\.secrets))
 if (-not $env:WOBBLE_INGEST_KEY) { Write-Warning "no WOBBLE_INGEST_KEY; this build will not upload reports" }
 cargo build --release -p app --no-default-features @features
 if ($LASTEXITCODE) { throw "cargo build failed" }
+# Scrub with its own defaults (the clip browser); same env, same target dir.
+cargo build --release -p scrub_app
+if ($LASTEXITCODE) { throw "cargo build (scrub) failed" }
 
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 $st = "$out\$name"
 New-Item -ItemType Directory -Force "$st\licenses", "$st\plugins" | Out-Null
-Copy-Item target\public\release\wobble.exe $st
+Copy-Item target\public\release\wobble.exe, target\public\release\scrub.exe $st
 Copy-Item LICENSE, NOTICE.md, THIRD_PARTY_LICENSES.md, licenses\LGPL-2.1.txt "$st\licenses"
 # One flat folder, so LICENSING.md's link to licenses/LGPL-2.1.txt is a sibling.
 (Get-Content LICENSING.md -Raw).Replace("licenses/LGPL-2.1.txt", "LGPL-2.1.txt") |
@@ -76,6 +81,7 @@ The build script is tools/build_ffmpeg_lgpl_win.sh in Wobble's source.
 Wobble $ver (Windows, x64)
 
 Unzip anywhere and run wobble.exe. Needs a GPU with Vulkan or DX12.
+scrub.exe is Scrub, the timeline editor (also started by wobble's scrub button).
 $movieLine
 Plugins in the plugins folder load automatically; your own go in %USERPROFILE%\.wobble\plugins.
 

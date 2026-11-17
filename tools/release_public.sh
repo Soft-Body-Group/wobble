@@ -9,6 +9,10 @@
 #   tools/release_public.sh        # writes dist/public/wobble-<ver>-<git>-macos-<arch>.zip
 #   WOBBLE_MOVIE=0 tools/release_public.sh   # ...without movie support
 #
+# Scrub, the timeline editor (scrub/app), ships in the same bundle as
+# Contents/MacOS/scrub: wobble's scrub button starts the binary beside it,
+# and the two share the bundled FFmpeg.
+#
 # FFmpeg is built here by tools/build_ffmpeg_lgpl.sh: LGPL only, decoders
 # only, macOS 12+, as dylibs in Contents/Frameworks (dynamic, so a user can
 # swap them, which LGPL asks for). The zip holds Wobble.app and nothing
@@ -52,9 +56,17 @@ CFLAGS="-ffile-prefix-map=$HOME=~" \
 CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
 CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
   cargo build --release -p app --no-default-features ${FEATURES:+--features $FEATURES}
+# Scrub with its own defaults (the clip browser); same env, same target dir.
+CARGO_TARGET_DIR=$TARGET \
+RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
+CFLAGS="-ffile-prefix-map=$HOME=~" \
+CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
+CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
+  cargo build --release -p scrub_app
 rm -rf "$OUT"
 mkdir -p "$OUT"
 WOBBLE_BIN=$TARGET/release/wobble WOBBLE_APP_OUT="$OUT/Wobble.app" sh tools/bundle_app.sh
+cp "$TARGET/release/scrub" "$OUT/Wobble.app/Contents/MacOS/scrub"
 python3 tools/bundle_dylibs.py "$OUT/Wobble.app"
 # The newest minimum any bundled library declares is the app's minimum.
 MINOS=$(for f in "$OUT"/Wobble.app/Contents/Frameworks/*.dylib; do
@@ -67,6 +79,11 @@ if [ -d "$OUT/Wobble.app/Contents/MacOS/wobble.dSYM" ]; then
   mkdir -p "dist/symbols/$GIT"
   rm -rf "dist/symbols/${GIT:?}/wobble.dSYM"
   mv "$OUT/Wobble.app/Contents/MacOS/wobble.dSYM" "dist/symbols/$GIT/"
+fi
+if [ -d "$TARGET/release/scrub.dSYM" ]; then
+  mkdir -p "dist/symbols/$GIT"
+  rm -rf "dist/symbols/${GIT:?}/scrub.dSYM"
+  cp -RL "$TARGET/release/scrub.dSYM" "dist/symbols/$GIT/"
 fi
 # Every build carries the licences (LICENSING.md says what each covers),
 # inside the bundle so the zip's top level is just the app; a movie build adds

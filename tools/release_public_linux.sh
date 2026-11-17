@@ -6,6 +6,8 @@
 # carries RUNPATH=$ORIGIN/lib and each library RUNPATH=$ORIGIN, so the folder
 # runs from anywhere with no LD_LIBRARY_PATH. The licences (and FFMPEG.txt)
 # sit in licenses/, so the top level is the app and what it needs to run.
+# Scrub, the timeline editor (scrub/app), ships beside it as ./scrub, on the
+# same lib/ (wobble's scrub button starts the binary beside it).
 #
 #   tools/release_public_linux.sh          # dist/public-linux/wobble-<ver>-<git>-linux-x86_64.tar.gz
 #   WOBBLE_MOVIE=0 tools/release_public_linux.sh   # ...-nomovie, no FFmpeg
@@ -46,12 +48,18 @@ CARGO_PROFILE_RELEASE_DEBUG=false \
 RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/lib'" --remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
 CFLAGS="-ffile-prefix-map=$HOME=~" \
   cargo build --release -p app --no-default-features ${FEATURES:+--features $FEATURES}
+# Scrub with its own defaults (the clip browser); same env, same target dir.
+CARGO_TARGET_DIR=target/public \
+CARGO_PROFILE_RELEASE_DEBUG=false \
+RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/lib'" --remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
+CFLAGS="-ffile-prefix-map=$HOME=~" \
+  cargo build --release -p scrub_app
 
 rm -rf "$OUT"
 ST="$OUT/$NAME"
 mkdir -p "$ST/licenses" "$ST/plugins"
-cp target/public/release/wobble "$ST/"
-strip "$ST/wobble"
+cp target/public/release/wobble target/public/release/scrub "$ST/"
+strip "$ST/wobble" "$ST/scrub"
 cp LICENSE NOTICE.md THIRD_PARTY_LICENSES.md licenses/LGPL-2.1.txt "$ST/licenses/"
 # One flat folder, so LICENSING.md's link to licenses/LGPL-2.1.txt is a sibling.
 sed 's#licenses/LGPL-2\.1\.txt#LGPL-2.1.txt#g' LICENSING.md > "$ST/licenses/LICENSING.md"
@@ -94,6 +102,7 @@ proprietary driver, or Mesa for AMD and Intel).
 $MOVIE_LINE
 Plugins in the plugins folder load automatically; your own go in ~/.wobble/plugins.
 ./install-desktop-entry.sh adds it to your app launcher, with its icon.
+./scrub is Scrub, the timeline editor (also started by wobble's scrub button).
 
 The first launch asks whether to join alpha testing and to be told about new
 builds; nothing is sent until you answer. Change either in prefs any time.

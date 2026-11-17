@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Make a .app self-contained: copy every non-system dylib the binary pulls
+"""Make a .app self-contained: copy every non-system dylib the binaries
+(Contents/MacOS/wobble, and scrub when it is there) pull
 in (FFmpeg from Homebrew, and everything IT pulls in) into
 Contents/Frameworks and point the load commands there.
 
@@ -59,15 +60,16 @@ def resolve(ref, owner):
 
 
 def main(app):
-    exe = os.path.join(app, "Contents/MacOS/wobble")
+    exes = [os.path.join(app, "Contents/MacOS", n) for n in ("wobble", "scrub")]
+    exes = [e for e in exes if os.path.exists(e)]
     fw = os.path.join(app, "Contents/Frameworks")
     os.makedirs(fw, exist_ok=True)
     copied = {}  # real source path -> bundled name
-    todo = [exe]
+    todo = list(exes)
     while todo:
         f = todo.pop()
         # A dylib's first entry is its own id, not a dependency.
-        for ref in deps(f)[0 if f == exe else 1:]:
+        for ref in deps(f)[0 if f in exes else 1:]:
             src = resolve(ref, f)
             if src is None or src.startswith(os.path.realpath(fw) + "/"):
                 continue
@@ -82,16 +84,16 @@ def main(app):
                 todo.append(dst)
             subprocess.run(["install_name_tool", "-change", ref, f"@rpath/{copied[src]}", f],
                            check=True, capture_output=True)
-    for f in [exe] + [os.path.join(fw, n) for n in copied.values()]:
-        rp = "@executable_path/../Frameworks" if f == exe else "@loader_path"
+    for f in exes + [os.path.join(fw, n) for n in copied.values()]:
+        rp = "@executable_path/../Frameworks" if f in exes else "@loader_path"
         # A dylib's @rpath deps also resolve through the executable's rpath
         # (dyld walks the whole load chain), so its own is a nicety, and a
         # library linked without header padding has no room for one.
         if rp not in rpaths(f):
-            subprocess.run(["install_name_tool", "-add_rpath", rp, f], check=f == exe, capture_output=True)
+            subprocess.run(["install_name_tool", "-add_rpath", rp, f], check=f in exes, capture_output=True)
     bad = []
-    for f in [exe] + [os.path.join(fw, n) for n in copied.values()]:
-        for ref in deps(f)[0 if f == exe else 1:]:
+    for f in exes + [os.path.join(fw, n) for n in copied.values()]:
+        for ref in deps(f)[0 if f in exes else 1:]:
             if not ref.startswith(SYSTEM) and not ref.startswith("@rpath/"):
                 bad.append(f"{os.path.basename(f)} -> {ref}")
     if bad:
