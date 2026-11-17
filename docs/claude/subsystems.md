@@ -1387,6 +1387,15 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `Dialect::output_key` (MoGe `normal_map`, MiDaS `depth_map`/`normal_map`).
   MoGe's `depth_map` is a colourised visualisation: never offer it as depth.
 
+- **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
+  module of `genaiui`).** Thumbnails decode off the UI thread, once per
+  file, as sRGB code values (no tone curve: a take is display-referred).
+  A take's RECIPE (the steps that ran) is written beside its result as
+  `recipe.json` when the run lands (`genai::history`), never into the
+  setup; "settings" puts it back, as an edit, and runs nothing. A
+  one-model node restores only seed, options and typed prompt, and
+  refuses another model's recipe. "load" / "feed" make a Load of the
+  take's file (`Action::TakeToLoad`); feed wires it into input 0.
 - **Nothing runs or bills without a click, and the quote comes first.**
   `run…` = capture + `run::plan` + `run::quote`, all free; only "pay & run"
   calls `run::start` with the APPROVED per-step prices, and the relay

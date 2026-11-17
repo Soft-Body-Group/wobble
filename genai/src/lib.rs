@@ -26,6 +26,7 @@ pub mod catalog;
 pub mod comfy;
 pub mod config;
 pub mod fal;
+pub mod history;
 pub mod http;
 pub mod image;
 pub mod pipeline;

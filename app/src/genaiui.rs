@@ -388,6 +388,9 @@ pub enum Action {
     Dismiss,
     /// The picked take changed (picked, forgotten): reload the reader.
     Show,
+    /// Make a Load node of take `take`; `wire` feeds it into the node's
+    /// image input (the history's "load" and "feed").
+    TakeToLoad { take: usize, wire: bool },
     SetRoute(Route),
     SaveKey(Key, String),
     ForgetKey(Key),
@@ -400,6 +403,9 @@ pub enum Key {
     Fal,
     Relay,
 }
+
+#[path = "genaihist.rs"]
+pub(crate) mod hist;
 
 // ------------------------------------------------------------ panel
 
@@ -833,49 +839,9 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
     }
     ui.separator();
 
-    // --- takes
-    let pl = &mut p.pipeline;
-    if pl.takes.is_empty() {
-        ui.weak(small("no takes yet: the node passes its input through"));
-    } else {
-        ui.label(small("takes"));
-        let mut forget: Option<usize> = None;
-        egui::ScrollArea::vertical().id_salt(("genai-takes", node)).max_height(96.0).show(ui, |ui| {
-            for k in (0..pl.takes.len()).rev() {
-                let t = &pl.takes[k];
-                let mut text = format!("{} · {}", k + 1, if t.label.is_empty() { "take" } else { &t.label });
-                if let Some(u) = t.usd {
-                    text.push_str(&format!(" · {}", service::usd(u)));
-                }
-                ui.horizontal(|ui| {
-                    let mut rt = small(text);
-                    if !t.commercial {
-                        rt = rt.color(theme::cost_nc());
-                    }
-                    if ui.add(egui::Button::selectable(k == pl.take, rt).truncate()).clicked() && k != pl.take {
-                        pl.take = k;
-                        act = Some(Action::Show);
-                    }
-                    if ui.small_button("×").on_hover_text("forget this take (its file stays on disk)").clicked() {
-                        forget = Some(k);
-                    }
-                });
-            }
-        });
-        if let Some(k) = forget {
-            pl.takes.remove(k);
-            if pl.take > k || pl.take >= pl.takes.len() {
-                pl.take = pl.take.saturating_sub(1);
-            }
-            act = Some(Action::Show);
-        }
-        if v.take_missing {
-            ui.colored_label(theme::warn(), small("this take's file is not on this machine; running again bills again"));
-        }
-        if pl.picked().is_some_and(|t| t.is_video()) && !video_ok() {
-            // Loud, never a silent black: the node passes its input through.
-            ui.colored_label(theme::error(), small(NO_VIDEO));
-        }
+    // --- takes: the node's history (genaihist.rs)
+    if let Some(a) = hist::takes(ui, node, p, v) {
+        act = Some(a);
     }
     if !p.commercial() {
         ui.colored_label(theme::cost_nc(), small("non-commercial pixels: tagged downstream"));
@@ -1051,6 +1017,7 @@ impl Gfx {
                 }
             }
             Action::Show => self.genai_show(node),
+            Action::TakeToLoad { take, wire } => self.genai_take_to_load(node, take, wire),
             Action::SetRoute(route) => {
                 let _ = config::update(|f| f.route = route);
                 self.genai_reload_config();
@@ -1432,6 +1399,10 @@ impl Gfx {
             _ => {}
         }
         if let Some(t) = landed {
+            // What made it, kept beside it: the history's "settings".
+            if let Some(r) = &self.jobs.genai.run {
+                let _ = genai::history::save_recipe(&config::results_dir(), &t.key, &r.pipeline.steps);
+            }
             // An undo step, on purpose: one generation, one user action.
             // Running an unchanged pipeline again is a cache hit with the
             // same key: pick the take it already made, never a duplicate.

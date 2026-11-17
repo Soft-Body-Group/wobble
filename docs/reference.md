@@ -3566,9 +3566,13 @@ pixels included), so re-running an unchanged pipeline, reopening a comp or
 clicking twice is free and gives the same take. Change the seed ("new
 seed") for a variation; that is a new request and is billed.
 
-**Takes.** Each run that lands is a take, kept in the node's list and
-undoable as one step; pick one to show it, `×` to forget it (the file
-stays). Results live in `~/.wobble/genai` (`$WOBBLE_GENAI_DIR`); a comp
+**Takes.** Each run that lands is a take, kept in the node's history as a
+thumbnail and undoable as one step; pick one to show it, `×` to forget it
+(the file stays). **settings** puts back the prompt, seed and model that
+made the picked take, so a variation starts from the one you liked (it
+runs nothing). **load** makes a Load node of the take beside the node, and
+**feed** wires one into the node's image input, so an earlier result is
+the next run's reference. Results live in `~/.wobble/genai` (`$WOBBLE_GENAI_DIR`); a comp
 opened on another machine names its takes but needs those files, and the
 panel says so.
 
