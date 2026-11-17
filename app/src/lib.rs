@@ -11518,6 +11518,8 @@ impl Gfx {
         if !baking {
             self.run_pending_pick();
         }
+        // Inside a GenAI Pipeline: the viewed step's own result.
+        self.genai_dive_show();
         let tick = self.eval_tick();
         let (mut graph, view_now) = {
             let preview = self.render_preview(tick);
@@ -21125,6 +21127,8 @@ impl Gfx {
                     // node's inputs, removed only from the node's bar.
                     p.pipeline.sync_inputs();
                 }
+                // Back to the take (a viewed step's result was showing).
+                self.genai_show(node);
             }
             self.undo_stack = d.undo_stack;
             self.redo_stack = d.redo_stack;

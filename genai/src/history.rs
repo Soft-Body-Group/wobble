@@ -30,6 +30,31 @@ pub fn save_recipe(dir: &Path, key: &str, steps: &[Step]) -> std::io::Result<()>
     std::fs::write(f, text)
 }
 
+/// The file a take's STAGES live in: per step of the recipe, its name and
+/// its result's cache key, so the dive can show what every step made.
+pub const STAGES: &str = "stages.json";
+
+/// Record, beside the result under `key`, each step's (name, key) as the
+/// run planned them (an empty key: a step that did not run). Like the
+/// recipe, never over an older one.
+pub fn save_stages(dir: &Path, key: &str, p: &Pipeline, keys: &[String]) -> std::io::Result<()> {
+    let d = dir.join(key);
+    let f = d.join(STAGES);
+    if key.is_empty() || !d.is_dir() || f.exists() {
+        return Ok(());
+    }
+    let v: Vec<(&str, &str)> =
+        p.steps.iter().zip(keys).map(|(s, k)| (s.op.name(), k.as_str())).collect();
+    let text = serde_json::to_string(&v).map_err(std::io::Error::other)?;
+    std::fs::write(f, text)
+}
+
+/// The (name, key) per step that made the result under `key`.
+pub fn load_stages(dir: &Path, key: &str) -> Option<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(dir.join(key).join(STAGES)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// The steps that made the result under `key`, if they were recorded.
 pub fn load_recipe(dir: &Path, key: &str) -> Option<Vec<Step>> {
     let text = std::fs::read_to_string(dir.join(key).join(RECIPE)).ok()?;

@@ -130,6 +130,11 @@ pub enum Dialect {
     /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
     /// clip, `seed`; audio and prompt expansion off.
     LtxInpaint,
+    /// Bria Video Eraser (mask): `video_url`, `mask_video_url` (white =
+    /// erase), both under 5 s; no prompt (the port is fed and ignored),
+    /// no seed, sound off, no auto-trim (the plan refuses a long clip
+    /// instead of fal cutting it behind the key's back).
+    BriaVideoEraser,
     /// Topaz image upscale: `image_url`, `model` (which of Topaz's
     /// networks), `upscale_factor`. No seed. Face enhancement is OFF: on
     /// by default at Topaz, and a face quietly redrawn is not an upscale.
@@ -266,6 +271,9 @@ impl Dialect {
             }
             Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
                 return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
+            }
+            Dialect::BriaVideoEraser if secs >= 5.0 => {
+                return Err(format!("{label} takes a clip under 5 s; this one is {secs:.1} s"));
             }
             _ => {}
         }
@@ -695,6 +703,19 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
     },
     RemoteModel {
+        id: "fal/bria-video-eraser",
+        label: "Bria Video Eraser",
+        short: "bria eraser",
+        service: Service::Fal,
+        endpoint: "bria/bria_video_eraser/erase/mask",
+        dialect: Dialect::BriaVideoEraser,
+        task: Task::VideoInpaint,
+        // fal tags it "Commercial use"; Bria trains on licensed data.
+        commercial: true,
+        licence: "Bria via fal (tagged commercial use)",
+        about: "erase what the matte's white covers from the input clip, no prompt: under 5 s, billed per second",
+    },
+    RemoteModel {
         id: "fal/topaz-video-upscale",
         label: "Topaz Video Upscale",
         short: "topaz video",
@@ -1061,6 +1082,7 @@ mod tests {
                     | Dialect::KlingEdit
                     | Dialect::LucyEdit
                     | Dialect::LtxInpaint
+                    | Dialect::BriaVideoEraser
                     | Dialect::TopazVideo { .. }
                     | Dialect::SeedVrVideo
             );

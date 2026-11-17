@@ -255,6 +255,9 @@ pub struct Runs {
     /// Rec.709, shrunk to `CLIP_SHORT` and 8-bit sRGB RGB (a 2K float
     /// frame kept per tick would be gigabytes): (node, port, rgb, w, h).
     pub clip_frames: Vec<(u64, usize, Vec<u8>, u32, u32)>,
+    /// Each take's stages (`genai::history::load_stages`), by its key, read
+    /// once: what the dive shows when a step is viewed.
+    stages: std::collections::HashMap<String, Vec<(String, String)>>,
     account: Account,
 }
 
@@ -326,7 +329,14 @@ enum Account {
 
 impl Default for Runs {
     fn default() -> Self {
-        Self { cfg: Config::load(), run: None, captured: vec![], clip_frames: vec![], account: Account::Unknown }
+        Self {
+            cfg: Config::load(),
+            run: None,
+            captured: vec![],
+            clip_frames: vec![],
+            stages: Default::default(),
+            account: Account::Unknown,
+        }
     }
 }
 
@@ -1814,6 +1824,67 @@ impl Gfx {
         }
     }
 
+    /// Inside a GenAI Pipeline, viewing a step shows what THAT step made in
+    /// the take on screen (its cached result, `history::load_stages`): the
+    /// owner's reader is pointed at that file while the dive is open, and
+    /// `genai_show` points it back at the take on the way out. An Input
+    /// step shows the node's wired input (`render_preview`); a step the
+    /// take did not run, or one changed since, shows the take. Called once
+    /// a redraw; does nothing outside a GenAI dive.
+    pub(crate) fn genai_dive_show(&mut self) {
+        let Some(d) = self.dive.last().filter(|d| d.kind == crate::DiveKind::GenAi) else { return };
+        let Some(owner) = d.from else { return };
+        let Some(take) = d.graph.node(owner).and_then(|n| params(&n.kind)).and_then(|p| p.pipeline.picked()).cloned()
+        else {
+            return;
+        };
+        let dir = config::results_dir();
+        let playable = |p: &std::path::Path| {
+            let s = p.to_string_lossy();
+            p.exists()
+                && !genai::pipeline::is_splat_file(&s)
+                && (!genai::pipeline::is_video_file(&s) || video_ok())
+                && engine::decode::is_supported(p)
+        };
+        let ids: Vec<u64> = self
+            .egraph
+            .nodes
+            .iter()
+            .filter(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(_)))
+            .map(|(id, _)| *id)
+            .collect();
+        let viewed = self.egraph.active_view().and_then(|v| {
+            let i = ids.iter().position(|&x| x == v)?;
+            match &self.egraph.node(v)?.kind {
+                NodeKind::GenAiStep(op @ (Op::Generate { .. } | Op::Comfy { .. })) => Some((i, op.name())),
+                _ => None,
+            }
+        });
+        let stage = viewed.and_then(|(i, name)| {
+            if !self.jobs.genai.stages.contains_key(&take.key) {
+                let got = genai::history::load_stages(&dir, &take.key)?;
+                self.jobs.genai.stages.insert(take.key.clone(), got);
+            }
+            let (n, key) = self.jobs.genai.stages.get(&take.key)?.get(i)?;
+            if n != name || key.is_empty() {
+                return None;
+            }
+            let m = run::cached(&dir, key)?;
+            Some(dir.join(key).join(m.file)).filter(|p| playable(p))
+        });
+        let want = stage.or_else(|| Some(take.path(&dir)).filter(|p| playable(p)));
+        let want = want.map(|p| p.to_string_lossy().into_owned());
+        if self.loaded.get(&owner).map(|l| &l.path) != want.as_ref() {
+            match want {
+                Some(path) => self.load_read(owner, &path),
+                None => {
+                    self.loaded.remove(&owner);
+                    self.playback_dirty = true;
+                }
+            }
+        }
+    }
+
     /// Every GenAI node shows its picked take: after a setup load, an undo,
     /// a paste — anything that swapped the graph under the readers.
     pub(crate) fn genai_adopt(&mut self) {
@@ -1896,7 +1967,11 @@ pub mod fake {
                     let (ct, out) = match (m, p) {
                         ("POST", p @ ("/fal-ai/flux/schnell" | "/fal-ai/flux/dev")) => {
                             // A batch's other seeds count with the fan-out.
-                            let own_seed = String::from_utf8_lossy(&body).replace(' ', "").contains("\"seed\":1,");
+                            // Parsed, not searched: key order differs when a
+                            // dependency turns on serde_json's preserve_order
+                            // (a movie build does), and "seed":1 ends the object.
+                            let own_seed = serde_json::from_slice::<serde_json::Value>(&body)
+                                .is_ok_and(|v| v["seed"] == 1);
                             if p.ends_with("dev") || !own_seed { &nf } else { &n }.fetch_add(1, Ordering::SeqCst);
                             json(serde_json::json!({
                                 "request_id": "r1",

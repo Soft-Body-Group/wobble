@@ -429,6 +429,13 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::BriaVideoEraser) => json!({
+            "video_url": img(1)?,
+            "mask_video_url": img(2)?,
+            "output_container_and_codec": "mp4_h264",
+            "auto_trim": false,
+            "preserve_audio": false,
+        }),
         (Task::Describe, Dialect::Llm { system }) => {
             let ask = prompt_text.trim();
             json!({
@@ -780,6 +787,7 @@ pub fn start_many(variants: Vec<Variant>, inputs: Inputs, svcs: Services, dir: P
             match r {
                 Ok(t) => {
                     let _ = crate::history::save_recipe(&dir, &t.key, &v.pipeline.steps);
+                    let _ = crate::history::save_stages(&dir, &t.key, &v.pipeline, &v.plan.keys);
                     let _ = tx.send(if k + 1 == n { Event::Done(t) } else { Event::Take(t) });
                 }
                 Err(e) => {
