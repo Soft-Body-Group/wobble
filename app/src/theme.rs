@@ -546,6 +546,7 @@ slots! {
         node_to_rgba: "ToRgba" = like(S::node_to_matte);
         node_soft_crop: "SoftCrop" = shade(S::family_transform, rgb(0x5a, 0x8a, 0xb5));
         node_uncrop: "Uncrop" = like(S::node_soft_crop);
+        node_compare: "Compare" = shade(S::family_transform, rgb(0x5e, 0x7e, 0xa8));
         node_motion_blur: "MotionBlur" = shade(S::family_filter, rgb(0x4a, 0x7c, 0xc4));
         node_tracker: "Tracker" = shade(S::family_track, rgb(0xd0, 0x4a, 0x4a));
         node_planar: "PlanarTrack" = shade(S::family_track, rgb(0xb8, 0x4a, 0x9c));

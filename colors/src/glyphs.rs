@@ -103,6 +103,7 @@ pub enum Icon {
     CornerPin,
     SoftCrop,
     Uncrop,
+    Compare,
     UvWarp,
     Env,
     Refract,
@@ -238,6 +239,7 @@ pub const NODES: &[Node] = &[
     n(Icon::CornerPin, "CornerPin", Slot::node_corner_pin),
     n(Icon::SoftCrop, "SoftCrop", Slot::node_soft_crop),
     n(Icon::Uncrop, "Uncrop", Slot::node_uncrop),
+    n(Icon::Compare, "Compare", Slot::node_compare),
     n(Icon::UvWarp, "UV Warp", Slot::node_uvwarp),
     n(Icon::Refract, "Refract", Slot::node_refract),
     n(Icon::GridWarp, "GridWarp", Slot::node_grid_warp),
@@ -735,6 +737,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
             softcrop(painter, sp, r, fill, stroke)
         }
         Icon::Uncrop => uncrop(painter, sp, r, fill, stroke),
+        Icon::Compare => compare(painter, sp, r, fill, stroke),
         Icon::MotionBlur => {
             motionblur(painter, sp, r, fill, stroke)
         }
@@ -1424,6 +1427,18 @@ fn uncrop(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
         let p = c + egui::vec2(sx * h, sy * h);
         painter.line_segment([p, p + egui::vec2(sx * k, sy * k)], ink);
     }
+}
+
+/// `app/src/nodes/compare.rs` `glyph`.
+fn compare(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    let rect = egui::Rect::from_center_size(c, egui::vec2(r * 1.8, r * 1.4));
+    painter.rect(rect, r * 0.25, fill, stroke, egui::StrokeKind::Middle);
+    let ink = Stroke::new((r * 0.12).max(1.0), crate::theme::node_ink());
+    let inner = rect.shrink(r * 0.3);
+    let half = egui::Rect::from_min_max(inner.min, egui::pos2(c.x, inner.max.y));
+    painter.rect_filled(half, 0.0, ink.color);
+    painter.rect_stroke(inner, 0.0, ink, egui::StrokeKind::Middle);
+    painter.line_segment([egui::pos2(c.x, rect.min.y), egui::pos2(c.x, rect.max.y)], ink);
 }
 
 /// `app/src/nodes/gamma.rs` `glyph`.

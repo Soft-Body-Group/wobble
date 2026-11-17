@@ -543,6 +543,7 @@ pub(crate) fn ch_label(ch: Channel) -> std::borrow::Cow<'static, str> {
         LutMix | LutLogMin | LutLogMax | LutDither | LutLimit => unreachable!(),
         TextX | TextY | TextSize | BurninSize | BurninMargin | BurninX | BurninY => unreachable!(),
         MirrorX | MirrorY | MirrorAngle => unreachable!(),
+        CompareX | CompareY | CompareAngle => unreachable!(),
         LensK1 | LensK2 | LensK3 | LensP1 | LensP2 | LensCenterX | LensCenterY | LensSqueeze | LensZoom
         | LensCaR | LensCaB => unreachable!(),
         VectorBlurAmount | VectorBlurOffset | VectorWarpAmount | RifetimeFrame | FreezeFrame => unreachable!(),

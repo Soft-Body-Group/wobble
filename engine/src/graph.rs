@@ -27,6 +27,7 @@ pub use crate::nodes::burnin::{BurninCorner, BurninParams};
 pub use crate::nodes::flipflop::{FlipFlopParams, FlipMode};
 pub use crate::nodes::turn::{TurnMode, TurnParams};
 pub use crate::nodes::uncrop::UncropParams;
+pub use crate::nodes::compare::{CompareFit, CompareMode, CompareParams};
 pub use crate::nodes::mirror::{MirrorParams, MirrorSide};
 pub use crate::nodes::gamma::GammaParams;
 pub use crate::nodes::tonemap::{ToneMapParams, ToneMode, ToneOp};
@@ -455,6 +456,9 @@ pub enum NodeKind {
     /// A cropped picture set back into the full format at the Crop's box,
     /// the rest transparent black. See [`crate::nodes::uncrop`].
     Uncrop(UncropParams),
+    /// Two pictures, A / B or split by a wipe, scaled into the larger
+    /// one's format. See [`crate::nodes::compare`].
+    Compare(CompareParams),
     /// A power curve per channel, `x^(1/γ)`, master times r/g/b (alpha its
     /// own), negatives untouched. See [`crate::nodes::gamma`].
     Gamma(GammaParams),
@@ -6301,6 +6305,7 @@ impl NodeKind {
             NodeKind::FlipFlop(_) => FlipFlopParams::INPUTS,
             NodeKind::Turn(_) => TurnParams::INPUTS,
             NodeKind::Uncrop(_) => UncropParams::INPUTS,
+            NodeKind::Compare(_) => CompareParams::INPUTS,
             NodeKind::Gamma(_) => GammaParams::INPUTS,
             NodeKind::ToneMap(_) => ToneMapParams::INPUTS,
             NodeKind::UvWarp(_) => UvWarpParams::INPUTS,
@@ -6408,6 +6413,7 @@ impl NodeKind {
             NodeKind::FlipFlop(_) => FlipFlopParams::MASK_INPUT,
             NodeKind::Turn(_) => TurnParams::MASK_INPUT,
             NodeKind::Uncrop(_) => UncropParams::MASK_INPUT,
+            NodeKind::Compare(_) => CompareParams::MASK_INPUT,
             NodeKind::Gamma(_) => GammaParams::MASK_INPUT,
             NodeKind::ToneMap(_) => ToneMapParams::MASK_INPUT,
             NodeKind::UvWarp(_) => UvWarpParams::MASK_INPUT,
@@ -6725,6 +6731,7 @@ impl NodeKind {
             // The UV map wears S: which port is the warp.
             NodeKind::UvWarp(_) => (input == 1).then_some("uv"),
             NodeKind::Uncrop(_) => (input == crate::nodes::uncrop::REF_INPUT).then_some("f"),
+            NodeKind::Compare(_) => Some(if input == 0 { "A" } else { "B" }),
             // The surface map wears N: which port is the glass.
             NodeKind::Refract(_) => (input == crate::nodes::refract::MAP_INPUT).then_some("n"),
             // The vectors port wears its letter: which wire says how
@@ -6910,6 +6917,13 @@ impl NodeKind {
                 } else {
                     s("the background it will sit over: its light bleeds round the \
                        foreground's edge")
+                }
+            }
+            NodeKind::Compare(_) => {
+                if input == 0 {
+                    s("A: shown alone, or on the front of the wipe (left of a vertical line)")
+                } else {
+                    s("B: shown alone, or behind the wipe; scaled into the larger input's format")
                 }
             }
             NodeKind::Uncrop(_) => {
@@ -7154,6 +7168,9 @@ impl NodeKind {
             }
             NodeKind::Uncrop(_) => {
                 if input == 0 { "cropped" } else { "full format" }
+            }
+            NodeKind::Compare(_) => {
+                if input == 0 { "A" } else { "B" }
             }
             NodeKind::Env(_) => {
                 if input == crate::nodes::env::IMAGE_INPUT { "latlong" } else { "camera" }
@@ -7622,6 +7639,7 @@ impl NodeKind {
             NodeKind::FlipFlop(_) => FlipFlopParams::NAME,
             NodeKind::Turn(_) => TurnParams::NAME,
             NodeKind::Uncrop(_) => UncropParams::NAME,
+            NodeKind::Compare(_) => CompareParams::NAME,
             NodeKind::Gamma(_) => GammaParams::NAME,
             NodeKind::ToneMap(_) => ToneMapParams::NAME,
             NodeKind::UvWarp(_) => UvWarpParams::NAME,
@@ -7859,6 +7877,7 @@ impl NodeKind {
             NodeKind::FlipFlop(p) => p.topo_tag(),
             NodeKind::Turn(p) => p.topo_tag(),
             NodeKind::Uncrop(p) => p.topo_tag(),
+            NodeKind::Compare(p) => p.topo_tag(),
             NodeKind::Gamma(p) => p.topo_tag(),
             NodeKind::ToneMap(p) => p.topo_tag(),
             NodeKind::UvWarp(p) => p.topo_tag(),

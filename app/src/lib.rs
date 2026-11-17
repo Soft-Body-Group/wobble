@@ -2502,6 +2502,7 @@ fn has_viewer_hud(kind: &NodeKind) -> bool {
             | NodeKind::SoftCrop(_)
             | NodeKind::Gradient(_)
             | NodeKind::Mirror(_)
+            | NodeKind::Compare(_)
             | NodeKind::LensDistort(_)
             | NodeKind::GridWarp(_)
             | NodeKind::Warp(_)
@@ -10288,6 +10289,15 @@ impl Gfx {
                 self.input_res(id, engine::nodes::uncrop::REF_INPUT, visited)
                     .or_else(|| from.and_then(|c| self.input_res(c, 0, visited)))
                     .or_else(|| self.input_res(id, 0, visited))
+            }
+            // The larger input's format: the smaller is scaled up into it.
+            // B walks its own copy of the cycle guard: A and B are often
+            // the same plate down two branches, and a shared Read must not
+            // read as a cycle the second time.
+            NodeKind::Compare(_) => {
+                let mut vb = visited.clone();
+                let a = self.input_res(id, 0, visited);
+                engine::nodes::compare::output_format(a, self.input_res(id, 1, &mut vb))
             }
             // A quarter turn swaps width and height (`TurnParams::output_format`).
             NodeKind::Turn(p) => {
@@ -23706,6 +23716,11 @@ impl Gfx {
                     }
                     NodeKind::Burnin(p) => {
                         if let Some(h) = nodes::burnin::panel(ui, &mut rcx, p, pick_spec(working, true)) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::Compare(p) => {
+                        if let Some(h) = nodes::compare::panel(ui, &mut rcx, p) {
                             hud_drag_out = Some(h);
                         }
                     }

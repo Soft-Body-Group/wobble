@@ -150,6 +150,7 @@ pub fn tiles_for(kind: &NodeKind) -> usize {
         NodeKind::FlipFlop(_) => crate::nodes::flipflop::TILES,
         NodeKind::Turn(_) => crate::nodes::turn::TILES,
         NodeKind::Uncrop(_) => crate::nodes::uncrop::TILES,
+        NodeKind::Compare(_) => crate::nodes::compare::TILES,
         NodeKind::Gamma(_) => crate::nodes::gamma::TILES,
         NodeKind::ToneMap(_) => crate::nodes::tonemap::TILES,
         NodeKind::Expression(_) => crate::nodes::expression::TILES,

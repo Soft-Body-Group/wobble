@@ -608,6 +608,95 @@ impl Gfx {
                         }
                     }
                 }
+                // The Compare's wipe line, Mirror's handle: drag the
+                // centre to move it, the arrow (pointing at the A side) to
+                // turn it, shift snapping to 15°. Only while it wipes.
+                NodeKind::Compare(mut cp) if cp.mode == engine::graph::CompareMode::Wipe => {
+                    let before = cp;
+                    let (w, h) = size;
+                    let pt = |v: [f32; 2]| to_screen(egui::vec2(v[0], v[1]));
+                    let c = [cp.center[0] * w, cp.center[1] * h];
+                    let (d, n) = (cp.direction(), cp.normal());
+                    let pc = pt(c);
+                    let far = w.hypot(h);
+                    let (e0, e1) = (
+                        pt([c[0] - d[0] * far, c[1] - d[1] * far]),
+                        pt([c[0] + d[0] * far, c[1] + d[1] * far]),
+                    );
+                    let (e0, e1) = (rect.clamp(e0), rect.clamp(e1));
+                    let mods = ui.input(|i| i.modifiers);
+                    let pointer = ui.ctx().pointer_latest_pos();
+                    // The line itself drags too: a wipe is grabbed anywhere.
+                    let near_line = pointer.is_some_and(|p| {
+                        let ab = e1 - e0;
+                        let t = ((p - e0).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                        (e0 + ab * t).distance(p) < 6.0
+                    });
+                    // Registered BEFORE the handles, so the centre and the
+                    // arrow (later, on top) win where they overlap it, and
+                    // only near the line, so it covers nothing else.
+                    let line_id = ui.id().with(("compare-line", node));
+                    let grabbing = ui.ctx().is_being_dragged(line_id);
+                    let line_rs = (near_line || grabbing).then(|| {
+                        ui.interact(rect, line_id, egui::Sense::drag())
+                    });
+                    let ns = (pt([c[0] + n[0], c[1] + n[1]]) - pc).normalized();
+                    let tip = pc + ns * 42.0;
+                    let rs = ui.interact(
+                        egui::Rect::from_center_size(tip, egui::vec2(20.0, 20.0)),
+                        ui.id().with(("compare-turn", node)),
+                        egui::Sense::drag(),
+                    );
+                    let hot = rs.hovered() || rs.dragged();
+                    ink.seg(pc, tip, 1.5, 0.9, hot);
+                    let side = egui::vec2(-ns.y, ns.x);
+                    ink.seg(tip, tip - ns * 8.0 + side * 5.0, 1.5, 0.9, hot);
+                    ink.seg(tip, tip - ns * 8.0 - side * 5.0, 1.5, 0.9, hot);
+                    if let (true, Some(p)) = (rs.dragged(), pointer) {
+                        let o = from_screen(p);
+                        let mut ang =
+                            engine::graph::CompareParams::angle_facing([o.x - c[0], o.y - c[1]]);
+                        if mods.shift {
+                            ang = (ang / 15.0).round() * 15.0;
+                        }
+                        let dd = (ang - before.angle).rem_euclid(360.0);
+                        cp.angle = before.angle + if dd > 180.0 { dd - 360.0 } else { dd };
+                    }
+                    // The centre, and the line: both move the wipe, by the
+                    // drag's delta so grabbing the line off-centre does not
+                    // jump it.
+                    let rs = ui.interact(
+                        egui::Rect::from_center_size(pc, egui::vec2(18.0, 18.0)),
+                        ui.id().with(("compare-center", node)),
+                        egui::Sense::drag(),
+                    );
+                    let line_hot = line_rs.as_ref().is_some_and(|r| r.hovered() || r.dragged());
+                    ink.seg(e0, e1, 1.5, 0.9, line_hot);
+                    ink.circle_stroke(pc, 6.0, 1.5, 0.9, rs.hovered() || rs.dragged());
+                    if let (true, Some(p)) = (rs.dragged(), pointer) {
+                        let o = from_screen(p);
+                        cp.center = [o.x / w, o.y / h];
+                    } else if let Some(lr) = line_rs.filter(|r| r.dragged()) {
+                        let (a, b) = (from_screen(pc), from_screen(pc + lr.drag_delta()));
+                        cp.center = [cp.center[0] + (b.x - a.x) / w, cp.center[1] + (b.y - a.y) / h];
+                    }
+                    if cp != before {
+                        if let Some(n) = self.egraph.node_mut(node) {
+                            let editor::ENode { kind, anim, .. } = n;
+                            keyed_write_back(
+                                anim,
+                                kind,
+                                &NodeKind::Compare(before),
+                                &NodeKind::Compare(cp),
+                                cur_t,
+                                nodes::compare::CHANNELS,
+                                self.autokey,
+                                &patch_driven,
+                                node,
+                            );
+                        }
+                    }
+                }
                 // Lens Distortion: a grid straight in the undistorted
                 // picture and the source frame's edge, both where they
                 // land in this node's output; the principal point drags.

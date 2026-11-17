@@ -344,6 +344,7 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::FlipFlop(_) => crate::graph::FlipFlopParams::VEC4_SLOTS,
         NodeKind::Turn(_) => crate::graph::TurnParams::VEC4_SLOTS,
         NodeKind::Uncrop(_) => crate::graph::UncropParams::VEC4_SLOTS,
+        NodeKind::Compare(_) => crate::graph::CompareParams::VEC4_SLOTS,
         NodeKind::Gamma(_) => GammaParams::VEC4_SLOTS,
         NodeKind::ToneMap(_) => ToneMapParams::VEC4_SLOTS,
         NodeKind::UvWarp(_) => UvWarpParams::VEC4_SLOTS,
@@ -2825,6 +2826,7 @@ fn emit(
         NodeKind::FlipFlop(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Turn(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Uncrop(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
+        NodeKind::Compare(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Gamma(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::ToneMap(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::UvWarp(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
@@ -4625,6 +4627,17 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 let fmt = fmt_of(*id);
                 let input = graph.input_of(*id, 0).map_or(fmt, fmt_of);
                 p.pack_fmt(&mut v[base..base + crate::graph::UncropParams::VEC4_SLOTS * 4], fmt, input)
+            }
+            // Each input's fit into the node's own format, and the wipe in
+            // its pixels (proxy included throughout).
+            NodeKind::Compare(p) => {
+                let fmt_of = |n: NodeId| {
+                    graph.formats.get(&n).map(|(w, h)| [*w as f32, *h as f32]).unwrap_or(out_size)
+                };
+                let fmt = fmt_of(*id);
+                let a = graph.input_of(*id, 0).map_or(fmt, fmt_of);
+                let b = graph.input_of(*id, 1).map_or(fmt, fmt_of);
+                p.pack_fmt(&mut v[base..base + crate::graph::CompareParams::VEC4_SLOTS * 4], fmt, a, b)
             }
             // A windowed bake's box corner, in the node's own pixels.
             NodeKind::GraphBake { baked: true, window: Some(o), .. } => {
