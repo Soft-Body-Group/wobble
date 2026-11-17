@@ -106,9 +106,11 @@ impl Gfx {
                     .and_then(|_| std::fs::create_dir_all(shot.join("scripts")))
                     .and_then(|_| std::fs::create_dir_all(shot.join("plates").join("bg")))
                     .and_then(|_| std::fs::write(proj.join(projects::MANIFEST_DIR).join(projects::MANIFEST_FILE), PROJECT))
+                    .and_then(|_| std::fs::create_dir_all(root.join("outside")))
                     .and_then(|_| {
                         plate.iter().enumerate().try_for_each(|(i, f)| {
-                            std::fs::copy(f, shot.join("plates").join("bg").join(format!("bg.{i:04}.exr"))).map(|_| ())
+                            std::fs::copy(f, shot.join("plates").join("bg").join(format!("bg.{i:04}.exr")))?;
+                            std::fs::copy(f, root.join("outside").join(format!("clip.{i:04}.exr"))).map(|_| ())
                         })
                     });
                 if let Err(e) = made.as_ref().map_err(|e| e.to_string()).and_then(|_| {
@@ -203,11 +205,65 @@ impl Gfx {
                     self.test.setup = Some((5, frames, nodes, loads));
                     return;
                 }
+                // Footage from outside every project, made a Project Load:
+                // copied into the shot's plates, read from there by name.
+                let Some(root) = std::env::var_os("WOBBLE_PROJECTS_ROOT").map(std::path::PathBuf::from) else { return };
+                let outside = root.join("outside").join("clip.####.exr").to_string_lossy().into_owned();
+                let id = self.egraph.add(NodeKind::read(self.next_read_slot, outside.clone()), egui::pos2(0.0, 200.0));
+                self.next_read_slot += 1;
+                self.load_read(id, &outside);
+                self.test.setup = Some((6, frames, id as usize, loads));
+                return;
+            }
+            6 => {
+                let id = nodes as u64;
+                if !self.loaded.get(&id).is_some_and(|l| l.seq.frames.len() == 3) {
+                    if let Some(e) = self.load_errors.get(&id) {
+                        println!("SETUP TEST FAIL: the outside Load did not load: {e}");
+                        std::process::exit(1);
+                    }
+                    self.test.setup = Some((6, frames, nodes, loads));
+                    return;
+                }
+                let ps = projects::projects(false);
+                let p = &ps[0];
+                let plates = p.plates_dir(p.by_names(&["dev".into(), "spb_010".into()]).flatten());
+                self.start_project_ingest(id, plates);
+                self.test.setup = Some((7, frames, nodes, loads));
+                return;
+            }
+            7 => {
+                let id = nodes as u64;
+                if self.asset_ingest.is_some() {
+                    self.test.setup = Some((7, frames, nodes, loads));
+                    return;
+                }
+                let n = self.egraph.node(id);
+                let named = n.and_then(|n| n.asset.as_ref()).map(|a| (a.shot.join("/"), a.rel.clone()));
+                if !n.is_some_and(|n| n.project_only)
+                    || named.as_ref() != Some(&("dev/spb_010".to_string(), "plates/clip/clip.####.exr".to_string()))
+                {
+                    println!(
+                        "SETUP TEST FAIL: the copied Load is {named:?}, project-only {:?}: {:?}",
+                        n.map(|n| n.project_only),
+                        self.asset_ingest_msg
+                    );
+                    std::process::exit(1);
+                }
+                let reads_copy = self.loaded.get(&id).is_some_and(|l| l.path.contains("spb_010") && l.seq.frames.len() == 3);
+                if !reads_copy {
+                    if let Some(e) = self.load_errors.get(&id) {
+                        println!("SETUP TEST FAIL: the copy did not load: {e}");
+                        std::process::exit(1);
+                    }
+                    self.test.setup = Some((7, frames, nodes, loads));
+                    return;
+                }
                 if let Some(d) = std::env::var_os("WOBBLE_PROJECTS_ROOT") {
                     let _ = std::fs::remove_dir_all(d);
                 }
                 println!(
-                    "SETUP TEST PASS: save/load round trip, sequences reloaded, fps restored, history jump re-adopted them, new asks over edits, a Project Load saved into a shot and opened again finds its footage by name"
+                    "SETUP TEST PASS: save/load round trip, sequences reloaded, fps restored, history jump re-adopted them, new asks over edits, a Project Load saved into a shot and opened again finds its footage by name, and outside footage made a Project Load is copied into the shot and read from there"
                 );
                 std::process::exit(0);
             }

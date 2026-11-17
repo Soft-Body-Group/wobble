@@ -184,6 +184,25 @@ impl Project {
         }
     }
 
+    /// Where `inst`'s plates go: a plate(s) folder by type, then by name,
+    /// then a source folder; with none, a `plates` folder in the shot.
+    pub fn plates_dir(&self, inst: Option<&Inst>) -> PathBuf {
+        self.pick(inst, |f| {
+            let name = segs(&f.path).last().map(|s| s.to_lowercase()).unwrap_or_default();
+            let kind = f.kind.to_lowercase();
+            if kind == "plate" || kind == "plates" {
+                4
+            } else if name == "plates" || name == "plate" {
+                3
+            } else if kind == "source" {
+                2
+            } else {
+                0
+            }
+        })
+        .unwrap_or_else(|| self.path_of(inst).join("plates"))
+    }
+
     /// The folders of other levels inside `inst`'s: they belong to them.
     fn nested(&self, inst: Option<&Inst>) -> Vec<PathBuf> {
         let me = self.path_of(inst);
@@ -484,6 +503,53 @@ pub fn media(p: &Project, inst: Option<&Inst>) -> Vec<String> {
     out
 }
 
+// ---- bringing footage in -------------------------------------------------------
+
+/// Copies a clip's files (`frames`: a sequence's frames, or one movie or
+/// still) into a folder of its own under `plates`, named for the clip. A
+/// file already there at the same size is kept; a DIFFERENT file of the
+/// same name is never overwritten — the clip goes in `<name>_2` instead.
+/// Returns the clip as a Load names it there (`…/bg.####.exr`).
+/// Blocking: run it on a worker.
+pub fn copy_clip(frames: &[PathBuf], plates: &Path) -> Result<PathBuf, String> {
+    let mut files: Vec<&PathBuf> = frames.iter().collect();
+    files.dedup();
+    let first = files.first().ok_or("nothing to copy")?;
+    let fname = first.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("no file name")?;
+    let parts = frame_parts(&fname).filter(|_| files.len() > 1);
+    let (stem, pattern) = match parts {
+        Some((head, pad, ext)) => (head.trim_end_matches(['.', '_', '-']).to_string(), format!("{head}{}{ext}", "#".repeat(pad))),
+        None => (fname.rsplit_once('.').map_or(fname.as_str(), |(a, _)| a).to_string(), fname.clone()),
+    };
+    let stem = if safe(&stem).is_empty() { "clip".to_string() } else { safe(&stem) };
+    let size = |p: &Path| std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len());
+    let mut n = 1;
+    let dir = loop {
+        let d = if n == 1 { plates.join(&stem) } else { plates.join(format!("{stem}_{n}")) };
+        let clash = files.iter().any(|f| {
+            let there = f.file_name().map(|x| d.join(x));
+            there.is_some_and(|t| size(&t).is_some_and(|s| Some(s) != size(f)))
+        });
+        if !clash {
+            break d;
+        }
+        n += 1;
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't make the plates folder: {e}"))?;
+    for f in files {
+        let Some(name) = f.file_name() else { continue };
+        let dst = dir.join(name);
+        if size(&dst).is_some() {
+            continue;
+        }
+        // Into a temp name, then renamed: a stopped copy leaves no half file.
+        let tmp = dir.join(format!(".{}.copying", name.to_string_lossy()));
+        std::fs::copy(f, &tmp).map_err(|e| format!("copying {}: {e}", f.display()))?;
+        std::fs::rename(&tmp, &dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+    }
+    Ok(dir.join(pattern))
+}
+
 // ---- references ------------------------------------------------------------------
 
 /// A reference to `rel` under `inst` in `p` — names only, no id: it is
@@ -607,6 +673,33 @@ mod tests {
         assert_eq!(media(&p, p.instance(2)), vec!["plates/bg/bg.####.exr", "plates/fg/still_01.png"]);
         // The sequence does not list its shots' plates as its own.
         assert!(media(&p, p.instance(1)).is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_clip_is_copied_into_the_plates_and_never_over_another() {
+        let (root, p) = fixture();
+        let src = root.join("outside");
+        std::fs::create_dir_all(&src).unwrap();
+        let frames: Vec<PathBuf> = (1..=3).map(|f| src.join(format!("bg.{f:04}.exr"))).collect();
+        for f in &frames {
+            std::fs::write(f, "abc").unwrap();
+        }
+        let shot = p.instance(2);
+        let plates = p.plates_dir(shot);
+        assert_eq!(plates, p.path_of(shot).join("plates"));
+        let got = copy_clip(&frames, &plates).unwrap();
+        assert_eq!(got, plates.join("bg").join("bg.####.exr"));
+        assert_eq!(std::fs::read_to_string(plates.join("bg/bg.0002.exr")).unwrap(), "abc");
+        // Again: the same files are kept, not copied twice.
+        assert_eq!(copy_clip(&frames, &plates).unwrap(), got);
+        // A different clip of the same name goes beside it.
+        std::fs::write(&frames[0], "different").unwrap();
+        assert_eq!(copy_clip(&frames, &plates).unwrap(), plates.join("bg_2").join("bg.####.exr"));
+        assert_eq!(std::fs::read_to_string(plates.join("bg/bg.0001.exr")).unwrap(), "abc");
+        // Found by name inside the shot.
+        let (_, rel) = p.locate(&got).unwrap();
+        assert_eq!(rel, "plates/bg/bg.####.exr");
         let _ = std::fs::remove_dir_all(root);
     }
 

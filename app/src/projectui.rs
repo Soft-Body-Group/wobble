@@ -17,6 +17,8 @@ pub enum Mode {
     Media(u64),
     Open,
     Save,
+    /// A plain Load's footage, copied into the shot picked.
+    Ingest(u64),
 }
 
 pub enum Act {
@@ -25,6 +27,8 @@ pub enum Act {
     Open(PathBuf),
     Save(PathBuf),
     Media(u64, AssetRef),
+    /// Copy this Load's footage into this plates folder.
+    Ingest(u64, PathBuf),
 }
 
 /// (project index, level id; None = the project itself)
@@ -125,6 +129,7 @@ impl Browser {
             Mode::Media(_) => "load from project",
             Mode::Open => "open from project",
             Mode::Save => "save to project",
+            Mode::Ingest(_) => "copy into project",
         };
         let mut refresh = false;
         egui::Window::new(title)
@@ -162,6 +167,24 @@ impl Browser {
                 }
                 if self.mode == Mode::Save {
                     self.save_bar(ui, &mut act);
+                }
+                if let Mode::Ingest(node) = self.mode {
+                    ui.weak("the footage is COPIED into the shot's plates (the original stays where it is); the Load then reads the copy by project and shot");
+                    let target = self.chosen.map(|l| {
+                        let p = &self.projects[l.0];
+                        let inst = l.1.and_then(|id| p.instance(id));
+                        let names = p.names(inst);
+                        (p.plates_dir(inst), if names.is_empty() { p.name.clone() } else { names.join(" › ") })
+                    });
+                    let label = match &target {
+                        Some((_, w)) => format!("copy into {w}"),
+                        None => "pick a shot below".into(),
+                    };
+                    if ui.add_enabled(target.is_some(), egui::Button::new(label)).clicked() {
+                        if let Some((plates, _)) = target {
+                            act = Act::Ingest(node, plates);
+                        }
+                    }
                 }
                 ui.separator();
                 if self.projects.is_empty() {
@@ -231,7 +254,13 @@ impl Browser {
     /// One level: what it holds, then its levels.
     fn level_ui(&mut self, ui: &mut egui::Ui, pi: usize, inst: Option<i64>, chain: &[String], act: &mut Act) {
         let filter = self.filter.to_lowercase();
-        if self.mode == Mode::Save {
+        if let Mode::Ingest(_) = self.mode {
+            let here = self.chosen == Some((pi, inst));
+            let label = if chain.is_empty() { format!("into {} itself", self.projects[pi].name) } else { format!("into {}", chain.join(" › ")) };
+            if ui.selectable_label(here, label).clicked() {
+                self.chosen = Some((pi, inst));
+            }
+        } else if self.mode == Mode::Save {
             let here = self.chosen == Some((pi, inst));
             let n = self.list((pi, inst)).len();
             let label = match n {

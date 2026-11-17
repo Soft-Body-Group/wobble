@@ -166,8 +166,8 @@ pub(crate) fn panel(
         #[cfg(not(target_arch = "wasm32"))]
         if !path.is_empty()
             && ui
-                .add_enabled(asset_ingest.is_none(), egui::Button::new("ingest…"))
-                .on_hover_text("copy this footage into a shot in organisicator; the Load then reads the copy by id, so moves and renames keep working")
+                .add_enabled(asset_ingest.is_none(), egui::Button::new("make project load…"))
+                .on_hover_text("copy this footage into a project's shot; the Load then reads the copy by project and shot, on any machine")
                 .clicked()
         {
             *asset_act = Some(AssetAct::Ingest);
@@ -215,7 +215,7 @@ pub(crate) fn panel(
     });
     }
     if asset_ingest.as_ref().is_some_and(|(n, _)| *n == key) {
-        ui.weak("copying into organisicator…");
+        ui.weak("copying into the project…");
     } else if let Some((_, m)) = asset_ingest_msg.as_ref().filter(|(n, _)| *n == key) {
         ui.weak(m.as_str());
     }

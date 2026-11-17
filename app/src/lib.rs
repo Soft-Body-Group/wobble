@@ -8497,11 +8497,16 @@ impl Gfx {
             Ok(r) => {
                 // The same footage at its new home: one undo step (the Load
                 // now names an asset), keeping the range already set.
+                // No id: a copy made by `start_project_ingest`, named by
+                // project and shot — the Load becomes a Project Load.
+                let by_name = r.id == 0;
                 if let Some(n) = self.egraph.node_mut(node) {
                     n.asset = Some(r);
+                    n.project_only |= by_name;
                 }
                 self.load_asset(node);
-                self.asset_ingest_msg = Some((node, "copied into organisicator; this Load now reads the copy".into()));
+                let msg = if by_name { "copied into the project; this is a Project Load now" } else { "copied into organisicator; this Load now reads the copy" };
+                self.asset_ingest_msg = Some((node, msg.into()));
             }
             Err(e) => self.asset_ingest_msg = Some((node, format!("ingest failed: {e}"))),
         }
@@ -9187,6 +9192,10 @@ impl Gfx {
                 Ok(()) => return,
                 Err(e) => b.error = Some(e),
             },
+            projectui::Act::Ingest(node, plates) => {
+                self.start_project_ingest(node, plates);
+                return;
+            }
             projectui::Act::Media(node, r) => {
                 // A different clip: its own range.
                 if let Some(n) = self.egraph.node_mut(node) {
@@ -9197,6 +9206,25 @@ impl Gfx {
             }
         }
         self.project_browser = Some(b);
+    }
+
+    /// Copies a plain Load's footage into a shot's `plates` on a worker;
+    /// `poll_asset_ingest` makes it a Project Load reading the copy when
+    /// it lands. The original files are never moved or changed.
+    fn start_project_ingest(&mut self, node: u64, plates: std::path::PathBuf) {
+        let Some(frames) = self.loaded.get(&node).map(|l| l.seq.frames.clone()).filter(|f| !f.is_empty()) else {
+            self.asset_ingest_msg = Some((node, "load the footage first".into()));
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        bg::spawn(move || {
+            let r = projects::copy_clip(&frames, &plates).and_then(|clip| {
+                projects::locate_path(&clip).ok_or_else(|| "copied, but the copy is not inside a project".to_string())
+            });
+            let _ = tx.send(r);
+        });
+        self.asset_ingest = Some((node, rx));
+        self.asset_ingest_msg = None;
     }
 
     /// Saves the comp at `path` in a project. Loads reading files inside a
@@ -24464,9 +24492,7 @@ impl Gfx {
                     }
                     Some(AssetAct::PickProject) => self.open_project_browser(projectui::Mode::Media(key)),
                     Some(AssetAct::Reload) => self.load_asset(key),
-                    Some(AssetAct::Ingest) => {
-                        self.asset_picker = Some(assets::Picker::for_ingest(key));
-                    }
+                    Some(AssetAct::Ingest) => self.open_project_browser(projectui::Mode::Ingest(key)),
                     Some(AssetAct::Forget) => {
                         if let Some(n) = self.egraph.node_mut(key) {
                             n.asset = None;

@@ -1854,6 +1854,13 @@ never falls back to names.
   `shots.comp_dir`; no anatomy match = `<shot>/comp`, where a collect puts
   it), named `<shot>_<task>_v001.wbl`. `save_to_project` first turns plain
   Loads whose files lie inside a project into by-name references.
+- **make project load…** on a plain Load (`AssetAct::Ingest`, browser
+  `Mode::Ingest`): `projects::copy_clip` COPIES the loaded frames into the
+  shot's plates folder (`Project::plates_dir`, the addon's rule), in a
+  folder named for the clip; same-size files are kept, a different file of
+  the same name is never overwritten (`<name>_2`). On a worker; it lands
+  through `poll_asset_ingest`, which makes an id-0 result a Project Load.
+  organisicator indexes the copy on its own next scan.
 - `--test-setup` covers it end to end on a temp managed root.
 
 A Load can name an organisicator ASSET instead of a path: `ENode::asset`
