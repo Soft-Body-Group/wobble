@@ -51,11 +51,42 @@ pub struct Png {
     pub h: u32,
 }
 
+/// An encoded clip from the comp: an mp4 of the host's input over a frame
+/// range, display-referred sRGB like a `Png`.
+#[derive(Debug, Clone)]
+pub struct Clip {
+    pub bytes: Vec<u8>,
+    pub w: u32,
+    pub h: u32,
+    pub frames: u32,
+    pub fps: f32,
+}
+
+impl Clip {
+    pub fn seconds(&self) -> f64 {
+        self.frames as f64 / self.fps.max(1.0) as f64
+    }
+    fn shape(&self) -> ClipShape {
+        ClipShape { frames: self.frames, fps: self.fps }
+    }
+}
+
+/// What a clip model's request needs to know about the clip it is sent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipShape {
+    pub frames: u32,
+    pub fps: f32,
+}
+
 /// What the host hands a run: its inputs, rendered, and the comp size.
 #[derive(Debug, Clone, Default)]
 pub struct Inputs {
     pub reference: Option<Png>,
     pub matte: Option<Png>,
+    /// The image input over the run's range, for a `ClipIn` step.
+    pub clip: Option<Clip>,
+    /// The matte input over the same range, for a `MatteClip` step.
+    pub matte_clip: Option<Clip>,
     /// The text wired into the host's prompt port, for a `prompt in` step.
     pub prompt: Option<String>,
     pub comp: (u32, u32),
@@ -166,9 +197,22 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 )?;
                 (h(&["matte", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
             }
+            Op::ClipIn { .. } | Op::MatteClip => {
+                let (c, what, tag) = if matches!(step.op, Op::ClipIn { .. }) {
+                    (inputs.clip.as_ref(), "input", "clip")
+                } else {
+                    (inputs.matte_clip.as_ref(), "matte", "matte-clip")
+                };
+                let c = c.ok_or(format!("the pipeline reads the node's {what} as a clip, and none was captured"))?;
+                (h(&[tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
+            }
             Op::Output => (keys[step.inputs[0].unwrap()].clone(), in_mp(0).unwrap_or(0.0)),
             Op::Generate { model, seed, opts } => {
                 let m = catalog::get(model).ok_or_else(|| format!("unknown model {model}"))?;
+                if m.task.takes_clip() {
+                    let c = inputs.clip.as_ref().ok_or(format!("{} reads the node's input as a clip", m.label))?;
+                    m.dialect.check_clip(m.label, c.frames, c.fps, c.w, c.h)?;
+                }
                 let size = t2i_size(m, opts, inputs.comp);
                 let seed = seed.to_string();
                 let size_s = format!("{}x{}", size.0, size.1);
@@ -192,6 +236,9 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                         let (w, h) = video_size(m, opts, inputs.comp);
                         w as f64 * h as f64 / 1e6
                     }
+                    // The whole clip's megapixels: what a per-megapixel
+                    // video price is billed on.
+                    Task::VideoEdit | Task::VideoInpaint => in_mp(1).unwrap_or(0.0),
                 };
                 (h(&parts), out_mp)
             }
@@ -282,6 +329,20 @@ pub fn request(
     prompt: Option<&str>,
     images: &[Option<String>],
 ) -> Result<Value> {
+    request_clip(m, opts, seed, comp, prompt, images, None)
+}
+
+/// [`request`], for a model that reads a clip: `clip` is the shape of the
+/// one it is sent (frame count and rate ride some requests).
+pub fn request_clip(
+    m: &RemoteModel,
+    opts: &crate::pipeline::Opts,
+    seed: u32,
+    comp: (u32, u32),
+    prompt: Option<&str>,
+    images: &[Option<String>],
+    clip: Option<ClipShape>,
+) -> Result<Value> {
     let img = |k: usize| -> Result<Value> {
         images
             .get(k)
@@ -309,6 +370,32 @@ pub fn request(
         (_, Dialect::LightingStyle) => json!({
             "image_url": img(1)?,
             "lighting_style": style,
+        }),
+        (_, Dialect::KlingEdit) => json!({
+            "prompt": prompt(), "video_url": img(1)?,
+            // A take is pictures; the comp's sound is not ours to send back.
+            "keep_audio": false,
+        }),
+        (_, Dialect::LucyEdit) => json!({
+            "prompt": prompt(), "video_url": img(1)?, "seed": seed,
+        }),
+        (_, Dialect::LtxInpaint) => {
+            let c = clip.ok_or_else(|| anyhow!("{} needs the clip's length", m.label))?;
+            json!({
+                "prompt": prompt(),
+                "video_url": img(1)?,
+                "mask_video_url": img(2)?,
+                "num_frames": c.frames,
+                "frames_per_second": c.fps,
+                "seed": seed,
+                "generate_audio": false,
+                // The prompt says what fills the hole; a rewrite of it
+                // would change the request behind the key's back.
+                "enable_prompt_expansion": false,
+            })
+        }
+        (Task::VideoEdit | Task::VideoInpaint, _) => json!({
+            "prompt": prompt(), "video_url": img(1)?, "seed": seed,
         }),
         (Task::ImageToVideo, _) => {
             let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
@@ -416,27 +503,34 @@ pub fn service_for(cfg: &Config) -> Result<Box<dyn Service>, String> {
 /// thread.
 pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http: &Http) -> Result<Quote> {
     let billed = plan.billed(p);
-    let reqs: Vec<(String, Value, f64, Option<VideoCall>)> = billed
+    let reqs: Vec<(String, Value, f64, Option<VideoCall>, bool)> = billed
         .iter()
         .map(|&i| {
             let Op::Generate { model, seed, opts } = &p.steps[i].op else { unreachable!() };
             let m = catalog::get(model).unwrap();
             let ph: Vec<Option<String>> =
                 p.steps[i].inputs.iter().map(|s| s.map(|_| "<image>".to_string())).collect();
-            let r = request(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph)?;
-            let video = video_opts(m, opts).map(|(secs, res)| {
-                let (w, h) = video_size(m, opts, inputs.comp);
-                VideoCall { seconds: secs as f64, w, h, default_res: res == 720 }
-            });
-            Ok((m.endpoint.to_string(), r, plan.mp[i], video))
+            let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip());
+            let r = request_clip(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph, clip.map(Clip::shape))?;
+            let video = match clip {
+                // Billed on the clip sent: its length, its size.
+                Some(c) => Some(VideoCall { seconds: c.seconds(), w: c.w, h: c.h, default_res: true }),
+                None => video_opts(m, opts).map(|(secs, res)| {
+                    let (w, h) = video_size(m, opts, inputs.comp);
+                    VideoCall { seconds: secs as f64, w, h, default_res: res == 720 }
+                }),
+            };
+            Ok((m.endpoint.to_string(), r, plan.mp[i], video, clip.is_some()))
         })
         .collect::<Result<_>>()?;
     let items: Vec<QuoteItem> = reqs
         .iter()
-        .map(|(e, r, mp, video)| QuoteItem {
+        .map(|(e, r, mp, video, reads_clip)| QuoteItem {
             endpoint: e,
             input: r,
-            megapixels: (video.is_none()).then_some(*mp),
+            // A clip model's megapixels are the whole clip's (a per-MP
+            // video price); an image-to-video's are unknown.
+            megapixels: (video.is_none() || *reads_clip).then_some(*mp),
             video: *video,
         })
         .collect();
@@ -557,6 +651,9 @@ fn commit(dir: &Path, key: &str, file: &str, bytes: &[u8], meta: &Meta) -> Resul
 fn data_uri_of(path: &Path) -> Result<String> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let ct = match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
         _ => "image/png",
@@ -611,6 +708,25 @@ fn execute(
                 };
                 Val::Image(path)
             }
+            Op::ClipIn { .. } | Op::MatteClip => {
+                let c = if matches!(p.steps[i].op, Op::ClipIn { .. }) {
+                    inputs.clip.as_ref()
+                } else {
+                    inputs.matte_clip.as_ref()
+                };
+                let c = c.ok_or_else(|| anyhow!("missing input clip"))?;
+                let path = match cached(dir, key) {
+                    Some(m) => dir.join(key).join(m.file),
+                    None => commit(
+                        dir,
+                        key,
+                        "input.mp4",
+                        &c.bytes,
+                        &Meta { file: "input.mp4".into(), when: now(), ..meta0() },
+                    )?,
+                };
+                Val::Image(path)
+            }
             Op::Output => get(&vals, i, 0).ok_or_else(|| anyhow!("Output has no input"))?,
             Op::Generate { model, seed, opts } => {
                 let m = catalog::get(model).ok_or_else(|| anyhow!("unknown model {model}"))?;
@@ -635,7 +751,8 @@ fn execute(
                             _ => None,
                         });
                     }
-                    let req = request(m, opts, *seed, inputs.comp, prompt.as_deref(), &images)?;
+                    let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip()).map(Clip::shape);
+                    let req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, clip)?;
                     let _ = tx.send(Event::Step(i, StepState::Sending));
                     let txp = tx.clone();
                     let phase = move |ph: Phase| {
@@ -897,6 +1014,7 @@ mod tests {
             prompt: None,
             comp: (2048, 1080),
             tick: 0,
+            ..Default::default()
         };
         let key = |p: &Pipeline| plan(p, &ins, &dir).unwrap().keys[1].clone();
         let set = |p: &mut Pipeline, secs: u32| {
@@ -933,5 +1051,56 @@ mod tests {
         assert_ne!(k(&wired, &ins), before, "the wired text is in the key");
         ins.prompt = None;
         assert!(plan(&wired, &ins, &dir).unwrap_err().contains("no String node"));
+    }
+
+    fn clip(frames: u32, w: u32, h: u32) -> Clip {
+        Clip { bytes: vec![frames as u8, w as u8, 7], w, h, frames, fps: 24.0 }
+    }
+
+    #[test]
+    fn clip_models_ask_in_their_own_words() {
+        let o = Opts::default();
+        let v = Some("data:video/mp4;base64,AAAA".to_string());
+        let shape = ClipShape { frames: 72, fps: 24.0 };
+        let k = request_clip(m("fal/kling-o3-pro-video-edit"), &o, 7, (1920, 1080), Some("p"), &[None, v.clone()], Some(shape)).unwrap();
+        assert_eq!(k["video_url"], v.clone().unwrap());
+        assert_eq!(k["keep_audio"], false);
+        assert!(k.get("seed").is_none(), "{k}");
+        let l = request_clip(m("fal/ltx-2.3-inpaint"), &o, 7, (1920, 1080), Some("p"), &[None, v.clone(), Some("mask".into())], Some(shape)).unwrap();
+        assert_eq!(l["mask_video_url"], "mask");
+        assert_eq!(l["num_frames"], 72);
+        assert_eq!(l["frames_per_second"], 24.0);
+        assert_eq!(l["seed"], 7);
+        assert_eq!(l["generate_audio"], false);
+        // LTX cannot be asked without knowing the clip.
+        assert!(request(m("fal/ltx-2.3-inpaint"), &o, 7, (1920, 1080), Some("p"), &[None, v.clone(), v]).is_err());
+    }
+
+    #[test]
+    fn a_clip_pipeline_keys_on_the_clips_and_checks_them_before_sending() {
+        let dir = std::env::temp_dir().join(format!("wobble-genai-clip-{}", std::process::id()));
+        let p = Pipeline::for_model("fal/ltx-2.3-inpaint").unwrap();
+        assert!(p.wants_clip() && p.wants_matte_clip() && !p.wants_reference());
+        let mut ins = Inputs { comp: (1920, 1080), ..Default::default() };
+        assert!(plan(&p, &ins, &dir).unwrap_err().contains("clip"));
+        ins.clip = Some(clip(72, 1280, 720));
+        ins.matte_clip = Some(clip(72, 1280, 720));
+        let a = plan(&p, &ins, &dir).unwrap();
+        ins.matte_clip = Some(clip(73, 1280, 720));
+        let b = plan(&p, &ins, &dir).unwrap();
+        assert_ne!(a.keys[a.target], b.keys[b.target], "the matte clip's bytes are in the key");
+        // The whole clip's megapixels, for a per-MP video price.
+        let g = p.model_step().unwrap();
+        assert!((a.mp[g] - 1280.0 * 720.0 * 72.0 / 1e6).abs() < 1e-6);
+        ins.clip = Some(clip(4, 1280, 720));
+        assert!(plan(&p, &ins, &dir).unwrap_err().contains("9-481"));
+
+        let k = Pipeline::for_model("fal/kling-o3-pro-video-edit").unwrap();
+        ins.clip = Some(clip(24, 1280, 720));
+        assert!(plan(&k, &ins, &dir).unwrap_err().contains("3-15 s"));
+        ins.clip = Some(clip(72, 640, 360));
+        assert!(plan(&k, &ins, &dir).unwrap_err().contains("720 px"));
+        ins.clip = Some(clip(72, 1280, 720));
+        assert!(plan(&k, &ins, &dir).is_ok());
     }
 }

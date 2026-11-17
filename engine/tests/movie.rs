@@ -305,3 +305,26 @@ fn concurrent_decodes_of_one_file_agree() {
     }
     let _ = std::fs::remove_file(&path);
 }
+
+/// `engine::movie::encode_mp4` — what a GenAI clip step uploads — writes a
+/// clip this decoder reads back, frame for frame, in order, at its rate.
+#[test]
+fn encode_mp4_round_trips() {
+    if !engine::movie::can_encode_mp4() {
+        eprintln!("skipped: this FFmpeg has no video encoder");
+        return;
+    }
+    let path = tmp("genai_clip.mp4");
+    let frames: Vec<Vec<u8>> =
+        (0..FRAMES).map(|n| vec![level_of(n); (W * H * 3) as usize]).collect();
+    engine::movie::encode_mp4(&path, &frames, W, H, 24.0).unwrap();
+    let dec = MovieDecoder::default();
+    assert_eq!(dec.frame_count(&path).unwrap(), FRAMES);
+    let info = engine::movie::probe(&path).unwrap();
+    assert_eq!((info.fps_num, info.fps_den), (24, 1));
+    let reads: Vec<f32> = (0..FRAMES).map(|n| grey_at(&dec, &path, n)).collect();
+    for w in reads.windows(2) {
+        assert!(w[1] > w[0], "frames out of order: {reads:?}");
+    }
+    assert!(engine::movie::encode_mp4(&path, &frames, W + 1, H, 24.0).is_err(), "odd sizes refused");
+}

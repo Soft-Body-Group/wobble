@@ -1434,6 +1434,18 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   every still's key is unchanged (no `KEY_VERSION` bump); keep it so.
   Request quirks per model live in `catalog::Dialect`, not in endpoint
   string tests.
+- **Clips** (`Op::ClipIn` / `Op::MatteClip`, `Task::VideoEdit` /
+  `VideoInpaint`): the image / matte input over `Pipeline::clip_seconds`
+  from the playhead, on the `Pipe::Video` pipe. Captured by the SAME
+  capture bake over N ticks (`genaiui::CLIP`/`MATTE_CLIP` capture ports =
+  input + 10); each frame is converted ON ARRIVAL in `Runs::take_capture`
+  (Rec.709, box-averaged to `CLIP_SHORT` = 720 short side, even sides,
+  8-bit) — never keep float frames per tick — then
+  `engine::movie::encode_mp4` makes the upload. Release FFmpeg is
+  decode-only, so clips are offered only where `genaiui::clip_ok()`.
+  A model's clip limits (`Dialect::check_clip`) are refused in the PLAN,
+  before anything is sent. Masks come from outside (Roto/Paint/Sammie into
+  the matte input); pixel nodes inside the dive are not built.
 - **Known cost**: a loaded GenAI is not `inputs_unsampled`, so its
   upstream stays in the rig and is decoded when only the GenAI is viewed.
   Making it unsampled needs `sample_through` during capture (the Blender

@@ -199,6 +199,7 @@ fn inputs() -> Inputs {
         prompt: None,
         comp: (2048, 1080),
         tick: 1001,
+        ..Default::default()
     }
 }
 

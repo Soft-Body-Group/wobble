@@ -7871,7 +7871,7 @@ impl Gfx {
                 for row in owned.chunks(stride).take(h as usize) {
                     px.extend(row[..(w * 4) as usize].iter().map(|v| v.to_f32()));
                 }
-                self.jobs.genai.captured.push((bake.node, port, px, w, h));
+                self.jobs.genai.take_capture(self.egraph.working, bake.node, port, px, w, h);
                 bake.next += 1;
                 continue;
             }
@@ -20142,10 +20142,18 @@ impl Gfx {
             return Some(g);
         }
         // Inside a GenAI Pipeline: its steps make no pixels until a run, so
-        // the picture is the node's own (its take, or its input).
+        // the picture is the node's own (its take, or its input) — except
+        // that viewing an Input / Matte step (or their clips) shows what is
+        // wired into that input of the node, which is what the step reads.
         if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::GenAi) {
+            let owner = d.from?;
             let mut g = d.graph.clone();
-            g.view = Some(d.from?);
+            let port = self.egraph.active_view().and_then(|v| match self.egraph.node(v).map(|n| &n.kind) {
+                Some(NodeKind::GenAiStep(genai::pipeline::Op::Reference | genai::pipeline::Op::ClipIn { .. })) => Some(0),
+                Some(NodeKind::GenAiStep(genai::pipeline::Op::Matte | genai::pipeline::Op::MatteClip)) => Some(1),
+                _ => None,
+            });
+            g.view = Some(port.and_then(|p| g.input_of(owner, p)).unwrap_or(owner));
             return Some(g);
         }
         // Inside a Roto: the live shapes spliced back into the node (curves

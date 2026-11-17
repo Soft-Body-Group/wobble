@@ -53,6 +53,12 @@ pub enum Task {
     Albedo,
     /// prompt + image -> the image relit as the prompt says.
     Relight,
+    /// prompt + a CLIP (the node's input over a range) -> the clip edited
+    /// as the prompt says. A video take.
+    VideoEdit,
+    /// prompt + clip + matte clip (white = regenerate) -> the clip with
+    /// the matted region filled: object removal on video. A video take.
+    VideoInpaint,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -97,6 +103,15 @@ pub enum Dialect {
     /// fal's relighting app: `image_url` and a `lighting_style` from a
     /// fixed list, read off the prompt ("golden hour" -> golden_hour).
     LightingStyle,
+    /// Kling O3 video edit: `prompt`, `video_url` (mp4/mov, 3-15 s, 720 px
+    /// or more), source audio dropped. No seed.
+    KlingEdit,
+    /// Decart Lucy Edit: `prompt`, `video_url`, `seed`.
+    LucyEdit,
+    /// LTX 2.3 inpaint: `prompt`, `video_url`, `mask_video_url` (white =
+    /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
+    /// clip, `seed`; audio and prompt expansion off.
+    LtxInpaint,
 }
 
 impl Dialect {
@@ -117,7 +132,31 @@ impl Dialect {
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
-        matches!(self, Dialect::Flux | Dialect::Gemini | Dialect::IcLight)
+        matches!(self, Dialect::Flux | Dialect::Gemini | Dialect::IcLight | Dialect::LucyEdit | Dialect::LtxInpaint)
+    }
+
+    /// Can this model take a clip of `frames` at `fps`, `w`×`h`? Said in
+    /// the plan, before anything is sent: a provider that rejects the clip
+    /// after upload has still cost the user the steps above it.
+    pub fn check_clip(self, label: &str, frames: u32, fps: f32, w: u32, h: u32) -> Result<(), String> {
+        let secs = frames as f32 / fps.max(1.0);
+        match self {
+            Dialect::KlingEdit => {
+                if !(3.0..=15.0).contains(&secs) {
+                    return Err(format!("{label} takes a 3-15 s clip; this one is {secs:.1} s"));
+                }
+                if w.min(h) < 720 {
+                    return Err(format!(
+                        "{label} needs a clip at least 720 px on its short side; the comp gives {w}x{h}"
+                    ));
+                }
+            }
+            Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
+                return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The output field holding the picture, when it is not fal's usual
@@ -332,6 +371,46 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
         about: "the bigger Seedance: up to 30 s and 1080p; about twice 2.0 fast's price per second",
+    },
+    RemoteModel {
+        id: "fal/kling-o3-pro-video-edit",
+        label: "Kling O3 video edit",
+        short: "kling edit",
+        service: Service::Fal,
+        endpoint: "fal-ai/kling-video/o3/pro/video-to-video/edit",
+        dialect: Dialect::KlingEdit,
+        task: Task::VideoEdit,
+        commercial: true,
+        licence: "Kling via fal API terms (commercial use through the API)",
+        about: "edit the input clip by instruction: 3-15 s, 720 px or more, billed per second",
+    },
+    RemoteModel {
+        id: "fal/lucy-edit-dev",
+        label: "Lucy Edit",
+        short: "lucy edit",
+        service: Service::Fal,
+        endpoint: "decart/lucy-edit/dev",
+        dialect: Dialect::LucyEdit,
+        task: Task::VideoEdit,
+        // Decart's Dev weights are not released for commercial use and fal
+        // states no terms: tagged until someone shows otherwise.
+        commercial: false,
+        licence: "Decart Lucy Edit Dev: no commercial terms stated (treat as research)",
+        about: "cheap prompt edits of the input clip (clothes, colours, props), billed per second",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-inpaint",
+        label: "LTX 2.3 video inpaint",
+        short: "ltx inpaint",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3-quality/inpaint",
+        dialect: Dialect::LtxInpaint,
+        task: Task::VideoInpaint,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
     },
     RemoteModel {
         id: "fal/nano-banana-pro",
@@ -561,12 +640,19 @@ impl Task {
             Task::Normals => "normals",
             Task::Albedo => "albedo",
             Task::Relight => "relight",
+            Task::VideoEdit => "video edit",
+            Task::VideoInpaint => "video inpaint",
         }
     }
 
     /// Does this task return a video rather than a picture?
     pub fn is_video(self) -> bool {
-        matches!(self, Task::ImageToVideo)
+        matches!(self, Task::ImageToVideo | Task::VideoEdit | Task::VideoInpaint)
+    }
+
+    /// Does this task READ a clip (the node's input over a range)?
+    pub fn takes_clip(self) -> bool {
+        matches!(self, Task::VideoEdit | Task::VideoInpaint)
     }
 
     /// Does this task hand back MEASUREMENTS rather than a picture? A data
@@ -575,7 +661,7 @@ impl Task {
         matches!(self, Task::Depth | Task::Normals)
     }
 
-    pub const ALL: [Task; 10] = [
+    pub const ALL: [Task; 12] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -586,6 +672,8 @@ impl Task {
         Task::Normals,
         Task::Albedo,
         Task::Relight,
+        Task::VideoEdit,
+        Task::VideoInpaint,
     ];
 }
 
@@ -620,7 +708,10 @@ mod tests {
     #[test]
     fn dialects_match_their_tasks() {
         for m in CATALOG {
-            let video = matches!(m.dialect, Dialect::Seedance { .. });
+            let video = matches!(
+                m.dialect,
+                Dialect::Seedance { .. } | Dialect::KlingEdit | Dialect::LucyEdit | Dialect::LtxInpaint
+            );
             assert_eq!(video, m.task.is_video(), "{}", m.id);
         }
         let (lo, hi) = Dialect::Seedream.mp_range();

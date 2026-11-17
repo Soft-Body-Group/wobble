@@ -27,9 +27,10 @@ use crate::catalog::{self, Task};
 pub enum Pipe {
     Text,
     Image,
-    /// A video step's result. Only Output takes one: nothing in the
-    /// catalog consumes a video, and an image port fed a movie would be a
-    /// request the provider rejects after the steps above it were billed.
+    /// A clip: a video step's result, or the host's input over a frame
+    /// range (`ClipIn`, `MatteClip`). Only Output and a video model's
+    /// video ports take one: an image port fed a movie would be a request
+    /// the provider rejects after the steps above it were billed.
     Video,
 }
 
@@ -62,6 +63,18 @@ pub enum Op {
     /// The host node's MATTE input at the playhead — white where a fill or
     /// an edit should land.
     Matte,
+    /// The host node's image input over a frame RANGE from the playhead,
+    /// encoded as an mp4 when the run starts: what a video-to-video model
+    /// reads. Leaves the comp as display-referred sRGB, like `Reference`.
+    ClipIn {
+        /// Length of the clip, in seconds of comp time.
+        #[serde(default = "default_clip_seconds")]
+        seconds: f32,
+    },
+    /// The host node's MATTE input over the same range as the pipeline's
+    /// `ClipIn` (`Pipeline::clip_seconds`): white where a video model
+    /// should work (an object to remove, say).
+    MatteClip,
     /// One call to a remote model from the catalog, by stable id.
     Generate {
         model: String,
@@ -119,6 +132,9 @@ pub struct Opts {
 fn default_seconds() -> u32 {
     5
 }
+fn default_clip_seconds() -> f32 {
+    5.0
+}
 fn default_res() -> u32 {
     720
 }
@@ -147,7 +163,9 @@ impl Op {
     /// Input ports, in order, with a short name for each.
     pub fn ports(&self) -> Vec<(Pipe, &'static str)> {
         match self {
-            Op::Prompt { .. } | Op::PromptIn | Op::Reference | Op::Matte => vec![],
+            Op::Prompt { .. } | Op::PromptIn | Op::Reference | Op::Matte | Op::ClipIn { .. } | Op::MatteClip => {
+                vec![]
+            }
             Op::Output => vec![(Pipe::Image, "image")],
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
@@ -167,6 +185,7 @@ impl Op {
         match self {
             Op::Prompt { .. } | Op::PromptIn => Some(Pipe::Text),
             Op::Output => None,
+            Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
             Op::Generate { model, .. }
                 if catalog::get(model).is_some_and(|m| m.task.is_video()) =>
             {
@@ -200,6 +219,8 @@ impl Op {
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
+            Op::ClipIn { .. } => "Input Clip",
+            Op::MatteClip => "Matte Clip",
             Op::Generate { model, .. } => catalog::get(model).map(|m| m.label).unwrap_or("Unknown Model"),
             Op::Comfy { .. } => "ComfyUI",
             Op::Output => "Output",
@@ -222,6 +243,8 @@ impl Op {
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
+            Op::ClipIn { seconds } => format!("clip {seconds:.1}s"),
+            Op::MatteClip => "matte clip".into(),
             Op::Generate { model, .. } => match catalog::get(model) {
                 Some(m) => m.short.into(),
                 None => "unknown".into(),
@@ -244,6 +267,10 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
             vec![(Pipe::Image, "image")]
         }
         Task::ImageToVideo | Task::Relight => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
+        Task::VideoEdit => vec![(Pipe::Text, "prompt"), (Pipe::Video, "video")],
+        Task::VideoInpaint => {
+            vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
+        }
     }
 }
 
@@ -342,6 +369,8 @@ impl Pipeline {
         for (port, (pipe, name)) in ports.into_iter().enumerate() {
             let op = match (pipe, name) {
                 (Pipe::Text, _) => Op::Prompt { text: String::new() },
+                (Pipe::Video, "mask") => Op::MatteClip,
+                (Pipe::Video, _) => Op::ClipIn { seconds: default_clip_seconds() },
                 (_, "mask") => Op::Matte,
                 _ => Op::Reference,
             };
@@ -554,6 +583,26 @@ impl Pipeline {
     pub fn wants_prompt(&self) -> bool {
         self.steps.iter().any(|s| matches!(s.op, Op::PromptIn))
     }
+    /// Does it read the host's image input as a clip? Its matte as one?
+    pub fn wants_clip(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s.op, Op::ClipIn { .. }))
+    }
+    pub fn wants_matte_clip(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s.op, Op::MatteClip))
+    }
+    /// How long a run's clips are: the first `ClipIn`'s length (a
+    /// `MatteClip` follows it, so the two always line up frame for frame),
+    /// else the default.
+    pub fn clip_seconds(&self) -> f32 {
+        self.steps
+            .iter()
+            .find_map(|s| match s.op {
+                Op::ClipIn { seconds } => Some(seconds),
+                _ => None,
+            })
+            .unwrap_or(default_clip_seconds())
+            .clamp(0.1, 60.0)
+    }
 }
 
 #[cfg(test)]
@@ -580,7 +629,9 @@ mod tests {
             assert!(p.steps[g].inputs.iter().all(|i| i.is_some()), "{}", m.id);
             assert_eq!(plan.len(), p.steps.len(), "{}: every step is on the way out", m.id);
             let ports = task_ports(m.task);
-            assert_eq!(p.wants_matte(), ports.iter().any(|&(_, n)| n == "mask"), "{}", m.id);
+            assert_eq!(p.wants_matte(), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "mask"), "{}", m.id);
+            assert_eq!(p.wants_matte_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n == "mask"), "{}", m.id);
+            assert_eq!(p.wants_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n != "mask"), "{}", m.id);
             assert_eq!(p.wants_reference(), ports.iter().any(|&(k, n)| k == Pipe::Image && n != "mask"), "{}", m.id);
         }
         assert!(Pipeline::for_model("no/such-model").is_none());
@@ -714,5 +765,27 @@ mod tests {
             Op::Generate { opts, .. } => assert_eq!(opts, Opts::default()),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn clip_steps_feed_video_ports_and_old_files_still_load() {
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        let c = p.push(Op::ClipIn { seconds: 3.0 }, [0.0, 0.0]);
+        let r = p.push(Op::Reference, [0.0, 0.0]);
+        let g = p.push(
+            Op::Generate { model: "fal/kling-o3-pro-video-edit".into(), seed: 1, opts: Opts::default() },
+            [0.0, 0.0],
+        );
+        assert!(!p.connect(r, g, 1), "a still is not a clip");
+        assert!(p.connect(c, g, 1));
+        assert_eq!(p.clip_seconds(), 3.0);
+        // A step saved before clips existed reads as before; a clip's
+        // length defaults when it is missing.
+        let old: Op = serde_json::from_str(r#"{"op":"reference"}"#).unwrap();
+        assert_eq!(old, Op::Reference);
+        let c: Op = serde_json::from_str(r#"{"op":"clip_in"}"#).unwrap();
+        assert_eq!(c, Op::ClipIn { seconds: 5.0 });
+        let m: Op = serde_json::from_str(r#"{"op":"matte_clip"}"#).unwrap();
+        assert_eq!(m.output(), Some(Pipe::Video));
     }
 }

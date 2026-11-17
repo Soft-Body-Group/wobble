@@ -30,7 +30,7 @@ use engine::graph::{GenAiParams, NodeKind};
 use genai::catalog::{self, Task};
 use genai::config::{self, Config, Origin, Route};
 use genai::pipeline::{Op, Opts, Pipeline};
-use genai::run::{self, Event, Inputs, Plan, Png, StepState};
+use genai::run::{self, Clip, Event, Inputs, Plan, Png, StepState};
 use genai::service::{self, Quote};
 use std::collections::BTreeMap;
 use std::sync::mpsc::Receiver;
@@ -40,6 +40,40 @@ pub const TILES: usize = 2;
 pub const TILE_ROWS: usize = 2;
 /// Largest reference we send, in megapixels (see `genai::image::shrink`).
 pub const REF_MP: f32 = 2.0;
+/// A clip's short side, at most, in pixels: what the video models we call
+/// work at, and the floor Kling asks for.
+pub const CLIP_SHORT: u32 = 720;
+
+/// Capture "ports" beyond the node's own inputs: input 0 (the image) and
+/// input 1 (the matte) rendered over the run's RANGE for a `ClipIn` /
+/// `MatteClip` step, rather than at the playhead. `port - CLIP` is the
+/// input rendered.
+pub const CLIP: usize = 10;
+pub const MATTE_CLIP: usize = 11;
+
+/// The node input a capture port renders.
+fn input_of_port(port: usize) -> usize {
+    if port >= CLIP {
+        port - CLIP
+    } else {
+        port
+    }
+}
+
+/// Can this build send a clip? It must encode an mp4 (a release build's
+/// FFmpeg decodes only) and play the video take back.
+pub fn clip_ok() -> bool {
+    #[cfg(feature = "movie")]
+    {
+        video_ok() && engine::movie::can_encode_mp4()
+    }
+    #[cfg(not(feature = "movie"))]
+    {
+        false
+    }
+}
+
+const NO_CLIP: &str = "this build cannot send a clip: it needs --features app/movie and an FFmpeg with an encoder";
 
 /// Can this build play a video take? Only a build that decodes movies
 /// (`--features app/movie`) offers a video step: one it cannot play back
@@ -50,7 +84,11 @@ pub fn video_ok() -> bool {
 
 /// Is this model one this build may offer?
 fn offered(m: &catalog::RemoteModel) -> bool {
-    !m.task.is_video() || video_ok()
+    if m.task.takes_clip() {
+        clip_ok()
+    } else {
+        !m.task.is_video() || video_ok()
+    }
 }
 
 /// The models this build adds as one-model nodes (`editor::node_catalog`).
@@ -133,6 +171,9 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
 /// per model (no model menu, the same rule as the comp), ComfyUI, Output.
 pub fn step_entries() -> Vec<(&'static str, Op)> {
     let mut v = vec![Op::Prompt { text: String::new() }, Op::PromptIn, Op::Reference, Op::Matte];
+    if clip_ok() {
+        v.extend([Op::ClipIn { seconds: 5.0 }, Op::MatteClip]);
+    }
     v.extend(offered_models().map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }));
     v.push(Op::Comfy { workflow: String::new(), seed: 1, commercial: false });
     v.push(Op::Output);
@@ -201,7 +242,69 @@ pub struct Runs {
     /// RGBA, w, h). Written from inside `step_graph_bake`, where only field
     /// borrows are available, and consumed at `finish_graph_bake`.
     pub captured: Vec<(u64, usize, Vec<f32>, u32, u32)>,
+    /// A clip capture's frames as they come off the bake loop, already
+    /// Rec.709, shrunk to `CLIP_SHORT` and 8-bit sRGB RGB (a 2K float
+    /// frame kept per tick would be gigabytes): (node, port, rgb, w, h).
+    pub clip_frames: Vec<(u64, usize, Vec<u8>, u32, u32)>,
     account: Account,
+}
+
+impl Runs {
+    /// The bake loop's hand-off for one captured frame (field borrows only:
+    /// it runs inside `step_graph_bake`). A still is kept as float for the
+    /// PNG; a clip frame is converted on the spot.
+    pub fn take_capture(&mut self, working: engine::color::Colorspace, node: u64, port: usize, mut px: Vec<f32>, w: u32, h: u32) {
+        if port < CLIP {
+            self.captured.push((node, port, px, w, h));
+            return;
+        }
+        if port == CLIP {
+            to_rec709(&mut px, working);
+        } else {
+            // Coverage rides every channel of a matte; take red, as grey.
+            for p in px.chunks_exact_mut(4) {
+                p[1] = p[0];
+                p[2] = p[0];
+            }
+        }
+        let (rgb, cw, ch) = clip_frame(&px, w, h, port == CLIP);
+        self.clip_frames.push((node, port, rgb, cw, ch));
+    }
+}
+
+/// One clip frame: box-averaged down until its short side is at most
+/// `CLIP_SHORT` (exactly, not by a whole factor: a 2K plate must come out
+/// at 720, not 540, or Kling refuses it), sides even (4:2:0 needs them),
+/// encoded to 8-bit RGB — sRGB for a picture, straight coverage for a matte.
+fn clip_frame(rgba: &[f32], w: u32, h: u32, picture: bool) -> (Vec<u8>, u32, u32) {
+    let scale = (CLIP_SHORT as f64 / w.min(h).max(1) as f64).min(1.0);
+    let even = |v: f64| ((v / 2.0).floor() as u32).max(1) * 2;
+    let (ow, oh) = (even(w as f64 * scale).min(w & !1).max(2), even(h as f64 * scale).min(h & !1).max(2));
+    let (sx, sy) = (w as f64 / ow as f64, h as f64 / oh as f64);
+    let mut out = Vec::with_capacity((ow * oh * 3) as usize);
+    for y in 0..oh {
+        let (y0, y1) = ((y as f64 * sy) as u32, (((y + 1) as f64 * sy).ceil() as u32).clamp(1, h));
+        for x in 0..ow {
+            let (x0, x1) = ((x as f64 * sx) as u32, (((x + 1) as f64 * sx).ceil() as u32).clamp(1, w));
+            let mut acc = [0f32; 3];
+            let mut n = 0f32;
+            for yy in y0..y1.max(y0 + 1).min(h) {
+                for xx in x0..x1.max(x0 + 1).min(w) {
+                    let k = ((yy * w + xx) * 4) as usize;
+                    for c in 0..3 {
+                        acc[c] += rgba[k + c];
+                    }
+                    n += 1.0;
+                }
+            }
+            for a in acc {
+                let v = (a / n.max(1.0)).clamp(0.0, 1.0);
+                let v = if picture { genai::image::srgb_encode(v) } else { v };
+                out.push((v * 255.0 + 0.5) as u8);
+            }
+        }
+    }
+    (out, ow, oh)
 }
 
 #[cfg_attr(not(feature = "commerce"), allow(dead_code))]
@@ -213,7 +316,7 @@ enum Account {
 
 impl Default for Runs {
     fn default() -> Self {
-        Self { cfg: Config::load(), run: None, captured: vec![], account: Account::Unknown }
+        Self { cfg: Config::load(), run: None, captured: vec![], clip_frames: vec![], account: Account::Unknown }
     }
 }
 
@@ -263,6 +366,8 @@ pub struct View {
     pub prompt: Option<String>,
     /// The picked take's file is not on this machine.
     pub take_missing: bool,
+    /// The comp's frame rate, for a clip's frame count.
+    pub fps: f32,
 }
 
 pub enum ViewState {
@@ -428,6 +533,33 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
             ui.label(small("the node's matte input at the playhead: white = where to work"));
             if !v.has_matte {
                 ui.colored_label(theme::warn(), small("nothing is wired into the matte input"));
+            }
+        }
+        Op::ClipIn { seconds } => {
+            ui.label(small("the node's image input over a range from the playhead, sent as an mp4"));
+            ui.horizontal(|ui| {
+                ui.label(small("length"));
+                ui.add(egui::DragValue::new(seconds).range(0.5..=30.0).speed(0.05).suffix(" s"));
+            });
+            ui.weak(small(format!(
+                "{:.0} frames at the comp's rate, sRGB, up to {CLIP_SHORT} px on the short side",
+                (*seconds * v.fps).round()
+            )));
+            if !v.has_input {
+                ui.colored_label(theme::warn(), small("nothing is wired into the image input"));
+            }
+            if !clip_ok() {
+                ui.colored_label(theme::error(), small(NO_CLIP));
+            }
+        }
+        Op::MatteClip => {
+            ui.label(small("the node's matte input over the Input Clip's range: white = where to work"));
+            ui.weak(small("wire a Roto, Paint or Sammie into the node's matte input"));
+            if !v.has_matte {
+                ui.colored_label(theme::warn(), small("nothing is wired into the matte input"));
+            }
+            if !clip_ok() {
+                ui.colored_label(theme::error(), small(NO_CLIP));
             }
         }
         Op::Output => {
@@ -800,6 +932,32 @@ fn wired_prompt(g: &crate::editor::EditorGraph, node: u64) -> Option<String> {
     None
 }
 
+/// A clip capture's frames, encoded to an mp4 for the run.
+fn encode_clip(frames: Vec<(Vec<u8>, u32, u32)>, fps: f32) -> Result<Clip, String> {
+    let Some((w, h)) = frames.first().map(|f| (f.1, f.2)) else {
+        return Err("the input did not render".into());
+    };
+    if frames.iter().any(|f| (f.1, f.2) != (w, h)) {
+        return Err("the input changed size mid-clip".into());
+    }
+    let n = frames.len() as u32;
+    #[cfg(feature = "movie")]
+    {
+        let path = std::env::temp_dir().join(format!("wobble-genai-clip-{}.mp4", std::process::id()));
+        let px: Vec<Vec<u8>> = frames.into_iter().map(|f| f.0).collect();
+        let r = engine::movie::encode_mp4(&path, &px, w, h, fps)
+            .map_err(|e| format!("encoding the clip: {e:#}"))
+            .and_then(|_| std::fs::read(&path).map_err(|e| format!("reading the clip back: {e}")));
+        let _ = std::fs::remove_file(&path);
+        r.map(|bytes| Clip { bytes, w, h, frames: n, fps })
+    }
+    #[cfg(not(feature = "movie"))]
+    {
+        let _ = (n, fps);
+        Err(NO_CLIP.into())
+    }
+}
+
 fn to_rec709(rgba: &mut [f32], working: engine::color::Colorspace) {
     let t = engine::color::Transform::new(working, engine::color::Colorspace::LINEAR_REC709);
     if t.is_identity() {
@@ -865,6 +1023,7 @@ impl Gfx {
             has_matte: self.egraph.input_of(node, 1).is_some(),
             prompt: self.genai_wired_prompt(node),
             take_missing,
+            fps: self.fps,
         }
     }
 
@@ -966,10 +1125,18 @@ impl Gfx {
             return self.genai_fail(node, pl, "the pipeline reads the node's prompt: wire a String node into it");
         }
         let prompt = prompt.filter(|_| pl.wants_prompt());
+        if (pl.wants_clip() || pl.wants_matte_clip()) && !clip_ok() {
+            return self.genai_fail(node, pl, NO_CLIP);
+        }
         let mut todo = vec![];
-        for (port, wants, what) in [(0, pl.wants_reference(), "image"), (1, pl.wants_matte(), "matte")] {
+        for (port, wants, what) in [
+            (0, pl.wants_reference(), "image"),
+            (1, pl.wants_matte(), "matte"),
+            (CLIP, pl.wants_clip(), "image"),
+            (MATTE_CLIP, pl.wants_matte_clip(), "matte"),
+        ] {
             if wants {
-                if self.egraph.input_of(node, port).is_none() {
+                if self.egraph.input_of(node, input_of_port(port)).is_none() {
                     return self.genai_fail(node, pl, format!("the pipeline reads the node's {what}: wire one in"));
                 }
                 todo.push(port);
@@ -988,11 +1155,12 @@ impl Gfx {
         };
         let tick = self.timeline_pos as i64;
         self.jobs.genai.captured.clear();
+        self.jobs.genai.clip_frames.clear();
         self.jobs.genai.run = Some(Run {
             node,
             pipeline: pl,
             tick,
-            phase: Phase::Capturing { inputs: Inputs { reference: None, matte: None, prompt, comp, tick }, todo },
+            phase: Phase::Capturing { inputs: Inputs { prompt, comp, tick, ..Default::default() }, todo },
             steps: BTreeMap::new(),
         });
         self.genai_capture_next();
@@ -1005,10 +1173,11 @@ impl Gfx {
         let (node, tick, next, pl) = (r.node, r.tick, todo.first().copied(), r.pipeline.clone());
         match next {
             Some(port) => {
-                let Some(input) = self.egraph.input_of(node, port) else {
+                let Some(input) = self.egraph.input_of(node, input_of_port(port)) else {
                     return self.genai_fail(node, pl, "an input was unwired mid-run");
                 };
-                if let Err(e) = self.start_capture(node, input, port, tick) {
+                let frames = if port >= CLIP { self.genai_clip_frames(&pl) } else { 1 };
+                if let Err(e) = self.start_capture(node, input, port, tick, frames) {
                     self.genai_fail(node, pl, e);
                 }
             }
@@ -1016,9 +1185,15 @@ impl Gfx {
         }
     }
 
-    /// A one-frame bake of `input` at `tick`, whose pixels land in
-    /// `genai.captured` instead of a file (`BakeSink::Capture`).
-    fn start_capture(&mut self, node: u64, input: u64, port: usize, tick: i64) -> Result<(), String> {
+    /// How many frames a run's clips are: its length at the comp's rate.
+    fn genai_clip_frames(&self, pl: &Pipeline) -> u64 {
+        ((pl.clip_seconds() * self.fps.max(1.0)).round() as u64).max(1)
+    }
+
+    /// A bake of `input` over `frames` ticks from `tick`, whose pixels land
+    /// in `genai.captured` (one frame) or `genai.clip_frames` (a clip)
+    /// instead of a file (`BakeSink::Capture`).
+    fn start_capture(&mut self, node: u64, input: u64, port: usize, tick: i64, frames: u64) -> Result<(), String> {
         let key = self.subtree_key_of(input).ok_or("the input is not renderable yet")?;
         let (w, h) = self.comp.output_size().ok_or("nothing is rendering yet")?;
         let tick = tick.max(0) as u64;
@@ -1039,7 +1214,7 @@ impl Gfx {
             key,
             dir: std::env::temp_dir(),
             from: tick,
-            len: tick + 1,
+            len: tick + frames.max(1),
             next: tick,
             readback,
             info,
@@ -1055,6 +1230,26 @@ impl Gfx {
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
         let Phase::Capturing { inputs, todo } = &mut r.phase else { return };
         let Some(port) = todo.first().copied() else { return };
+        if port >= CLIP {
+            let frames: Vec<(Vec<u8>, u32, u32)> = std::mem::take(&mut self.jobs.genai.clip_frames)
+                .into_iter()
+                .filter(|c| c.0 == node && c.1 == port)
+                .map(|c| (c.2, c.3, c.4))
+                .collect();
+            match encode_clip(frames, self.fps) {
+                Ok(clip) => {
+                    if port == CLIP {
+                        inputs.clip = Some(clip);
+                    } else {
+                        inputs.matte_clip = Some(clip);
+                    }
+                    todo.remove(0);
+                    self.genai_capture_next();
+                }
+                Err(e) => r.phase = Phase::Failed(e),
+            }
+            return;
+        }
         let Some((_, _, mut px, w, h)) = got.into_iter().find(|c| c.0 == node && c.1 == port) else {
             r.phase = Phase::Failed("the input did not render".into());
             return;
@@ -1194,7 +1389,11 @@ impl Gfx {
         let node = r.node;
         // A capture whose bake died (the input stopped rendering, the rig
         // was rebuilt) leaves no bake and nothing captured.
-        if matches!(r.phase, Phase::Capturing { .. }) && self.graph_bake.is_none() && self.jobs.genai.captured.is_empty() {
+        if matches!(r.phase, Phase::Capturing { .. })
+            && self.graph_bake.is_none()
+            && self.jobs.genai.captured.is_empty()
+            && self.jobs.genai.clip_frames.is_empty()
+        {
             let why = self.load_errors.get(&node).cloned().unwrap_or_else(|| "the input did not render".into());
             r.phase = Phase::Failed(why);
             return;
@@ -1742,7 +1941,16 @@ impl Gfx {
                         .into_iter()
                         .find(|e| e.cat == crate::editor::NodeCat::GenAiStep && e.label == "Input")
                         .unwrap_or_else(|| fail("no Input step in the dive's menu".into()));
-                    self.egraph.add((input.make)(0), egui::pos2(0.0, -400.0));
+                    let step = self.egraph.add((input.make)(0), egui::pos2(0.0, -400.0));
+                    // Viewing the Input step shows what the node's image
+                    // input carries, not the node's take.
+                    let saved = self.egraph.view.replace(step);
+                    let shown = self.render_preview(self.timeline_pos).and_then(|g| g.view);
+                    let wired = self.dive.last().and_then(|d| d.graph.input_of(t.pipe, 0));
+                    if shown.is_none() || shown != wired {
+                        fail(format!("viewing the Input step shows {shown:?}, not the node's input {wired:?}"));
+                    }
+                    self.egraph.view = saved;
                     self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
                     let after = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).cloned().unwrap();
                     if after.pipeline.steps.len() != before.pipeline.steps.len() + 1
@@ -1752,6 +1960,36 @@ impl Gfx {
                     }
                     if after.pipeline.takes != before.pipeline.takes {
                         fail("opening and closing the pipeline changed its takes".into());
+                    }
+                    if clip_ok() {
+                        // A clip model: the plate as the clip AND the matte
+                        // (any picture is a matte), half a second of it.
+                        let entry = crate::editor::node_catalog()
+                            .into_iter()
+                            .find(|e| e.label == "LTX 2.3 video inpaint")
+                            .unwrap_or_else(|| fail("no LTX 2.3 video inpaint in the add menu".into()));
+                        self.next_read_slot += 1;
+                        let mut kind = (entry.make)(self.next_read_slot - 1);
+                        if let Some(p) = params_mut(&mut kind) {
+                            for s in &mut p.pipeline.steps {
+                                if let Op::ClipIn { seconds } = &mut s.op {
+                                    *seconds = 0.5;
+                                }
+                                if let Op::Prompt { text } = &mut s.op {
+                                    *text = "empty street".into();
+                                }
+                            }
+                        }
+                        let read = self.egraph.input_of(t.pipe, 0).unwrap();
+                        let v = self.egraph.add(kind, egui::pos2(360.0, 600.0));
+                        self.egraph.connect(v, 0, read);
+                        self.egraph.connect(v, 1, read);
+                        self.timeline_pos = 0;
+                        self.genai_action(v, Action::Prepare);
+                        t.node = v;
+                        next(&mut t, 9);
+                        self.test.genai = Some(t);
+                        return;
                     }
                     println!(
                         "GENAI TEST PASS: a local pipeline captured the plate at the playhead and \
@@ -1763,6 +2001,45 @@ impl Gfx {
                          run below an un-run model, and read a wired String as the same request; \
                          the pipeline opens as a graph of step nodes and a step added there comes \
                          back out as a step"
+                    );
+                    std::process::exit(0);
+                }
+                _ => {}
+            },
+            9 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the clip run failed before the quote: {e}")),
+                Some(Phase::Ready { inputs, .. }) => {
+                    let (Some(c), Some(m)) = (&inputs.clip, &inputs.matte_clip) else {
+                        fail("the clip run captured no clip or no matte clip".into())
+                    };
+                    let want = (0.5 * self.fps).round() as u32;
+                    if c.frames != want || m.frames != want || (c.w, c.h) != (m.w, m.h) {
+                        fail(format!("clip {}x{} x{}, matte {}x{} x{}, expected {want} frames each, same size",
+                            c.w, c.h, c.frames, m.w, m.h, m.frames));
+                    }
+                    if c.w.min(c.h) > CLIP_SHORT || c.w % 2 != 0 || c.h % 2 != 0 {
+                        fail(format!("the clip is {}x{}: over {CLIP_SHORT} px short side, or odd", c.w, c.h));
+                    }
+                    #[cfg(feature = "movie")]
+                    {
+                        let f = std::env::temp_dir().join(format!("wobble-test-genai-clip-{}.mp4", std::process::id()));
+                        let _ = std::fs::write(&f, &c.bytes);
+                        let n = engine::decode::ExrDecoder::frame_count(&engine::movie::MovieDecoder::default(), &f);
+                        let _ = std::fs::remove_file(&f);
+                        if n.as_ref().ok() != Some(&(want as u64)) {
+                            fail(format!("the clip's mp4 decodes to {n:?} frames, expected {want}"));
+                        }
+                    }
+                    let submits = t.fake.as_ref().unwrap().submits();
+                    if submits != 1 {
+                        fail(format!("the clip run submitted {} request(s) before pay & run", submits - 1));
+                    }
+                    println!(
+                        "GENAI TEST PASS: local, remote, cached, one-model and dive stages as before; \
+                         an LTX video inpaint node captured {want} frames of the plate and of its \
+                         matte from the playhead, encoded them as a {}x{} mp4 that decodes back \
+                         to {want} frames, and stopped at the quote with nothing sent",
+                        c.w, c.h
                     );
                     std::process::exit(0);
                 }
@@ -1791,6 +2068,19 @@ mod tests {
     use super::*;
     fn kind() -> NodeKind {
         NodeKind::GenAi(GenAiParams::new(0))
+    }
+
+    #[test]
+    fn a_2k_clip_frame_comes_out_at_720_and_even() {
+        let px = vec![0.18f32; 2048 * 1080 * 4];
+        let (rgb, w, h) = super::clip_frame(&px, 2048, 1080, true);
+        assert_eq!((w, h), (1364, 720));
+        assert_eq!(rgb.len(), (w * h * 3) as usize);
+        let want = (genai::image::srgb_encode(0.18) * 255.0 + 0.5) as u8;
+        assert!(rgb.iter().all(|&v| v == want));
+        // Smaller than the cap: kept, cut to even.
+        let (_, w, h) = super::clip_frame(&vec![0.5; 513 * 289 * 4], 513, 289, false);
+        assert_eq!((w, h), (512, 288));
     }
 
     #[test]
@@ -1849,6 +2139,7 @@ mod tests {
             has_matte: false,
             prompt: None,
             take_missing: true,
+            fps: 24.0,
         }
     }
 

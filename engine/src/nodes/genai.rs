@@ -109,8 +109,8 @@ impl GenAiParams {
 
     pub fn input_name(input: usize) -> &'static str {
         match input {
-            0 => "image (the reference)",
-            1 => "matte (where to fill)",
+            0 => "image (the reference, or the clip)",
+            1 => "matte (where to fill, a frame or a clip)",
             _ => "prompt (a String node's text)",
         }
     }

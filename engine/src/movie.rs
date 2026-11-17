@@ -596,6 +596,111 @@ fn code_to_half() -> &'static [f16] {
     LUT.get_or_init(|| (0..=u16::MAX).map(|v| f16::from_f32(v as f32 / 65535.0)).collect())
 }
 
+/// The H.264-or-better encoders we try for [`encode_mp4`], best first. The
+/// last is FFmpeg's own MPEG-4 Part 2, built into every FFmpeg that has
+/// encoders at all (no external library, LGPL).
+const MP4_ENCODERS: [&str; 4] = ["h264_videotoolbox", "libx264", "libopenh264", "mpeg4"];
+
+/// Can this build write an mp4 (`encode_mp4`)? A release build's FFmpeg is
+/// decoders-only.
+pub fn can_encode_mp4() -> bool {
+    init();
+    MP4_ENCODERS.iter().any(|n| ff::encoder::find_by_name(n).is_some())
+}
+
+/// Write `frames` (tight 8-bit sRGB RGB, `w`×`h` each) to an mp4 at `fps`,
+/// Rec.709 YCbCr, tagged so. What a GenAI clip step sends a video model:
+/// a picture to look at, not a master, so 4:2:0 and a generous bit rate.
+/// `w` and `h` must be even.
+pub fn encode_mp4(path: &Path, frames: &[Vec<u8>], w: u32, h: u32, fps: f32) -> Result<()> {
+    init();
+    if frames.is_empty() || w % 2 != 0 || h % 2 != 0 {
+        return Err(anyhow!("encode_mp4: {} frames at {w}x{h} (both sides must be even)", frames.len()));
+    }
+    let codec = MP4_ENCODERS
+        .iter()
+        .find_map(|n| ff::encoder::find_by_name(n))
+        .ok_or_else(|| anyhow!("this build's FFmpeg has no video encoder (release builds are decode-only)"))?;
+    let mut octx = ff::format::output(&path).with_context(|| format!("open {}", path.display()))?;
+    let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
+    // Whole-number rates stay exact; 23.976 and friends go over 1001.
+    let tb = if (fps - fps.round()).abs() < 1e-3 {
+        ff::Rational::new(fps.round().max(1.0) as i32, 1).invert()
+    } else {
+        ff::Rational::new(1001, (fps * 1001.0).round() as i32)
+    };
+    let mut enc = ff::codec::context::Context::new_with_codec(codec).encoder().video()?;
+    let yuv = ff::format::Pixel::YUV420P;
+    enc.set_width(w);
+    enc.set_height(h);
+    enc.set_format(yuv);
+    enc.set_time_base(tb);
+    enc.set_frame_rate(Some(tb.invert()));
+    // ~0.2 bits per pixel per frame: 720p24 at about 4.5 Mbit/s.
+    enc.set_bit_rate(((w as f64 * h as f64 * fps as f64) * 0.2).max(1e6) as usize);
+    enc.set_gop(fps.round().max(1.0) as u32);
+    enc.set_colorspace(ff::color::Space::BT709);
+    enc.set_color_range(ff::color::Range::MPEG);
+    if global_header {
+        enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+    }
+    let mut enc = enc.open_as(codec).context("opening the video encoder")?;
+    let mut stream = octx.add_stream(codec)?;
+    stream.set_parameters(&enc);
+    stream.set_time_base(tb);
+    let index = stream.index();
+    octx.write_header()?;
+    // After write_header: the muxer picks its own timescale.
+    let stream_tb = octx.stream(index).unwrap().time_base();
+    let mut sc = ff::software::scaling::Context::get(
+        ff::format::Pixel::RGB24,
+        w,
+        h,
+        yuv,
+        w,
+        h,
+        ff::software::scaling::Flags::BICUBIC,
+    )?;
+    unsafe {
+        let coeffs = ff::ffi::sws_getCoefficients(ff::ffi::SWS_CS_ITU709 as i32);
+        // Full-range RGB in, studio-range Rec.709 YCbCr out.
+        ff::ffi::sws_setColorspaceDetails(sc.as_mut_ptr(), coeffs, 1, coeffs, 0, 0, 1 << 16, 1 << 16);
+    }
+    let drain = |enc: &mut ff::codec::encoder::Video, octx: &mut ff::format::context::Output| -> Result<()> {
+        let mut packet = ff::Packet::empty();
+        while enc.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(index);
+            packet.rescale_ts(tb, stream_tb);
+            packet.write_interleaved(octx)?;
+        }
+        Ok(())
+    };
+    let row = w as usize * 3;
+    for (n, px) in frames.iter().enumerate() {
+        if px.len() != row * h as usize {
+            return Err(anyhow!("encode_mp4: frame {n} is {} bytes, not {}", px.len(), row * h as usize));
+        }
+        let mut rgb = ff::frame::Video::new(ff::format::Pixel::RGB24, w, h);
+        let stride = rgb.stride(0);
+        let data = rgb.data_mut(0);
+        for y in 0..h as usize {
+            data[y * stride..y * stride + row].copy_from_slice(&px[y * row..(y + 1) * row]);
+        }
+        // A FRESH output frame each time: the encoder may hold on to it.
+        let mut out = ff::frame::Video::new(yuv, w, h);
+        sc.run(&rgb, &mut out)?;
+        out.set_pts(Some(n as i64));
+        out.set_color_space(ff::color::Space::BT709);
+        out.set_color_range(ff::color::Range::MPEG);
+        enc.send_frame(&out)?;
+        drain(&mut enc, &mut octx)?;
+    }
+    enc.send_eof()?;
+    drain(&mut enc, &mut octx)?;
+    octx.write_trailer()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ff, rgba_scaler};
