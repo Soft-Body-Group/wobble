@@ -251,7 +251,8 @@ mod tests {
         assert_eq!(ids(&all), ["fal/flux-schnell", "fal/flux-dev", "fal/nano-banana-2"]);
         for x in &all {
             let out = x.output().unwrap();
-            assert_eq!(x.plan(out).unwrap().len(), x.steps.len(), "still wired end to end");
+            // Every step but the two Inputs the prompt-only model ignores.
+            assert_eq!(x.plan(out).unwrap().len(), x.steps.len() - 2, "still wired end to end");
         }
         assert_eq!(v.count(&p), 3);
     }

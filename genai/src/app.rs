@@ -76,7 +76,7 @@ pub fn has(p: &Pipeline, i: usize, what: What) -> bool {
     match (&s.op, what) {
         (Op::Prompt { .. } | Op::Template { .. }, What::Text) => true,
         (Op::Generate { .. } | Op::Comfy { .. }, What::Seed) => true,
-        (Op::ClipIn { .. }, What::ClipSeconds) => true,
+        (Op::Input { clip: true, .. }, What::ClipSeconds) => true,
         (Op::Generate { model, .. }, w) => match (catalog::get(model), w) {
             (Some(m), What::Scale) => {
                 matches!(m.task, Task::Upscale | Task::VideoUpscale | Task::Outpaint) && m.dialect.scale_range().is_some()
@@ -154,7 +154,7 @@ pub fn number(p: &Pipeline, i: usize, what: What) -> Option<f32> {
         (Op::Generate { opts, .. }, What::Scale) => Some(opts.scale),
         (Op::Generate { opts, .. }, What::Megapixels) => Some(opts.megapixels),
         (Op::Generate { opts, .. }, What::Seconds) => Some(opts.seconds as f32),
-        (Op::ClipIn { seconds }, What::ClipSeconds) => Some(*seconds),
+        (Op::Input { clip: true, seconds, .. }, What::ClipSeconds) => Some(*seconds),
         _ => None,
     }
 }
@@ -163,13 +163,16 @@ pub fn number(p: &Pipeline, i: usize, what: What) -> Option<f32> {
 pub fn set_number(p: &mut Pipeline, i: usize, what: What, v: f32) -> bool {
     let Some(r) = range(p, i, what) else { return false };
     let v = v.clamp(r.lo, r.hi);
+    if what == What::ClipSeconds && has(p, i, what) {
+        // Every clip a run sends covers the same frames.
+        return p.set_clip_seconds(v);
+    }
     let Some(s) = p.steps.get_mut(i) else { return false };
     match (&mut s.op, what) {
         (Op::Generate { seed, .. } | Op::Comfy { seed, .. }, What::Seed) => replace(seed, v.round() as u32),
         (Op::Generate { opts, .. }, What::Scale) => replace(&mut opts.scale, v),
         (Op::Generate { opts, .. }, What::Megapixels) => replace(&mut opts.megapixels, v),
         (Op::Generate { opts, .. }, What::Seconds) => replace(&mut opts.seconds, v.round() as u32),
-        (Op::ClipIn { seconds }, What::ClipSeconds) => replace(seconds, v),
         _ => false,
     }
 }

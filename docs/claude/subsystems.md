@@ -1376,9 +1376,9 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   (`innards::provider` returns None), no model menu, `node_label` is the
   model's label. The add menu gets one entry per `genaiui::offered_models()`
   row, which is why `NodeEntry::make` is an `Arc<dyn Fn>`, not a fn
-  pointer. A wired String swaps Prompt for PromptIn only in
-  `genai_runnable` (the run's copy, and what staleness compares) — never
-  written back. `genai_unrun_upstream` refuses a capture through a GenAI
+  pointer. Its inputs are what its model's ports name (first image always).
+  `genai_runnable` is the run's copy (normalized), what staleness
+  compares. `genai_unrun_upstream` refuses a capture through a GenAI
   node with no take (it would pass the plate through and bill for that).
 - **Depth and normals are DATA takes.** `Task::is_data()` (Depth,
   Normals) → `Take::data` at run time → `GenAiParams::data()` →
@@ -1399,13 +1399,37 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   its video port may be fed by a video step, not only the captured clip.
   `genai/tests/live.rs` (ignored, free) asks fal's pricing API about every
   catalog endpoint; run it after adding rows.
-- **The node has a FOURTH input, the second picture** (`genaiui::SECOND`
-  = 3, after the prompt's 2): `Op::Second` reads it, captured and sent
-  like the image (`Inputs::second`), keyed on its bytes. A catalog port
-  named `"reference"` gets an `Op::Second` in `Pipeline::for_model`
-  (`Task::EditRef`). A ready-made node over a general model is a DIALECT
-  with a fixed instruction (`Dialect::GeminiRef { instruction }`,
-  `Dialect::instruct`), not a new field on every catalog row.
+- **Inputs are a BAR, and each is an Input step inside.** The node's
+  inputs are `Pipeline::ins` (`InKind::Image | Matte`, default one of
+  each; `GenAiParams::inputs()`), drawn as a Layer-style bar
+  (`breakout::bar`: pictures left, mattes right, a one-model node keeps
+  its disc). An input's INDEX is the order it was added, so adding one
+  renumbers nothing; removing one goes through `genaiui::remove_input`,
+  which slides the host's edges (and `edge_out`, hidden wires). Inside,
+  every input is exactly one `Op::Input { input, matte, nth, clip,
+  seconds }` (`Pipeline::sync_inputs`: added, folded, healed after a
+  dive — an Input deleted inside comes back; Delete skips them; the add
+  menu never offers one). Input 0 is always an image (it is passed
+  through unloaded) and the last image cannot be removed. A noodle
+  dropped on the bar takes an empty input on that side or adds one
+  (`hit_layer_bar`, k past the pictures = matte side); the panel has +/×.
+  The run captures only `Pipeline::reads()` (Inputs on the way to
+  Output); capture ports are `capture_port(input, matte, clip)`
+  (CLIP/MATTE flags), `Inputs::pics` / `clips` keyed by node input.
+  Keys use `run::input_tag`, the old names (reference/second/matte/clip/
+  matte-clip) for the first ones, so old cached results still hit.
+  **No prompt input**: prompts live inside. Old files (`ins` empty) go
+  through `Pipeline::normalize` (old Reference/Matte/Second/ClipIn/
+  MatteClip become Inputs, PromptIn a Prompt) and `genaiui::
+  migrate_inputs` in `apply_setup_doc` (a wired String's text is copied
+  in, the old input-3 wire moves to its new index). Built-in templates
+  are still written with the old source ops; `Template::pipeline`, a
+  template apply and a recipe restore all `normalize`.
+  A catalog port named `"reference"` gets a second image input in
+  `Pipeline::for_model` (`Task::EditRef`). A ready-made node over a
+  general model is a DIALECT with a fixed instruction
+  (`Dialect::GeminiRef { instruction }`, `Dialect::instruct`), not a new
+  field on every catalog row.
   `Task::Outpaint` resizes like an upscaler; Bria Expand's canvas is
   computed from the picture's real size at run time (`run::expand_canvas`;
   the request builder only has the comp's, which is what a quote uses).
@@ -1518,11 +1542,11 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   every still's key is unchanged (no `KEY_VERSION` bump); keep it so.
   Request quirks per model live in `catalog::Dialect`, not in endpoint
   string tests.
-- **Clips** (`Op::ClipIn` / `Op::MatteClip`, `Task::VideoEdit` /
-  `VideoInpaint`): the image / matte input over `Pipeline::clip_seconds`
-  from the playhead, on the `Pipe::Video` pipe. Captured by the SAME
-  capture bake over N ticks (`genaiui::CLIP`/`MATTE_CLIP` capture ports =
-  input + 10); each frame is converted ON ARRIVAL in `Runs::take_capture`
+- **Clips** (an `Op::Input` with `clip` on, `Task::VideoEdit` /
+  `VideoInpaint`): that input over `Pipeline::clip_seconds` (all clip
+  Inputs share one length, `set_clip_seconds`) from the playhead, on the
+  `Pipe::Video` pipe. Captured by the SAME capture bake over N ticks
+  (the CLIP flag on the capture port); each frame is converted ON ARRIVAL in `Runs::take_capture`
   (Rec.709, box-averaged to `CLIP_SHORT` = 720 short side, even sides,
   8-bit) — never keep float frames per tick — then
   `engine::movie::encode_mp4` makes the upload. Release FFmpeg is

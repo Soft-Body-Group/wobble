@@ -52,6 +52,8 @@ pub fn restore(p: &mut Pipeline, recipe: &[Step], fixed: Option<&str>) -> bool {
         for i in 0..p.steps.len() {
             p.sync_ports(i);
         }
+        // An old recipe's source steps become this node's Inputs.
+        p.normalize();
         return true;
     };
     let Some((seed, opts)) = recipe.iter().find_map(|s| match &s.op {

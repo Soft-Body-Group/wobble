@@ -44,23 +44,22 @@ pub const REF_MP: f32 = 2.0;
 /// work at, and the floor Kling asks for.
 pub const CLIP_SHORT: u32 = 720;
 
-/// Capture "ports" beyond the node's own inputs: input 0 (the image) and
-/// input 1 (the matte) rendered over the run's RANGE for a `ClipIn` /
-/// `MatteClip` step, rather than at the playhead. `port - CLIP` is the
-/// input rendered.
-pub const CLIP: usize = 10;
-pub const MATTE_CLIP: usize = 11;
+/// A capture "port" is the node input it renders, plus these flags: CLIP
+/// renders it over the run's RANGE (a clip Input) rather than at the
+/// playhead, MATTE takes it as coverage. Flags ride in the port so the
+/// bake loop's hand-off (`Runs::take_capture`, field borrows only) can
+/// convert a frame without looking at the node.
+pub const CLIP: usize = 0x100;
+pub const MATTE: usize = 0x200;
 
-/// The node input (and capture port) of the second picture.
-pub const SECOND: usize = 3;
+/// The capture port of node input `input`, read as a still or a clip.
+pub fn capture_port(input: usize, matte: bool, clip: bool) -> usize {
+    input | if clip { CLIP } else { 0 } | if matte { MATTE } else { 0 }
+}
 
 /// The node input a capture port renders.
 fn input_of_port(port: usize) -> usize {
-    if port >= CLIP {
-        port - CLIP
-    } else {
-        port
-    }
+    port & 0xff
 }
 
 /// Can this build send a clip? It must encode an mp4 (a release build's
@@ -172,13 +171,12 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
     steps
 }
 
-/// The step nodes the dive's add menu offers: the node's inputs, one node
-/// per model (no model menu, the same rule as the comp), ComfyUI, Output.
+/// The step nodes the dive's add menu offers: a prompt, a template, one
+/// node per model (no model menu, the same rule as the comp), ComfyUI, Output.
 pub fn step_entries() -> Vec<(&'static str, Op)> {
-    let mut v = vec![Op::Prompt { text: String::new() }, Op::PromptIn, Op::Reference, Op::Matte, Op::Second];
-    if clip_ok() {
-        v.extend([Op::ClipIn { seconds: 5.0 }, Op::MatteClip]);
-    }
+    // No inputs: each of the node's inputs is already in here as its own
+    // Input step (add one on the node's bar, or in its panel).
+    let mut v = vec![Op::Prompt { text: String::new() }];
     v.push(Op::Template { text: "{a}".into() });
     v.extend(
         catalog::CATALOG
@@ -265,11 +263,12 @@ impl Runs {
     /// it runs inside `step_graph_bake`). A still is kept as float for the
     /// PNG; a clip frame is converted on the spot.
     pub fn take_capture(&mut self, working: engine::color::Colorspace, node: u64, port: usize, mut px: Vec<f32>, w: u32, h: u32) {
-        if port < CLIP {
+        if port & CLIP == 0 {
             self.captured.push((node, port, px, w, h));
             return;
         }
-        if port == CLIP {
+        let picture = port & MATTE == 0;
+        if picture {
             to_rec709(&mut px, working);
         } else {
             // Coverage rides every channel of a matte; take red, as grey.
@@ -278,7 +277,7 @@ impl Runs {
                 p[2] = p[0];
             }
         }
-        let (rgb, cw, ch) = clip_frame(&px, w, h, port == CLIP);
+        let (rgb, cw, ch) = clip_frame(&px, w, h, picture);
         self.clip_frames.push((node, port, rgb, cw, ch));
     }
 }
@@ -389,11 +388,8 @@ pub struct View {
     pub steps: BTreeMap<usize, StepState>,
     /// Another node's run is going.
     pub busy_elsewhere: bool,
-    /// What the node's inputs have wired, for the hints.
-    pub has_input: bool,
-    pub has_matte: bool,
-    /// The text on the node's prompt port (a wired String node), if any.
-    pub prompt: Option<String>,
+    /// Per node input, whether something is wired into it, for the hints.
+    pub wired: Vec<bool>,
     /// The picked take's file is not on this machine.
     pub take_missing: bool,
     /// The comp's frame rate, for a clip's frame count.
@@ -428,6 +424,9 @@ pub enum Action {
     ForgetKey(Key),
     SaveComfy(String),
     Refresh,
+    /// Remove node input `k` (and its Input step); the wires after it
+    /// move down one, so it needs the graph.
+    RemoveInput(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -473,6 +472,9 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Ac
             // App mode: the form, and nothing else of the pipeline.
             appui::form(&mut cols[0], node, p);
         } else {
+            if let Some(a) = inputs_row(&mut cols[0], node, p, v) {
+                act = Some(a);
+            }
             pipeline_column(&mut cols[0], p, v);
             cols[0].horizontal(|ui| {
                 tmpl::menu(ui, node, p);
@@ -498,18 +500,61 @@ fn model_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) {
         if i == g || matches!(pl.steps[i].op, Op::Output) {
             continue;
         }
+        // An Input the model does not read is the node's first image,
+        // kept only to pass through: nothing to say about it here.
+        if matches!(pl.steps[i].op, Op::Input { .. }) && !pl.steps.iter().any(|s| s.inputs.contains(&Some(i))) {
+            continue;
+        }
         let id = move |what: &str| egui::Id::new(("genai", node, i, what.to_string()));
-        if matches!(pl.steps[i].op, Op::Prompt { .. }) && v.prompt.is_some() {
-            // A wired String node wins over the typed prompt (the run reads
-            // the port instead), so say so rather than offer a dead box.
-            op_fields(ui, &id, &mut Op::PromptIn, v, false);
-        } else {
-            op_fields(ui, &id, &mut pl.steps[i].op, v, false);
+        // The model fixes whether an input is a clip: its port says.
+        let was = match pl.steps[i].op {
+            Op::Input { clip, .. } => Some(clip),
+            _ => None,
+        };
+        op_fields(ui, &id, &mut pl.steps[i].op, v, false);
+        if let (Some(was), Op::Input { clip, .. }) = (was, &mut pl.steps[i].op) {
+            *clip = was;
         }
         ui.add_space(2.0);
     }
     let id = move |what: &str| egui::Id::new(("genai", node, g, what.to_string()));
     op_fields(ui, &id, &mut pl.steps[g].op, v, false);
+}
+
+/// The node's inputs as its bar has them, pictures then mattes, each with
+/// a × (not the last picture: it is what an unloaded node passes through),
+/// and a + for each kind. Each is an Input node inside, made and removed
+/// with it.
+fn inputs_row(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Action> {
+    let mut act = None;
+    let pl = &mut p.pipeline;
+    let images = pl.ins.iter().filter(|k| **k == genai::InKind::Image).count();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(small("inputs"));
+        for kind in [genai::InKind::Image, genai::InKind::Matte] {
+            for k in (0..pl.ins.len()).filter(|&k| pl.ins[k] == kind) {
+                let i = pl.input_step(k);
+                let name = i.map(|i| pl.steps[i].op.label()).unwrap_or_default();
+                let wired = v.wired.get(k).copied().unwrap_or(false);
+                let t = if wired { small(name) } else { small(name).weak() };
+                ui.label(t).on_hover_text(if wired { "wired" } else { "nothing wired into it yet" });
+                let can = !(kind == genai::InKind::Image && images <= 1);
+                let r = ui.add_enabled(can, egui::Button::new(small("×")).small());
+                crate::widgets::note_rect(ui, egui::Id::new(("genai-input-x", node, k)), r.rect);
+                if r.on_hover_text("remove this input (and its Input node inside)").clicked() {
+                    act = Some(Action::RemoveInput(k));
+                }
+            }
+        }
+        for (kind, what) in [(genai::InKind::Image, "+ image"), (genai::InKind::Matte, "+ matte")] {
+            let r = ui.small_button(small(what));
+            crate::widgets::note_rect(ui, egui::Id::new(("genai-input-add", node, what)), r.rect);
+            if r.on_hover_text("another input on the node's bar, with its own Input node inside").clicked() {
+                pl.add_input(kind);
+            }
+        }
+    });
+    act
 }
 
 /// A GenAI Pipeline's left column: what its steps are, in run order, and
@@ -557,65 +602,47 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                     .desired_width(f32::INFINITY),
             );
         }
-        Op::PromptIn => {
-            ui.label(small("the text on the node's prompt port: wire a String node into it"));
-            match &v.prompt {
-                Some(t) if !t.is_empty() => {
-                    ui.weak(small(t.chars().take(200).collect::<String>()));
+        Op::Input { input, matte, clip, seconds, .. } => {
+            let what = if *matte { "matte" } else { "image" };
+            let wired = v.wired.get(*input).copied().unwrap_or(false);
+            if *clip {
+                ui.label(small(format!("the node's {what} input over a range from the playhead, sent as an mp4")));
+            } else if *matte {
+                ui.label(small("the node's matte input at the playhead: white = where to work"));
+            } else {
+                ui.label(small("the node's image input, rendered at the playhead when you run"));
+            }
+            if clip_ok() || *clip {
+                ui.horizontal(|ui| {
+                    ui.checkbox(clip, small("clip"))
+                        .on_hover_text("send this input over a range of frames, for a video model");
+                    if *clip {
+                        ui.label(small("length"));
+                        ui.add(egui::DragValue::new(seconds).range(0.5..=30.0).speed(0.05).suffix(" s"));
+                    }
+                });
+            }
+            if *clip {
+                ui.weak(small(format!(
+                    "{:.0} frames at the comp's rate, up to {CLIP_SHORT} px on the short side",
+                    (*seconds * v.fps).round()
+                )));
+                if !clip_ok() {
+                    ui.colored_label(theme::error(), small(NO_CLIP));
                 }
-                Some(_) => {
-                    ui.colored_label(theme::warn(), small("the wired String node is empty"));
-                }
-                None => {
-                    ui.colored_label(theme::warn(), small("no String node is wired into the prompt port"));
-                }
+            } else if !*matte {
+                ui.weak(small(format!(
+                    "sent as sRGB at up to {REF_MP} MP: values above 1.0 come back clipped"
+                )));
+            } else {
+                ui.weak(small("wire a Roto, Paint or Sammie into it"));
+            }
+            if !wired {
+                ui.colored_label(theme::warn(), small(format!("nothing is wired into this {what} input")));
             }
         }
-        Op::Reference => {
-            ui.label(small("the node's image input, rendered at the playhead when you run"));
-            ui.weak(small(format!(
-                "sent as sRGB at up to {REF_MP} MP: values above 1.0 come back clipped"
-            )));
-            if !v.has_input {
-                ui.colored_label(theme::warn(), small("nothing is wired into the image input"));
-            }
-        }
-        Op::Matte => {
-            ui.label(small("the node's matte input at the playhead: white = where to work"));
-            if !v.has_matte {
-                ui.colored_label(theme::warn(), small("nothing is wired into the matte input"));
-            }
-        }
-        Op::Second => {
-            ui.label(small("the node's second picture input at the playhead: a look to match, a style, an object"));
-            ui.weak(small(format!("sent as sRGB at up to {REF_MP} MP, like the image")));
-        }
-        Op::ClipIn { seconds } => {
-            ui.label(small("the node's image input over a range from the playhead, sent as an mp4"));
-            ui.horizontal(|ui| {
-                ui.label(small("length"));
-                ui.add(egui::DragValue::new(seconds).range(0.5..=30.0).speed(0.05).suffix(" s"));
-            });
-            ui.weak(small(format!(
-                "{:.0} frames at the comp's rate, sRGB, up to {CLIP_SHORT} px on the short side",
-                (*seconds * v.fps).round()
-            )));
-            if !v.has_input {
-                ui.colored_label(theme::warn(), small("nothing is wired into the image input"));
-            }
-            if !clip_ok() {
-                ui.colored_label(theme::error(), small(NO_CLIP));
-            }
-        }
-        Op::MatteClip => {
-            ui.label(small("the node's matte input over the Input Clip's range: white = where to work"));
-            ui.weak(small("wire a Roto, Paint or Sammie into the node's matte input"));
-            if !v.has_matte {
-                ui.colored_label(theme::warn(), small("nothing is wired into the matte input"));
-            }
-            if !clip_ok() {
-                ui.colored_label(theme::error(), small(NO_CLIP));
-            }
+        Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
+            ui.colored_label(theme::warn(), small("a step from an older build: step out and back in to update it"));
         }
         Op::Output => {
             ui.label(small("the node's picture: wire the step whose result you want"));
@@ -971,7 +998,108 @@ fn key_row(ui: &mut Ui, label: &str, which: Key, origin: Option<Origin>) -> Opti
 /// Working-space RGBA -> linear Rec.709, the space `genai::image` encodes
 /// from.
 /// The text on `node`'s prompt port: a String node wired in, through Dots.
-fn wired_prompt(g: &crate::editor::EditorGraph, node: u64) -> Option<String> {
+/// Bring every GenAI node in `g` written before the input bar to this
+/// shape (`Pipeline::normalize`), moving its wires with it: the old fixed
+/// inputs were image 0, matte 1, prompt 2, second picture 3. The prompt
+/// input is gone — the text of a Prompt node wired there is copied into
+/// the pipeline's Prompt steps that were reading it (or, on a one-model
+/// node, its typed prompt), and the wire dropped. The second picture's
+/// wire moves to the image input it became. Returns how many nodes moved.
+pub fn migrate_inputs(g: &mut crate::editor::EditorGraph) -> usize {
+    let ids: Vec<u64> = g
+        .nodes
+        .iter()
+        .filter(|(_, n)| matches!(&n.kind, NodeKind::GenAi(p) if p.pipeline.ins.is_empty()))
+        .map(|(id, _)| *id)
+        .collect();
+    for &id in &ids {
+        let text = wired_prompt(g, id);
+        let second = g.input_of(id, 3);
+        let Some(p) = g.node_mut(id).and_then(|n| params_mut(&mut n.kind)) else { continue };
+        let one_model = p.model.is_some();
+        // Which steps read the old port, before they stop saying so.
+        let readers: Vec<usize> = p
+            .pipeline
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s.op, Op::PromptIn))
+            .map(|(i, _)| i)
+            .collect();
+        let legacy = p.pipeline.normalize().unwrap_or_default();
+        if let Some(t) = &text {
+            for (i, s) in p.pipeline.steps.iter_mut().enumerate() {
+                // A one-model node read the wire IN PLACE of its typed
+                // prompt (the run swapped them).
+                if readers.contains(&i) || one_model {
+                    if let Op::Prompt { text } = &mut s.op {
+                        *text = t.clone();
+                    }
+                }
+            }
+        }
+        let to = match (legacy.second, second) {
+            (Some(k), _) => Some(k),
+            // Wired but never read: keep the wire, on an input of its own.
+            (None, Some(_)) => Some(p.pipeline.add_input(genai::InKind::Image)),
+            (None, None) => None,
+        };
+        g.edges.retain(|(d, i, _)| !(*d == id && *i == 2));
+        match to {
+            Some(k) => {
+                for e in g.edges.iter_mut().filter(|(d, i, _)| *d == id && *i == 3) {
+                    e.1 = k;
+                }
+            }
+            None => g.edges.retain(|(d, i, _)| !(*d == id && *i == 3)),
+        }
+        g.hidden_wires.retain(|(d, i)| !(*d == id && *i >= 2));
+        g.edge_out.remove(&(id, 2));
+        if let Some(o) = g.edge_out.remove(&(id, 3)) {
+            if let Some(k) = to {
+                g.edge_out.insert((id, k), o);
+            }
+        }
+    }
+    ids.len()
+}
+
+/// Remove input `k` of GenAI node `node` (its Input step goes with it),
+/// moving the wires of the inputs after it down one. Refused for the
+/// last image (`Pipeline::remove_input`).
+pub fn remove_input(g: &mut crate::editor::EditorGraph, node: u64, k: usize) -> bool {
+    let Some(p) = g.node_mut(node).and_then(|n| params_mut(&mut n.kind)) else { return false };
+    if !p.pipeline.remove_input(k) {
+        return false;
+    }
+    g.edges.retain(|(d, i, _)| !(*d == node && *i == k));
+    for e in g.edges.iter_mut().filter(|(d, i, _)| *d == node && *i > k) {
+        e.1 -= 1;
+    }
+    let hidden: Vec<(u64, usize)> = g.hidden_wires.iter().copied().filter(|(d, _)| *d == node).collect();
+    for (d, i) in hidden {
+        g.hidden_wires.remove(&(d, i));
+        if i > k {
+            g.hidden_wires.insert((d, i - 1));
+        }
+    }
+    let outs: Vec<((u64, usize), u32)> =
+        g.edge_out.iter().filter(|((d, _), _)| *d == node).map(|(a, b)| (*a, *b)).collect();
+    for ((d, i), o) in outs {
+        g.edge_out.remove(&(d, i));
+        if i > k {
+            g.edge_out.insert((d, i - 1), o);
+        } else if i < k {
+            g.edge_out.insert((d, i), o);
+        }
+    }
+    true
+}
+
+/// LEGACY: the text on a GenAI node's old prompt port (input 2), the
+/// Prompt node wired there through any dots — what the setup migration
+/// copies into the pipeline's Prompt steps.
+pub(crate) fn wired_prompt(g: &crate::editor::EditorGraph, node: u64) -> Option<String> {
     let mut src = g.input_of(node, 2)?;
     for _ in 0..64 {
         match &g.node(src)?.kind {
@@ -1045,10 +1173,9 @@ impl Gfx {
             None => ViewState::Idle,
             Some(Phase::Capturing { .. }) => ViewState::Capturing,
             Some(Phase::Quoting { .. }) => ViewState::Quoting,
-            Some(Phase::Ready { plan, quote, inputs }) => {
+            Some(Phase::Ready { plan, quote, .. }) => {
                 let r = mine.unwrap();
                 let stale = self.genai_runnable(node).is_none_or(|p| p.steps != r.pipeline.steps)
-                    || self.genai_prompt_moved(node, &r.pipeline, inputs)
                     || self.egraph.node(node).and_then(|n| params(&n.kind)).is_none_or(|p| p.vary != r.vary);
                 let billed = plan.billed(&r.pipeline).len()
                     + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
@@ -1074,9 +1201,7 @@ impl Gfx {
             steps: mine.map(|r| r.steps.clone()).unwrap_or_default(),
             texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
-            has_input: self.egraph.input_of(node, 0).is_some(),
-            has_matte: self.egraph.input_of(node, 1).is_some(),
-            prompt: self.genai_wired_prompt(node),
+            wired: self.genai_wired(&self.egraph, node),
             take_missing,
             fps: self.fps,
         }
@@ -1085,6 +1210,11 @@ impl Gfx {
     pub(crate) fn genai_action(&mut self, node: u64, a: Action) {
         match a {
             Action::Prepare => self.genai_prepare(node),
+            Action::RemoveInput(k) => {
+                if remove_input(&mut self.egraph, node, k) {
+                    self.playback_dirty = true;
+                }
+            }
             Action::Confirm => self.genai_confirm(node),
             Action::Cancel => {
                 if let Some(r) = self.jobs.genai.run.take() {
@@ -1183,26 +1313,19 @@ impl Gfx {
                 return self.genai_fail(node, pl, e);
             }
         }
-        let prompt = self.genai_wired_prompt(node);
-        if pl.wants_prompt() && prompt.is_none() {
-            return self.genai_fail(node, pl, "the pipeline reads the node's prompt: wire a String node into it");
-        }
-        let prompt = prompt.filter(|_| pl.wants_prompt());
-        if (pl.wants_clip() || pl.wants_matte_clip()) && !clip_ok() {
+        let reads = pl.reads();
+        if reads.iter().any(|r| r.1) && !clip_ok() {
             return self.genai_fail(node, pl, NO_CLIP);
         }
         let mut todo = vec![];
-        for (port, wants, what) in [
-            (0, pl.wants_reference(), "image"),
-            (1, pl.wants_matte(), "matte"),
-            (SECOND, pl.wants_second(), "second picture"),
-            (CLIP, pl.wants_clip(), "image"),
-            (MATTE_CLIP, pl.wants_matte_clip(), "matte"),
-        ] {
-            if wants {
-                if self.egraph.input_of(node, input_of_port(port)).is_none() {
-                    return self.genai_fail(node, pl, format!("the pipeline reads the node's {what}: wire one in"));
-                }
+        for (input, clip) in reads {
+            let matte = pl.in_kind(input) == genai::InKind::Matte;
+            if self.egraph.input_of(node, input).is_none() {
+                let what = if matte { "matte" } else { "image" };
+                return self.genai_fail(node, pl, format!("the pipeline reads the node's {what} input {}: wire one in", input + 1));
+            }
+            let port = capture_port(input, matte, clip);
+            if !todo.contains(&port) {
                 todo.push(port);
             }
         }
@@ -1241,7 +1364,7 @@ impl Gfx {
             node,
             pipeline: pl,
             tick,
-            phase: Phase::Capturing { inputs: Inputs { prompt, comp, tick, ..Default::default() }, todo },
+            phase: Phase::Capturing { inputs: Inputs { comp, tick, ..Default::default() }, todo },
             steps: BTreeMap::new(),
             vary,
             more: vec![],
@@ -1264,7 +1387,7 @@ impl Gfx {
                 let Some(input) = self.egraph.input_of(node, input_of_port(port)) else {
                     return self.genai_fail(node, pl, "an input was unwired mid-run");
                 };
-                let frames = if port >= CLIP { self.genai_clip_frames(&pl) } else { 1 };
+                let frames = if port & CLIP != 0 { self.genai_clip_frames(&pl) } else { 1 };
                 if let Err(e) = self.start_capture(node, input, port, tick, frames) {
                     self.genai_fail(node, pl, e);
                 }
@@ -1282,7 +1405,7 @@ impl Gfx {
         }
         let Phase::Capturing { inputs, todo } = &mut r.phase else { return };
         let next = r.ticks.remove(0);
-        let fresh = Inputs { prompt: inputs.prompt.clone(), comp: inputs.comp, tick: next, ..Default::default() };
+        let fresh = Inputs { comp: inputs.comp, tick: next, ..Default::default() };
         r.frames.push(std::mem::replace(inputs, fresh));
         *todo = r.ports.clone();
         r.tick = next;
@@ -1334,7 +1457,7 @@ impl Gfx {
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
         let Phase::Capturing { inputs, todo } = &mut r.phase else { return };
         let Some(port) = todo.first().copied() else { return };
-        if port >= CLIP {
+        if port & CLIP != 0 {
             let frames: Vec<(Vec<u8>, u32, u32)> = std::mem::take(&mut self.jobs.genai.clip_frames)
                 .into_iter()
                 .filter(|c| c.0 == node && c.1 == port)
@@ -1342,11 +1465,7 @@ impl Gfx {
                 .collect();
             match encode_clip(frames, self.fps) {
                 Ok(clip) => {
-                    if port == CLIP {
-                        inputs.clip = Some(clip);
-                    } else {
-                        inputs.matte_clip = Some(clip);
-                    }
+                    inputs.clips.insert(input_of_port(port), clip);
                     todo.remove(0);
                     self.genai_capture_next();
                 }
@@ -1358,7 +1477,7 @@ impl Gfx {
             r.phase = Phase::Failed("the input did not render".into());
             return;
         };
-        let png = if port == 0 || port == SECOND {
+        let png = if port & MATTE == 0 {
             to_rec709(&mut px, working);
             // An upscaler's reference goes up whole (to a point): shrunk,
             // it would hand back the plate it started with.
@@ -1373,11 +1492,7 @@ impl Gfx {
         };
         match png {
             Ok(png) => {
-                match port {
-                    0 => inputs.reference = Some(png),
-                    SECOND => inputs.second = Some(png),
-                    _ => inputs.matte = Some(png),
-                }
+                inputs.pics.insert(input_of_port(port), png);
                 todo.remove(0);
                 self.genai_capture_next();
             }
@@ -1458,15 +1573,9 @@ impl Gfx {
 
     fn genai_confirm(&mut self, node: u64) {
         let current = self.genai_runnable(node).map(|p| p.steps);
-        let moved = match self.jobs.genai.run.as_ref().filter(|r| r.node == node) {
-            Some(Run { pipeline, phase: Phase::Ready { inputs, .. }, .. }) => {
-                self.genai_prompt_moved(node, pipeline, inputs)
-            }
-            _ => false,
-        };
         let vary_now = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone());
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
-        if moved || current.as_ref() != Some(&r.pipeline.steps) || vary_now.as_ref() != Some(&r.vary) {
+        if current.as_ref() != Some(&r.pipeline.steps) || vary_now.as_ref() != Some(&r.vary) {
             return; // stale: the panel says so and disables the button
         }
         let Phase::Ready { plan, inputs, quote } = std::mem::replace(&mut r.phase, Phase::Failed(String::new())) else {
@@ -1620,23 +1729,20 @@ impl Gfx {
         }
     }
 
-    /// The text on a GenAI node's prompt port: the String node wired there,
-    /// through any dots on the way.
-    /// The pipeline a run of `node` would walk: the node's own, except that
-    /// a one-model node with a String wired into its prompt port reads the
-    /// port instead of its typed prompt. Never written back to the node;
-    /// staleness compares against this, not the stored steps.
+    /// The pipeline a run of `node` would walk: the node's own, brought to
+    /// this build's shape (a pipeline the setup migration did not reach —
+    /// a pasted one — still runs). Staleness compares against this.
     pub(crate) fn genai_runnable(&self, node: u64) -> Option<Pipeline> {
         let p = self.egraph.node(node).and_then(|n| params(&n.kind))?;
         let mut pl = p.pipeline.clone();
-        if p.model.is_some() && self.genai_wired_prompt(node).is_some() {
-            for s in &mut pl.steps {
-                if matches!(s.op, Op::Prompt { .. }) {
-                    s.op = Op::PromptIn;
-                }
-            }
-        }
+        pl.normalize();
         Some(pl)
+    }
+
+    /// Per input of `node` in `g`, whether something is wired into it.
+    fn genai_wired(&self, g: &crate::editor::EditorGraph, node: u64) -> Vec<bool> {
+        let n = g.node(node).map_or(0, |n| n.kind.input_count());
+        (0..n).map(|i| g.input_of(node, i).is_some()).collect()
     }
 
     /// A one-model node upstream of `node`'s image or matte that has no take
@@ -1644,7 +1750,8 @@ impl Gfx {
     /// the raw plate instead of that model's result. Its name, if there is
     /// one. (Bypassed nodes pass through on purpose and are skipped.)
     fn genai_unrun_upstream(&self, node: u64) -> Option<String> {
-        let mut todo: Vec<u64> = [0, 1].iter().filter_map(|&i| self.egraph.input_of(node, i)).collect();
+        let n = self.egraph.node(node).map_or(0, |n| n.kind.input_count());
+        let mut todo: Vec<u64> = (0..n).filter_map(|i| self.egraph.input_of(node, i)).collect();
         let mut seen = std::collections::BTreeSet::new();
         while let Some(n) = todo.pop() {
             if !seen.insert(n) {
@@ -1664,10 +1771,6 @@ impl Gfx {
         None
     }
 
-    pub(crate) fn genai_wired_prompt(&self, node: u64) -> Option<String> {
-        wired_prompt(&self.egraph, node)
-    }
-
     /// The view a step inside a GenAI Pipeline's dive shows: its owner's,
     /// with the owner's wiring read off the graph the dive parked.
     pub(crate) fn genai_step_view(&self) -> View {
@@ -1679,18 +1782,7 @@ impl Gfx {
         else {
             return self.genai_view(0);
         };
-        View {
-            has_input: g.input_of(owner, 0).is_some(),
-            has_matte: g.input_of(owner, 1).is_some(),
-            prompt: wired_prompt(g, owner),
-            ..self.genai_view(owner)
-        }
-    }
-
-    /// Has the wired prompt changed since the quote was made? Then the
-    /// quote is for a different request.
-    fn genai_prompt_moved(&self, node: u64, pl: &Pipeline, inputs: &Inputs) -> bool {
-        pl.wants_prompt() && self.genai_wired_prompt(node) != inputs.prompt
+        View { wired: self.genai_wired(g, owner), ..self.genai_view(owner) }
     }
 
     /// Point the node's reader at its picked take (or at nothing).
@@ -1945,8 +2037,8 @@ impl Gfx {
                 self.next_read_slot += 1;
                 let mut p = GenAiParams::new(slot);
                 // Reference -> Output: nothing remote.
-                p.pipeline = Pipeline { steps: vec![], takes: vec![], take: 0 };
-                let r = p.pipeline.push(Op::Reference, [0.0, -0.5]);
+                p.pipeline = Pipeline::bare(vec![genai::InKind::Image, genai::InKind::Matte]);
+                let r = p.pipeline.input_step(0).unwrap();
                 let o = p.pipeline.push(Op::Output, [0.0, 0.5]);
                 p.pipeline.connect(r, o, 0);
                 let g = self.egraph.add(NodeKind::GenAi(p), egui::pos2(360.0, 200.0));
@@ -1987,24 +2079,23 @@ impl Gfx {
                     }
                     // Now the remote pipeline.
                     self.genai_action(t.node, Action::Dismiss);
-                    // The prompt comes off a Prompt node on the text pipe.
+                    // The prompt lives inside: the node has no prompt input.
                     pipeline(self, t.node, &|pl| {
                         pl.steps = Pipeline::default().steps;
-                        pl.steps[0].op = Op::PromptIn;
+                        pl.steps[0].op = Op::Prompt { text: "an 18% grey card".into() };
                     });
-                    let text = NodeKind::Prompt(engine::graph::PromptParams { text: "an 18% grey card".into() });
-                    let pn = self.egraph.add(text, egui::pos2(520.0, 120.0));
-                    self.egraph.connect(t.node, 2, pn);
+                    if self.egraph.node(t.node).is_some_and(|n| {
+                        (0..n.kind.input_count()).any(|i| n.kind.input_kind(i) == engine::graph::PortKind::Text)
+                    }) {
+                        fail("the node still has a prompt input".into());
+                    }
                     self.genai_action(t.node, Action::Prepare);
                     next(&mut t, 4);
                 }
             }
             4 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the remote prepare failed: {e}")),
-                Some(Phase::Ready { quote, inputs, .. }) => {
-                    if inputs.prompt.as_deref() != Some("an 18% grey card") {
-                        fail(format!("the wired Prompt node did not reach the run: {:?}", inputs.prompt));
-                    }
+                Some(Phase::Ready { quote, .. }) => {
                     let submits = t.fake.as_ref().unwrap().submits();
                     if submits != 0 {
                         fail(format!("{submits} request(s) submitted before pay & run"));
@@ -2179,8 +2270,8 @@ impl Gfx {
                     let at = self.timeline_pos as i64;
                     if let Some(p) = self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
                         t.kept = Some(p.pipeline.steps.clone());
-                        let mut local = Pipeline { steps: vec![], takes: vec![], take: 0 };
-                        let r = local.push(Op::Reference, [0.0, -0.5]);
+                        let mut local = Pipeline::bare(vec![genai::InKind::Image, genai::InKind::Matte]);
+                        let r = local.input_step(0).unwrap();
                         let o = local.push(Op::Output, [0.0, 0.5]);
                         local.connect(r, o, 0);
                         p.pipeline.steps = local.steps;
@@ -2236,17 +2327,22 @@ impl Gfx {
                         self.next_read_slot - 1
                     };
                     let (s1, s2) = (slot(), slot());
-                    let flux = (entry("FLUX.1 [schnell]").make)(s1);
+                    let mut flux = (entry("FLUX.1 [schnell]").make)(s1);
                     let kontext = (entry("FLUX.1 Kontext [pro]").make)(s2);
+                    // The same words as the pipeline's prompt, typed in.
+                    if let Some(p) = params_mut(&mut flux) {
+                        for s in &mut p.pipeline.steps {
+                            if let Op::Prompt { text } = &mut s.op {
+                                *text = "an 18% grey card".into();
+                            }
+                        }
+                    }
                     if crate::editor::node_label(&flux) != "FLUX.1 [schnell]" || innards::provider(&flux).is_some() {
                         fail("a one-model node is not called by its model, or still has steps inside".into());
                     }
                     let m = self.egraph.add(flux, egui::pos2(360.0, 360.0));
                     let k = self.egraph.add(kontext, egui::pos2(360.0, 480.0));
-                    let pn = self.egraph.input_of(t.node, 2).unwrap();
-                    self.egraph.connect(m, 2, pn);
                     self.egraph.connect(k, 0, m);
-                    self.egraph.connect(k, 2, pn);
                     // A chain whose upstream model never ran must not send
                     // the raw plate in its place.
                     self.genai_action(k, Action::Prepare);
@@ -2258,8 +2354,8 @@ impl Gfx {
                         )),
                     }
                     self.genai_action(k, Action::Dismiss);
-                    // The String on the port, the same model, seed and size:
-                    // the same request as the pipeline's, so a cache hit.
+                    // The same prompt, model, seed and size: the same request
+                    // as the pipeline's, so a cache hit.
                     self.genai_action(m, Action::Prepare);
                     t.pipe = t.node;
                     t.node = m;
@@ -2283,26 +2379,48 @@ impl Gfx {
                     if steps != before.pipeline.steps.len() || !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
                         fail(format!("the dive shows {steps} step node(s) for {} steps", before.pipeline.steps.len()));
                     }
-                    let input = crate::editor::node_catalog()
-                        .into_iter()
-                        .find(|e| e.cat == crate::editor::NodeCat::GenAiStep && e.label == "Input")
-                        .unwrap_or_else(|| fail("no Input step in the dive's menu".into()));
-                    let step = self.egraph.add((input.make)(0), egui::pos2(0.0, -400.0));
+                    // The node's inputs are in here already, one node each;
+                    // the menu offers none.
+                    let menu = crate::editor::node_catalog();
+                    if menu.iter().any(|e| {
+                        e.cat == crate::editor::NodeCat::GenAiStep
+                            && matches!((e.make)(0), NodeKind::GenAiStep(Op::Input { .. } | Op::Reference | Op::Matte))
+                    }) {
+                        fail("the dive's menu offers an input step".into());
+                    }
+                    let image_in = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(Op::Input { input: 0, .. })))
+                        .map(|(id, _)| *id)
+                        .unwrap_or_else(|| fail("no Input node for the node's image inside".into()));
+                    let prompt = menu
+                        .iter()
+                        .find(|e| e.cat == crate::editor::NodeCat::GenAiStep && e.label == "Prompt")
+                        .unwrap_or_else(|| fail("no Prompt step in the dive's menu".into()));
+                    self.egraph.add((prompt.make)(0), egui::pos2(0.0, -400.0));
                     // Viewing the Input step shows what the node's image
                     // input carries, not the node's take.
-                    let saved = self.egraph.view.replace(step);
+                    let saved = self.egraph.view.replace(image_in);
                     let shown = self.render_preview(self.timeline_pos).and_then(|g| g.view);
                     let wired = self.dive.last().and_then(|d| d.graph.input_of(t.pipe, 0));
                     if shown.is_none() || shown != wired {
                         fail(format!("viewing the Input step shows {shown:?}, not the node's input {wired:?}"));
                     }
                     self.egraph.view = saved;
+                    // An Input removed in here comes back: it IS the
+                    // node's input.
+                    self.egraph.remove(image_in);
                     self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
                     let after = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).cloned().unwrap();
                     if after.pipeline.steps.len() != before.pipeline.steps.len() + 1
-                        || !matches!(after.pipeline.steps.last().map(|s| &s.op), Some(Op::Reference))
+                        || !after.pipeline.steps.iter().any(|s| matches!(&s.op, Op::Prompt { text } if text.is_empty()))
                     {
                         fail("a step added inside did not come back out as a step".into());
+                    }
+                    if (0..after.pipeline.ins.len()).any(|k| after.pipeline.input_step(k).is_none()) {
+                        fail("an input lost its Input step inside".into());
                     }
                     if after.pipeline.takes != before.pipeline.takes {
                         fail("opening and closing the pipeline changed its takes".into());
@@ -2317,10 +2435,8 @@ impl Gfx {
                         self.next_read_slot += 1;
                         let mut kind = (entry.make)(self.next_read_slot - 1);
                         if let Some(p) = params_mut(&mut kind) {
+                            p.pipeline.set_clip_seconds(0.5);
                             for s in &mut p.pipeline.steps {
-                                if let Op::ClipIn { seconds } = &mut s.op {
-                                    *seconds = 0.5;
-                                }
                                 if let Op::Prompt { text } = &mut s.op {
                                     *text = "empty street".into();
                                 }
@@ -2340,12 +2456,13 @@ impl Gfx {
                     println!(
                         "GENAI TEST PASS: a local pipeline captured the plate at the playhead and \
                          played it back through the node within the 8-bit round trip; a fal \
-                         pipeline prompted by a Prompt node on the text pipe stopped at a $0.003 quote with nothing sent, submitted exactly \
+                         pipeline with its prompt inside (no prompt input) stopped at a $0.003 quote with nothing sent, submitted exactly \
                          once on pay & run, showed the returned grey card in the working space, \
                          and a re-run of the unchanged pipeline was a cache hit that sent nothing; \
                          one-model nodes from the add menu are named for their model, refuse to \
-                         run below an un-run model, and read a wired String as the same request; \
-                         the pipeline opens as a graph of step nodes and a step added there comes \
+                         run below an un-run model, and key a typed prompt as the same request; \
+                         the pipeline opens as a graph of step nodes with one Input per node input \
+                         (none in the menu, a removed one restored), and a step added there comes \
                          back out as a step"
                     );
                     std::process::exit(0);
@@ -2355,7 +2472,7 @@ impl Gfx {
             9 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the clip run failed before the quote: {e}")),
                 Some(Phase::Ready { inputs, .. }) => {
-                    let (Some(c), Some(m)) = (&inputs.clip, &inputs.matte_clip) else {
+                    let (Some(c), Some(m)) = (inputs.clips.get(&0), inputs.clips.get(&1)) else {
                         fail("the clip run captured no clip or no matte clip".into())
                     };
                     let want = (0.5 * self.fps).round() as u32;
@@ -2433,12 +2550,13 @@ mod tests {
     fn the_dive_round_trips_the_pipeline() {
         let NodeKind::GenAi(p) = kind() else { unreachable!() };
         let g = to_editor(&p.pipeline);
-        // prompt, generate, output, two wires, spread out of the face.
-        assert_eq!(g.nodes.len(), 3);
+        // prompt, generate, output, the image and matte Inputs, two
+        // wires, spread out of the face.
+        assert_eq!(g.nodes.len(), 5);
         assert_eq!(g.edges.len(), 2);
         assert!(g.nodes.values().any(|n| n.pos.x.abs() > 1.5 || n.pos.y.abs() > 1.5));
         let back = from_editor(&g);
-        assert_eq!(back.len(), 3);
+        assert_eq!(back.len(), 5);
         for (a, b) in back.iter().zip(&p.pipeline.steps) {
             assert_eq!((&a.op, &a.inputs), (&b.op, &b.inputs));
         }
@@ -2460,11 +2578,50 @@ mod tests {
     }
 
     #[test]
+    fn an_old_setup_s_prompt_and_second_picture_move_onto_the_bar() {
+        use crate::editor::EditorGraph;
+        // Old fixed inputs: image 0, matte 1, prompt 2, second 3.
+        let old = r#"{"steps":[
+            {"op":{"op":"prompt_in"},"at":[0,0]},
+            {"op":{"op":"reference"},"at":[0,0]},
+            {"op":{"op":"second"},"at":[0,0]},
+            {"op":{"op":"generate","model":"fal/nano-banana-pro-edit-ref","seed":1},"at":[0,0],"inputs":[0,1,2]},
+            {"op":{"op":"output"},"at":[0,0],"inputs":[3]}]}"#;
+        let pl: Pipeline = serde_json::from_str(old).unwrap();
+        let mut g = EditorGraph::default();
+        let gen = g.add(NodeKind::GenAi(GenAiParams { pipeline: pl, ..GenAiParams::new(0) }), egui::pos2(0.0, 0.0));
+        let (img, sec) = (g.add(NodeKind::Mask, egui::pos2(0.0, 0.0)), g.add(NodeKind::Mask, egui::pos2(0.0, 0.0)));
+        let text = g.add(NodeKind::Prompt(engine::graph::PromptParams { text: "at dusk".into() }), egui::pos2(0.0, 0.0));
+        g.edges.extend([(gen, 0, img), (gen, 2, text), (gen, 3, sec)]);
+        assert_eq!(migrate_inputs(&mut g), 1);
+        let NodeKind::GenAi(p) = &g.node(gen).unwrap().kind else { unreachable!() };
+        assert_eq!(p.pipeline.ins, vec![genai::InKind::Image, genai::InKind::Matte, genai::InKind::Image]);
+        assert_eq!(g.input_of(gen, 0), Some(img));
+        assert_eq!(g.input_of(gen, 2), Some(sec), "the second picture's wire moved to its input");
+        assert_eq!(g.edges.iter().filter(|e| e.0 == gen).count(), 2, "the prompt wire is gone");
+        assert!(matches!(&p.pipeline.steps[0].op, Op::Prompt { text } if text == "at dusk"), "its text moved inside");
+        assert!((0..3).all(|k| g.node(gen).unwrap().kind.input_kind(k) != engine::graph::PortKind::Text));
+        assert_eq!(migrate_inputs(&mut g), 0, "once");
+        // Removing the matte slides the second picture's wire down.
+        assert!(remove_input(&mut g, gen, 1));
+        assert_eq!(g.input_of(gen, 1), Some(sec));
+        // Two pictures: the first can go; then the last one cannot.
+        assert!(remove_input(&mut g, gen, 0));
+        assert_eq!(g.input_of(gen, 0), Some(sec));
+        assert!(!remove_input(&mut g, gen, 0), "the last picture stays");
+    }
+
+    #[test]
     fn every_step_kind_is_in_the_dive_menu_and_no_model_twice() {
         let e = step_entries();
-        for want in ["Prompt", "Prompt In", "Input", "Matte", "ComfyUI", "Output"] {
+        for want in ["Prompt", "Text Template", "ComfyUI", "Output"] {
             assert!(e.iter().any(|(l, _)| *l == want), "{want}");
         }
+        // The node's inputs are inside already, one each: never offered.
+        assert!(!e.iter().any(|(_, op)| matches!(
+            op,
+            Op::Input { .. } | Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip
+        )));
         let mut labels: Vec<_> = e.iter().map(|(l, _)| *l).collect();
         labels.sort();
         labels.dedup();
@@ -2481,9 +2638,7 @@ mod tests {
             state,
             steps: BTreeMap::new(),
             busy_elsewhere: false,
-            has_input: true,
-            has_matte: false,
-            prompt: None,
+            wired: vec![true, false],
             take_missing: true,
             fps: 24.0,
             texts: BTreeMap::new(),

@@ -8889,6 +8889,12 @@ impl Gfx {
         self.curves.view.sets = s.chan_sets.clone();
         self.curves.view.active = None;
         self.egraph = s.graph;
+        // GenAI nodes from before the input bar: the prompt input's text
+        // moves inside, the second picture's wire onto its new input.
+        let moved = genaiui::migrate_inputs(&mut self.egraph);
+        if moved > 0 {
+            log::info!("setup: moved {moved} GenAI node(s) onto the input bar");
+        }
         // The comp's own subwobs, before anything renders it.
         self.sync_subwobs();
         // A port that changed pipe since the file was written (a depth
@@ -20044,7 +20050,10 @@ impl Gfx {
                     _ => return None,
                 },
                 DiveKind::GenAi => match g.node_mut(inst).map(|e| &mut e.kind) {
-                    Some(NodeKind::GenAi(p)) => p.pipeline.steps = genaiui::from_editor(&cur),
+                    Some(NodeKind::GenAi(p)) => {
+                        p.pipeline.steps = genaiui::from_editor(&cur);
+                        p.pipeline.sync_inputs();
+                    }
                     _ => return None,
                 },
                 DiveKind::Roto => {
@@ -20169,15 +20178,13 @@ impl Gfx {
         }
         // Inside a GenAI Pipeline: its steps make no pixels until a run, so
         // the picture is the node's own (its take, or its input) — except
-        // that viewing an Input / Matte step (or their clips) shows what is
-        // wired into that input of the node, which is what the step reads.
+        // that viewing an Input step shows what is wired into that input of
+        // the node, which is what the step reads.
         if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::GenAi) {
             let owner = d.from?;
             let mut g = d.graph.clone();
             let port = self.egraph.active_view().and_then(|v| match self.egraph.node(v).map(|n| &n.kind) {
-                Some(NodeKind::GenAiStep(genai::pipeline::Op::Reference | genai::pipeline::Op::ClipIn { .. })) => Some(0),
-                Some(NodeKind::GenAiStep(genai::pipeline::Op::Matte | genai::pipeline::Op::MatteClip)) => Some(1),
-                Some(NodeKind::GenAiStep(genai::pipeline::Op::Second)) => Some(crate::genaiui::SECOND),
+                Some(NodeKind::GenAiStep(genai::pipeline::Op::Input { input, .. })) => Some(*input),
                 _ => None,
             });
             g.view = Some(port.and_then(|p| g.input_of(owner, p)).unwrap_or(owner));
@@ -21114,6 +21121,9 @@ impl Gfx {
             if let Some(node) = d.from {
                 if let Some(NodeKind::GenAi(p)) = self.egraph.node_mut(node).map(|e| &mut e.kind) {
                     p.pipeline.steps = steps;
+                    // An Input deleted inside comes back: it is one of the
+                    // node's inputs, removed only from the node's bar.
+                    p.pipeline.sync_inputs();
                 }
             }
             self.undo_stack = d.undo_stack;

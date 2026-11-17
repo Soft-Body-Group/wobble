@@ -36,7 +36,7 @@ pub const END_EXT: f32 = 34.0;
 /// harp's pitch is its own param.
 pub const BAR_PITCH: f32 = 40.0;
 
-/// A merge drawn as a harp bar — Extract, Layer: one wide slab with its
+/// A merge drawn as a harp bar — Extract, Layer, a GenAI Pipeline: one wide slab with its
 /// inputs pitched across the top like strings, its outputs hanging below,
 /// and at most one bookend input on the left porch. Only for kinds whose
 /// input count GROWS: a Blend is two inputs and a matte for good, and
@@ -60,6 +60,16 @@ fn bar(kind: &NodeKind) -> Option<Bar> {
         // Stack order, top layer leftmost.
         NodeKind::Layer(_) => {
             Bar { top: (0..kind.input_count()).collect(), bottom: 1, porch: None }
+        }
+        // A GenAI Pipeline: its pictures on the left, its mattes on the
+        // right, each side in the order they were added (an input's index
+        // never changes when another is added). A one-model node keeps the
+        // ordinary disc: its inputs are its model's, fixed.
+        NodeKind::GenAi(p) if p.model.is_none() => {
+            let n = kind.input_count();
+            let side = |k: genai::InKind| (0..n).filter(move |&i| p.pipeline.in_kind(i) == k);
+            let top = side(genai::InKind::Image).chain(side(genai::InKind::Matte)).collect();
+            Bar { top, bottom: 1, porch: None }
         }
         _ => return None,
     })

@@ -7,14 +7,14 @@
 //! migrate. 2dini has its own (`geo::GeoNode::String`) for its Text.
 //!
 //! The first comp node that is not a picture. It exists so words can
-//! live in the graph — one prompt feeding several GenAI nodes, the words a
-//! Text node writes — seen and swapped without diving anywhere. Its
-//! consumers read the text on the CPU (a GenAI node's `prompt in` step, a
+//! live in the graph — the words a Text node writes — seen and swapped
+//! without diving anywhere. (A GenAI node had a text input once; its
+//! prompts live inside it now.) Its consumers read the text on the CPU (a
 //! Text's words port); the renderer never does:
 //!
 //! - it packs nothing and its topology never moves, so typing is free;
-//! - it is never sampled — a GenAI's text port is outside its pixel
-//!   subtree — and viewed on its own it emits transparent black;
+//! - it is never sampled — a text port is outside its pixel subtree —
+//!   and viewed on its own it emits transparent black;
 //! - it has no picture, so the resolution and frame-range walks
 //!   (`PortKind::is_picture`) never follow a text wire.
 
@@ -63,14 +63,15 @@ mod tests {
     }
 
     #[test]
-    fn the_text_pipe_feeds_a_genai_prompt_port_and_nothing_else() {
+    fn the_text_pipe_feeds_a_text_s_words_and_nothing_else() {
         use crate::graph::{GenAiParams, NodeKind, PortKind};
         let prompt = NodeKind::Prompt(PromptParams::default());
         let genai = NodeKind::GenAi(GenAiParams::default());
         assert_eq!(prompt.output_kind(), PortKind::Text);
-        assert_eq!(genai.input_kind(2), PortKind::Text);
-        assert!(PortKind::Text.can_feed(genai.input_kind(2)));
-        assert!(!PortKind::Text.can_feed(genai.input_kind(0)), "text is not a picture");
+        // A GenAI's prompts live inside it: no input of it takes text.
+        for i in 0..genai.input_count() {
+            assert!(!PortKind::Text.can_feed(genai.input_kind(i)), "input {i}");
+        }
         assert!(!PortKind::Image.can_feed(PortKind::Text));
         assert!(!PortKind::Text.is_picture(), "no resolution or frame range rides a prompt");
         assert_eq!(NodeKind::dot(PortKind::Text).output_kind(), PortKind::Text);

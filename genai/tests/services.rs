@@ -214,21 +214,16 @@ fn edit_pipeline() -> Pipeline {
     let mut p = Pipeline::default();
     // Re-point the default text-to-image step at the editor.
     p.set_model(1, "fal/flux-kontext-pro");
-    let r = p.push(Op::Reference, [0.4, -0.6]);
+    let r = p.input_step(0).unwrap();
     assert!(p.connect(0, 1, 0));
     assert!(p.connect(r, 1, 1));
     p
 }
 
 fn inputs() -> Inputs {
-    Inputs {
-        reference: Some(Png { bytes: png_bytes(), w: 4, h: 4 }),
-        matte: None,
-        prompt: None,
-        comp: (2048, 1080),
-        tick: 1001,
-        ..Default::default()
-    }
+    let mut ins = Inputs { comp: (2048, 1080), tick: 1001, ..Default::default() };
+    ins.pics.insert(0, Png { bytes: png_bytes(), w: 4, h: 4 });
+    ins
 }
 
 #[test]
@@ -526,7 +521,7 @@ fn comfy_uploads_the_reference_fills_the_placeholders_and_fetches_the_save() {
         Op::Comfy { workflow: wf_path.to_string_lossy().into(), seed: 5, commercial: false },
         [0.5, 0.0],
     );
-    let r = p.push(Op::Reference, [0.5, -0.6]);
+    let r = p.input_step(0).unwrap();
     assert!(p.connect(0, c, 0));
     assert!(p.connect(r, c, 1));
     let out = p.output().unwrap();
@@ -558,7 +553,7 @@ fn nothing_is_sent_when_the_plan_is_incomplete() {
     let dir = tmp("incomplete");
     // No reference picture: refused at plan time.
     let mut ins = inputs();
-    ins.reference = None;
+    ins.pics.clear();
     let err = run::plan(&p, &ins, &dir).unwrap_err();
     assert!(err.contains("nothing is wired"), "{err}");
     // An unwired prompt: named.
@@ -632,13 +627,13 @@ fn a_video_step_is_quoted_per_second_and_lands_an_mp4_take() {
 }
 
 #[test]
-fn a_wired_prompt_reaches_the_request() {
+fn a_typed_prompt_reaches_the_request() {
     let (port, log) = fake_fal();
     let base = format!("http://127.0.0.1:{port}");
     let dir = tmp("promptin");
     let mut p = edit_pipeline();
-    p.steps[0].op = Op::PromptIn;
-    let ins = Inputs { prompt: Some("make it dusk".into()), ..inputs() };
+    p.steps[0].op = Op::Prompt { text: "make it dusk".into() };
+    let ins = inputs();
     let plan = run::plan(&p, &ins, &dir).unwrap();
     let svcs = Services { remote: Some(Box::new(Fal::with_bases("k", &base, &base))), comfy: Comfy::new(&base) };
     let take = drain(&run::start(p, plan, ins, svcs, dir.clone(), vec![])).unwrap();
@@ -735,7 +730,7 @@ fn an_enhanced_prompt_is_what_the_next_step_is_sent() {
     let (port, log) = fake_fal();
     let base = format!("http://127.0.0.1:{port}");
     let dir = tmp("enhance");
-    let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+    let mut p = Pipeline::bare(vec![]);
     let t = p.push(Op::Prompt { text: "a moth".into() }, [0.0, 0.0]);
     let e = p.push(Op::Generate { model: "fal/prompt-enhance".into(), seed: 1, opts: Default::default() }, [0.0, 0.0]);
     let g = p.push(Op::Generate { model: "fal/flux-schnell".into(), seed: 1, opts: Default::default() }, [0.0, 0.0]);

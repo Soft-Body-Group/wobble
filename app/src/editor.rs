@@ -5551,7 +5551,11 @@ impl NodeEditor {
             })
             .and_then(|p| {
                 graph.nodes.iter().filter(|(id, n)| !hidden(id, n)).find_map(|(id, n)| {
-                    let NodeKind::Layer(_) = &n.kind else { return None };
+                    let genai = match &n.kind {
+                        NodeKind::Layer(_) => None,
+                        NodeKind::GenAi(p) if p.model.is_none() => Some(p),
+                        _ => return None,
+                    };
                     if reorder.is_some_and(|r| r.0 != *id) {
                         return None;
                     }
@@ -5569,9 +5573,34 @@ impl NodeEditor {
                         return None;
                     }
                     let xs = crate::breakout::bar_strings_x(&n.kind, np, sz);
-                    let k = xs.iter().filter(|(_, x)| view.to_screen(Pos2::new(*x, np.y)).x < p.x).count();
-                    // The gap's x: between the strings either side.
                     let sx = |i: usize| xs.get(i).map(|(_, x)| view.to_screen(Pos2::new(*x, np.y)).x);
+                    let mut k = xs.iter().filter(|(_, x)| view.to_screen(Pos2::new(*x, np.y)).x < p.x).count();
+                    // A GenAI bar grows on the side the noodle is over: a
+                    // new picture after the last picture (left half), a
+                    // new matte after the last matte (right half). k past
+                    // the pictures means the matte side.
+                    if let Some(g) = genai {
+                        let images = (0..n.kind.input_count())
+                            .filter(|&i| g.pipeline.in_kind(i) == genai::InKind::Image)
+                            .count();
+                        let split = match (images.checked_sub(1).and_then(sx), sx(images)) {
+                            (Some(a), Some(b)) => (a + b) * 0.5,
+                            (_, _) => c.x,
+                        };
+                        k = if p.x < split { images } else { xs.len() + 1 };
+                        let gx = if k == images {
+                            match (images.checked_sub(1).and_then(sx), sx(images)) {
+                                (Some(a), Some(b)) => (a + b) * 0.5,
+                                (Some(a), None) => a + 20.0 * sz * zoom_now,
+                                (None, Some(b)) => b - 20.0 * sz * zoom_now,
+                                (None, None) => c.x,
+                            }
+                        } else {
+                            xs.len().checked_sub(1).and_then(sx).map_or(c.x, |a| a + 20.0 * sz * zoom_now)
+                        };
+                        return Some((*id, k, gx, r.top() + 6.0, c.y + half.y));
+                    }
+                    // The gap's x: between the strings either side.
                     let gx = match (k.checked_sub(1).and_then(sx), sx(k)) {
                         (Some(a), Some(b)) => (a + b) * 0.5,
                         (Some(a), None) => a + 20.0 * sz * zoom_now,
@@ -6588,6 +6617,26 @@ impl NodeEditor {
                     // was dropped in.
                     let (node, k, ..) = hit_layer_bar.unwrap_or_default();
                     let n = graph.node(node).map_or(0, |n| n.kind.input_count());
+                    // A GenAI bar: an empty input on that side takes it,
+                    // else a new one of that kind (`hit_layer_bar` says
+                    // which side in k).
+                    let genai_ins = match graph.node(node).map(|n| &n.kind) {
+                        Some(NodeKind::GenAi(p)) => Some(p.pipeline.ins.clone()),
+                        _ => None,
+                    };
+                    if let Some(ins) = genai_ins {
+                        let images = ins.iter().filter(|i| **i == genai::InKind::Image).count();
+                        let kind = if k <= images { genai::InKind::Image } else { genai::InKind::Matte };
+                        let at = (0..n)
+                            .find(|&i| ins.get(i) == Some(&kind) && graph.input_of(node, i).is_none())
+                            .or_else(|| match graph.node_mut(node).map(|n| &mut n.kind) {
+                                Some(NodeKind::GenAi(p)) => Some(p.pipeline.add_input(kind)),
+                                _ => None,
+                            });
+                        if let Some(at) = at {
+                            connect_or_bridge(graph, src, out, node, at, zoom);
+                        }
+                    } else {
                     let empty = (0..n)
                         .filter(|i| graph.input_of(node, *i).is_none())
                         .min_by_key(|i| (*i as i64 * 2 + 1 - k as i64 * 2).abs());
@@ -6599,6 +6648,7 @@ impl NodeEditor {
                         }
                     };
                     connect_or_bridge(graph, src, out, node, at, zoom);
+                    }
                 }
                 Some(DragKind::WireFromOutput(src, out)) if hit_in.is_none() && hit_big.is_some() => {
                     // Dropped on a big dot: the one input it fits goes at
@@ -7072,6 +7122,11 @@ impl NodeEditor {
                         Some(NodeKind::Read { .. })
                     ) {
                         read_removed = true;
+                    }
+                    // Inside a GenAI Pipeline an Input IS one of the
+                    // node's inputs: removed from the node, not in here.
+                    if matches!(graph.node(id).map(|n| &n.kind), Some(NodeKind::GenAiStep(genai::Op::Input { .. }))) {
+                        continue;
                     }
                     graph.remove(id);
                 }
@@ -8234,7 +8289,8 @@ impl NodeEditor {
             graph.set_wire_layering(dst, input, l);
         }
 
-        // Where a noodle over a Layer's bar would land: a bright gap.
+        // Where a noodle over a Layer's (or a GenAI's) bar would land: a
+        // bright gap.
         if let Some((_, _, gx, top, bot)) = hit_layer_bar {
             let p = ui.painter();
             p.line_segment([Pos2::new(gx, top), Pos2::new(gx, bot)], Stroke::new(3.0, theme::selection()));
@@ -14323,6 +14379,58 @@ mod link_view_tests {
             }
         }
         (buf, w, h)
+    }
+
+    /// A GenAI Pipeline wears a bar like a Layer's: its pictures stand on
+    /// the left, its mattes on the right, whatever order they were added
+    /// in. Dumps `target/graph-genai-bar.png` to judge by eye.
+    #[test]
+    fn a_genai_bar_has_pictures_left_and_mattes_right() {
+        let (w_pt, h_pt, ss) = (620.0f32, 300.0f32, 2.0f32);
+        let mut g = EditorGraph::default();
+        let mut p = engine::graph::GenAiParams::new(0);
+        // image, matte (the default), then a picture added after the matte.
+        p.pipeline.add_input(genai::InKind::Image);
+        p.pipeline.add_input(genai::InKind::Matte);
+        let plate = g.add(NodeKind::read(0, ""), Pos2::new(-210.0, -110.0));
+        let roto = g.add(NodeKind::read(1, ""), Pos2::new(130.0, -110.0));
+        let gen = g.add(NodeKind::GenAi(p), Pos2::new(-40.0, 60.0));
+        g.connect(gen, 0, plate);
+        g.connect(gen, 1, roto);
+        let kind = g.node(gen).unwrap().kind.clone();
+        assert_eq!(kind.input_count(), 4);
+        let xs: Vec<(usize, f32)> = crate::breakout::bar_strings_x(&kind, Pos2::ZERO, 1.0);
+        let order: Vec<usize> = xs.iter().map(|x| x.0).collect();
+        assert_eq!(order, vec![0, 2, 1, 3], "pictures (0, 2) left, mattes (1, 3) right");
+        assert!(xs.windows(2).all(|w| w[0].1 < w[1].1));
+        assert_eq!(kind.input_kind(1), PortKind::Mask);
+        assert_eq!(kind.input_kind(2), PortKind::Image);
+
+        let ctx = egui::Context::default();
+        let mut ed = NodeEditor::default();
+        ed.zoom = 1.3;
+        let (mut sel, mut act, mut pins, mut slot, mut rects) =
+            (Vec::new(), Vec::new(), Vec::new(), 3usize, Vec::new());
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w_pt, h_pt))),
+            ..Default::default()
+        };
+        input.viewports.values_mut().for_each(|v| v.native_pixels_per_point = Some(1.0));
+        let out = ctx.run_ui(input, |ui| {
+            ed.show(ui, &mut g, &mut sel, &mut act, &mut pins, &mut slot, &mut rects);
+        });
+        let prims = ctx.tessellate(out.shapes, 1.0);
+        let (w, h) = ((w_pt * ss) as usize, (h_pt * ss) as usize);
+        let buf = rasterize(&prims, w, h, ss);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target").join("graph-genai-bar.png");
+        if let Ok(file) = std::fs::File::create(&path) {
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            if let Ok(mut wr) = enc.write_header() {
+                let _ = wr.write_image_data(&buf);
+            }
+        }
     }
 
     /// Ports that are not interchangeable have to be readable ON the node:

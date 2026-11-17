@@ -73,11 +73,18 @@ impl Default for GenAiParams {
 
 impl GenAiParams {
     pub const NAME: &'static str = "GenAI";
-    /// The image the pipeline's Reference step reads, the matte its Matte
-    /// step reads, the text its `prompt in` step reads (off a Prompt
-    /// node, on the text pipe), and the second picture its `Second` step
-    /// reads (a reference for colour, style or content).
-    pub const INPUTS: usize = 4;
+
+    /// How many inputs the node has: one per entry of the pipeline's
+    /// `ins` (images and mattes, any number of each; each one is an Input
+    /// step inside). Input 0 is always an image — the one passed through.
+    /// A pipeline from before the input bar (no `ins`) reads as its old
+    /// image and matte until the setup migration has run.
+    pub fn inputs(&self) -> usize {
+        match self.pipeline.ins.len() {
+            0 => 2,
+            n => n,
+        }
+    }
     /// One slot: the node's format, which the take is stretched over.
     pub const VEC4_SLOTS: usize = 1;
 
@@ -134,12 +141,11 @@ impl GenAiParams {
         self.pipeline.resizes()
     }
 
-    pub fn input_name(input: usize) -> &'static str {
-        match input {
-            0 => "image (the reference, or the clip)",
-            1 => "matte (where to fill, a frame or a clip)",
-            2 => "prompt (a String node's text)",
-            _ => "second picture (a reference: colour, style, content)",
+    pub fn input_name(&self, input: usize) -> &'static str {
+        match (self.pipeline.in_kind(input), input) {
+            (genai::InKind::Image, 0) => "image (passed through until a take)",
+            (genai::InKind::Image, _) => "picture (another image for the pipeline)",
+            (genai::InKind::Matte, _) => "matte (where to work)",
         }
     }
 

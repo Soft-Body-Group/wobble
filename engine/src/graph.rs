@@ -6258,7 +6258,7 @@ impl NodeKind {
             NodeKind::Sdf(_) => SdfParams::INPUTS,
             NodeKind::SdfNode(n) => n.inputs().len(),
             NodeKind::GraphBake { .. } => 1,
-            NodeKind::GenAi(_) => GenAiParams::INPUTS,
+            NodeKind::GenAi(p) => p.inputs(),
             NodeKind::CorridorKey(_) => CorridorKeyParams::INPUTS,
             NodeKind::Sammie(_) => SammieParams::INPUTS,
             NodeKind::Flow(_) => FlowParams::INPUTS,
@@ -6852,13 +6852,13 @@ impl NodeKind {
                                    density, displacement…)"),
             NodeKind::Sdf(_) => s("the picture the shapes are drawn over (and that \
                                    Refract bends)"),
-            NodeKind::GenAi(_) => match input {
-                0 => s("the reference picture sent with the request, captured at the \
-                        playhead"),
-                1 => s("where to fill: white is generated anew, black kept"),
-                2 => s("the prompt, off a String node"),
-                _ => s("a second picture for a model that takes one: the look to \
-                        match, the style or the object to draw on"),
+            NodeKind::GenAi(p) => match (p.pipeline.in_kind(input), input) {
+                (genai::InKind::Image, 0) => s("the picture sent with the request, captured at the \
+                        playhead (or over a range, as a clip) — and passed through until \
+                        something is generated"),
+                (genai::InKind::Image, _) => s("another picture for a model that takes one: the look \
+                        to match, the style or the object to draw on"),
+                (genai::InKind::Matte, _) => s("where to work: white is generated anew, black kept"),
             },
             NodeKind::Card3D(_) => s("the picture on the card"),
             NodeKind::Splat(_) => s("the Camera to look through (a CameraTrack's, a file's, Blender's); \
@@ -7188,7 +7188,7 @@ impl NodeKind {
                 1 => "holdout (keep)",
                 _ => "garbage (drop)",
             },
-            NodeKind::GenAi(_) => GenAiParams::input_name(input),
+            NodeKind::GenAi(p) => p.input_name(input),
             NodeKind::CorridorKey(_) => CorridorKeyParams::input_name(input),
             NodeKind::Sammie(_) => SammieParams::input_name(input),
             NodeKind::Flow(_) => "image (to analyse)",
@@ -7314,10 +7314,6 @@ impl NodeKind {
             NodeKind::Splat(_) => return PortKind::Scene,
             _ => {}
         }
-        // A GenAI's port 2 takes a prompt off a Prompt node.
-        if matches!(self, NodeKind::GenAi(_)) && input == 2 {
-            return PortKind::Text;
-        }
         // Inside a pipeline's dive: a step's prompt port is the text pipe,
         // everything else a picture.
         if let NodeKind::GenAiStep(op) = self {
@@ -7332,8 +7328,14 @@ impl NodeKind {
         }
         // The pipeline's Matte step reads port 1: coverage, not a picture.
         // A CorridorKey's alpha hint is coverage too.
-        if matches!(self, NodeKind::GenAi(_) | NodeKind::CorridorKey(_)) && input == 1 {
+        if matches!(self, NodeKind::CorridorKey(_)) && input == 1 {
             return PortKind::Mask;
+        }
+        // A GenAI's matte inputs, wherever on its bar they are.
+        if let NodeKind::GenAi(p) = self {
+            if p.pipeline.in_kind(input) == genai::InKind::Matte {
+                return PortKind::Mask;
+            }
         }
         // An EdgeExtend's matte says where the edge is.
         if matches!(self, NodeKind::EdgeExtend(_))

@@ -3536,23 +3536,29 @@ you add, wire and delete step nodes with the ordinary graph gestures — the
 add menu there lists the steps below, one node per model. Select a step
 and its fields are in the panel; run… is on the pipeline node itself.
 
+**Inputs are a bar.** The node starts with one image input and one matte
+input, drawn as a bar like a Layer's: pictures stand on the left, mattes
+on the right. Drop a noodle on the left half of the bar for another
+picture, the right half for another matte (or use **+ image** / **+ matte**
+in the panel; `×` removes one, never the last picture). Inside, each input
+is its own **Input** node — one per input, made and removed with it, never
+deleted or added in there. An Input can be switched to **clip**: the input
+over a range from the playhead, for a video model. Prompts live inside the
+pipeline: the node has no prompt input.
+
 | step | what it is |
 |---|---|
 | prompt | text |
-| prompt in | the text on the node's prompt port — a **Prompt** node wired in on the (rose) text pipe |
-| input | the node's image input, rendered at the playhead when you run |
-| matte | the node's matte input at the playhead (white = where to work) |
+| image in / matte in | one of the node's inputs, rendered at the playhead when you run (or as a clip) |
 | text to image / edit / inpaint / upscale / cutout | one call to a model from the catalog |
 | image to video | a clip from a start frame and a prompt (Seedance); needs a movie build |
 | ComfyUI workflow | a workflow on your own ComfyUI (free, your GPU, any checkpoint) |
 | out | the node's picture |
 
-**Prompts as nodes.** A **Prompt** node (Sources) holds text and nothing
-else; its rose wire is the text pipe, which only a GenAI node's prompt port
-accepts. One Prompt can feed several GenAI nodes. A `prompt in` step reads
-it when you run, and is keyed on the text exactly as a typed prompt is, so
-moving a prompt out into the graph re-bills nothing; editing it makes the
-quote on screen stale.
+**Prompts as nodes.** A **Prompt** (String) node (Sources) holds text and
+nothing else; its rose wire is the text pipe (a Text node's words). A
+GenAI node used to take one on a prompt input; a comp saved that way
+loads with the String's text copied into the pipeline's prompt.
 
 **Nothing runs, and nothing is billed, without a click.** `run…` renders
 the inputs at the playhead and asks the service for the price; the panel
@@ -3588,11 +3594,11 @@ soft edge survives.
 in the middle and the node takes the new canvas as its format. **Background
 Replace** keeps the subject and paints a new background from the prompt.
 **Colour Transfer** gives the picture the palette and grade of a second
-one, wired into the node's fourth input, **second picture**; it is a
+one, wired into the node's second picture input; it is a
 repaint at up to 2 MP in 8 bits, so it is for finding a look, not for a
 final grade. *Nano Banana Pro edit, two pictures* is the general form: the
 prompt says what to take from the second picture. Inside a GenAI Pipeline
-the fourth input is the **Second Input** step.
+it is a second picture on the bar, and its **image 2** Input node.
 
 **Image to 3D.** *SAM 3D Objects* lifts one object out of the picture, the
 one the prompt names ("chair", "blue car"), as a 3D Gaussian splat. A splat

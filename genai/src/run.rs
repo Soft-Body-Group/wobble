@@ -81,16 +81,12 @@ pub struct ClipShape {
 /// What the host hands a run: its inputs, rendered, and the comp size.
 #[derive(Debug, Clone, Default)]
 pub struct Inputs {
-    pub reference: Option<Png>,
-    pub matte: Option<Png>,
-    /// The host's second picture input, for a `Second` step.
-    pub second: Option<Png>,
-    /// The image input over the run's range, for a `ClipIn` step.
-    pub clip: Option<Clip>,
-    /// The matte input over the same range, for a `MatteClip` step.
-    pub matte_clip: Option<Clip>,
-    /// The text wired into the host's prompt port, for a `prompt in` step.
-    pub prompt: Option<String>,
+    /// Per node input, rendered at the playhead: what an `Input` step
+    /// that is not a clip reads.
+    pub pics: std::collections::BTreeMap<usize, Png>,
+    /// Per node input, rendered over the run's range from the playhead:
+    /// what a clip `Input` reads.
+    pub clips: std::collections::BTreeMap<usize, Clip>,
     pub comp: (u32, u32),
     /// The playhead the inputs were rendered at.
     pub tick: i64,
@@ -136,6 +132,39 @@ fn sha_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The key tag of an Input step: the names the old fixed inputs keyed
+/// under ("reference", "second", "matte", "clip", "matte-clip"), so a
+/// result cached before the input bar is still found, and a count after.
+fn input_tag(matte: bool, nth: usize, clip: bool) -> String {
+    match (matte, clip, nth) {
+        (false, false, 0) => "reference".into(),
+        (false, false, 1) => "second".into(),
+        (false, false, n) => format!("image{n}"),
+        (true, false, 0) => "matte".into(),
+        (true, false, n) => format!("matte{n}"),
+        (false, true, 0) => "clip".into(),
+        (false, true, n) => format!("clip{n}"),
+        (true, true, 0) => "matte-clip".into(),
+        (true, true, n) => format!("matte-clip{n}"),
+    }
+}
+
+/// The clip a step's video port reads straight off a clip Input (the
+/// picture before a matte), for a model that needs to know its shape.
+fn step_clip<'a>(p: &Pipeline, i: usize, inputs: &'a Inputs) -> Option<&'a Clip> {
+    let src = |want_matte: bool| {
+        p.steps[i].inputs.iter().flatten().find_map(|&j| match p.steps[j].op {
+            Op::Input { input, clip: true, matte, .. } if matte == want_matte => inputs.clips.get(&input),
+            _ => None,
+        })
+    };
+    src(false).or_else(|| src(true))
+}
+
+/// What an old-shape step says when it reaches a run (`normalize` should
+/// have turned it into an Input).
+const OLD_STEP: &str = "this pipeline has a step from an older build: open and close it to update it";
+
 /// Is there a finished result for this key?
 pub fn cached(dir: &Path, key: &str) -> Option<Meta> {
     let text = std::fs::read_to_string(dir.join(key).join(META)).ok()?;
@@ -179,40 +208,25 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
         let in_mp = |port: usize| step.inputs.get(port).copied().flatten().map(|j| mp[j]);
         let (key, m) = match &step.op {
             Op::Prompt { text } => (h(&["prompt", text]), 0.0),
-            // The same recipe as a typed prompt: the key is the TEXT that
-            // reaches the request, never where it came from.
-            Op::PromptIn => {
-                let t = inputs.prompt.as_ref().ok_or(
-                    "the pipeline reads the node's prompt, and no String node is wired into it",
-                )?;
-                (h(&["prompt", t]), 0.0)
-            }
-            Op::Reference => {
-                let r = inputs.reference.as_ref().ok_or(
-                    "the pipeline reads the node's input, and nothing is wired into it",
-                )?;
-                (h(&["reference", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
-            }
-            Op::Matte => {
-                let r = inputs.matte.as_ref().ok_or(
-                    "the pipeline reads the node's matte, and nothing is wired into it",
-                )?;
-                (h(&["matte", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
-            }
-            Op::Second => {
-                let r = inputs.second.as_ref().ok_or(
-                    "the pipeline reads the node's second picture, and nothing is wired into it",
-                )?;
-                (h(&["second", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
-            }
-            Op::ClipIn { .. } | Op::MatteClip => {
-                let (c, what, tag) = if matches!(step.op, Op::ClipIn { .. }) {
-                    (inputs.clip.as_ref(), "input", "clip")
+            Op::Input { input, matte, nth, clip, .. } => {
+                let what = if *matte { "matte" } else { "image" };
+                let tag = input_tag(*matte, *nth, *clip);
+                if *clip {
+                    let c = inputs.clips.get(input).ok_or(format!(
+                        "the pipeline reads the node's {what} input {} as a clip, and none was captured",
+                        input + 1
+                    ))?;
+                    (h(&[&tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
                 } else {
-                    (inputs.matte_clip.as_ref(), "matte", "matte-clip")
-                };
-                let c = c.ok_or(format!("the pipeline reads the node's {what} as a clip, and none was captured"))?;
-                (h(&[tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
+                    let r = inputs.pics.get(input).ok_or(format!(
+                        "the pipeline reads the node's {what} input {}, and nothing is wired into it",
+                        input + 1
+                    ))?;
+                    (h(&[&tag, &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
+                }
+            }
+            Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
+                return Err(OLD_STEP.into())
             }
             Op::Template { text } => {
                 // `{frame}` makes the frame part of the words.
@@ -225,7 +239,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
             Op::Generate { model, seed, opts } => {
                 let m = catalog::get(model).ok_or_else(|| format!("unknown model {model}"))?;
                 if m.task.takes_clip() {
-                    let c = inputs.clip.as_ref().ok_or(format!("{} reads the node's input as a clip", m.label))?;
+                    let c = step_clip(p, i, inputs)
+                        .ok_or(format!("{} reads a clip: feed its video port from an Input set to clip", m.label))?;
                     m.dialect.check_clip(m.label, c.frames, c.fps, c.w, c.h)?;
                 }
                 let size = t2i_size(m, opts, inputs.comp);
@@ -627,7 +642,7 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
                 p.steps[i].inputs.iter().map(|s| s.map(|_| "<image>".to_string())).collect();
             // A video upscaler is billed on the clip it is sent too, when
             // that is the captured one.
-            let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip() || m.task == Task::VideoUpscale);
+            let clip = step_clip(p, i, inputs).filter(|_| m.task.takes_clip() || m.task == Task::VideoUpscale);
             let r = request_clip(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph, clip.map(Clip::shape))?;
             let video = match clip {
                 // Billed on the clip sent: its length, its size.
@@ -862,46 +877,22 @@ fn execute(
         let key = &plan.keys[i];
         let v = match &p.steps[i].op {
             Op::Prompt { text } => Val::Text(text.clone()),
-            Op::PromptIn => Val::Text(
-                inputs.prompt.clone().ok_or_else(|| anyhow!("no String node is wired into the node"))?,
-            ),
-            Op::Reference | Op::Matte | Op::Second => {
-                let png = match p.steps[i].op {
-                    Op::Reference => inputs.reference.as_ref(),
-                    Op::Matte => inputs.matte.as_ref(),
-                    _ => inputs.second.as_ref(),
+            Op::Input { input, clip, .. } => {
+                let (bytes, file) = if *clip {
+                    let c = inputs.clips.get(input).ok_or_else(|| anyhow!("missing input clip"))?;
+                    (&c.bytes, "input.mp4")
+                } else {
+                    let png = inputs.pics.get(input).ok_or_else(|| anyhow!("missing input picture"))?;
+                    (&png.bytes, "input.png")
                 };
-                let png = png.ok_or_else(|| anyhow!("missing input picture"))?;
                 let path = match cached(dir, key) {
                     Some(m) => dir.join(key).join(m.file),
-                    None => commit(
-                        dir,
-                        key,
-                        "input.png",
-                        &png.bytes,
-                        &Meta { file: "input.png".into(), when: now(), ..meta0() },
-                    )?,
+                    None => commit(dir, key, file, bytes, &Meta { file: file.into(), when: now(), ..meta0() })?,
                 };
                 Val::Image(path)
             }
-            Op::ClipIn { .. } | Op::MatteClip => {
-                let c = if matches!(p.steps[i].op, Op::ClipIn { .. }) {
-                    inputs.clip.as_ref()
-                } else {
-                    inputs.matte_clip.as_ref()
-                };
-                let c = c.ok_or_else(|| anyhow!("missing input clip"))?;
-                let path = match cached(dir, key) {
-                    Some(m) => dir.join(key).join(m.file),
-                    None => commit(
-                        dir,
-                        key,
-                        "input.mp4",
-                        &c.bytes,
-                        &Meta { file: "input.mp4".into(), when: now(), ..meta0() },
-                    )?,
-                };
-                Val::Image(path)
+            Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
+                bail!(OLD_STEP)
             }
             Op::Template { text } => {
                 let word = |port: usize| match get(&vals, i, port) {
@@ -941,7 +932,7 @@ fn execute(
                             _ => None,
                         });
                     }
-                    let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip()).map(Clip::shape);
+                    let clip = step_clip(p, i, inputs).filter(|_| m.task.takes_clip()).map(Clip::shape);
                     let mut req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, clip)?;
                     if m.dialect == Dialect::BriaExpand && opts.extra.trim().is_empty() {
                         // Now the picture is in hand, the canvas is ITS
@@ -1112,7 +1103,6 @@ fn execute(
     let file = path.file_name().and_then(|f| f.to_str()).unwrap_or("result.png").to_string();
     let prompt = plan.order.iter().find_map(|&i| match &p.steps[i].op {
         Op::Prompt { text } if !text.is_empty() => Some(text.chars().take(40).collect::<String>()),
-        Op::PromptIn => inputs.prompt.as_ref().filter(|t| !t.is_empty()).map(|t| t.chars().take(40).collect()),
         _ => None,
     });
     let mut label = labels.join(" → ");
@@ -1243,19 +1233,19 @@ mod tests {
     fn a_template_fills_its_variables_and_keys_on_what_it_reads() {
         assert_eq!(fill_template("{a}, {b} at frame {frame} {c}", "a moth", "", 1001), "a moth,  at frame 1001 {c}");
         let dir = std::env::temp_dir().join("wobble-genai-template-none");
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
-        let a = p.push(Op::PromptIn, [0.0, 0.0]);
+        let mut p = Pipeline::bare(vec![]);
+        let a = p.push(Op::Prompt { text: "a moth".into() }, [0.0, 0.0]);
         let t = p.push(Op::Template { text: "{a}, golden hour".into() }, [0.0, 0.0]);
         let g = p.push(Op::Generate { model: "fal/flux-schnell".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
         let o = p.push(Op::Output, [0.0, 0.0]);
         assert!(p.connect(a, t, 0) && p.connect(t, g, 0) && p.connect(g, o, 0));
-        let mut ins = Inputs { prompt: Some("a moth".into()), comp: (1920, 1080), tick: 5, ..Default::default() };
+        let mut ins = Inputs { comp: (1920, 1080), tick: 5, ..Default::default() };
         let k1 = plan(&p, &ins, &dir).unwrap().keys[g].clone();
         // The frame is not in the words, so it is not in the key.
         ins.tick = 6;
         assert_eq!(plan(&p, &ins, &dir).unwrap().keys[g], k1);
         // The variable is.
-        ins.prompt = Some("a lamp".into());
+        p.steps[a].op = Op::Prompt { text: "a lamp".into() };
         assert_ne!(plan(&p, &ins, &dir).unwrap().keys[g], k1);
         // And with {frame} in the text, so is the frame.
         p.steps[t].op = Op::Template { text: "{a}, frame {frame}".into() };
@@ -1315,11 +1305,13 @@ mod tests {
         let dir = std::env::temp_dir().join("wobble-genai-second-none");
         let p = Pipeline::for_model("fal/colour-transfer").unwrap();
         let png = |b: u8| Png { bytes: vec![b; 8], w: 4, h: 4 };
-        let mut ins = Inputs { reference: Some(png(1)), comp: (1920, 1080), ..Default::default() };
-        assert!(plan(&p, &ins, &dir).unwrap_err().contains("second picture"));
-        ins.second = Some(png(2));
+        assert_eq!(p.ins.len(), 2, "the image and the second picture");
+        let mut ins = Inputs { comp: (1920, 1080), ..Default::default() };
+        ins.pics.insert(0, png(1));
+        assert!(plan(&p, &ins, &dir).unwrap_err().contains("image input 2"));
+        ins.pics.insert(1, png(2));
         let a = plan(&p, &ins, &dir).unwrap();
-        ins.second = Some(png(3));
+        ins.pics.insert(1, png(3));
         let b = plan(&p, &ins, &dir).unwrap();
         assert_ne!(a.keys[a.target], b.keys[b.target], "another reference is another request");
     }
@@ -1372,14 +1364,8 @@ mod tests {
     #[test]
     fn a_clip_s_length_keys_a_video_step_and_nothing_else() {
         let dir = std::env::temp_dir().join("wobble-genai-keys-none");
-        let ins = Inputs {
-            reference: Some(Png { bytes: vec![1, 2, 3], w: 4, h: 4 }),
-            matte: None,
-            prompt: None,
-            comp: (2048, 1080),
-            tick: 0,
-            ..Default::default()
-        };
+        let mut ins = Inputs { comp: (2048, 1080), tick: 0, ..Default::default() };
+        ins.pics.insert(0, Png { bytes: vec![1, 2, 3], w: 4, h: 4 });
         let key = |p: &Pipeline| plan(p, &ins, &dir).unwrap().keys[1].clone();
         let set = |p: &mut Pipeline, secs: u32| {
             if let Op::Generate { opts, .. } = &mut p.steps[1].op {
@@ -1391,7 +1377,7 @@ mod tests {
         set(&mut p, 9);
         assert_eq!(key(&p), k, "a still's key does not see the video knobs");
         p.set_model(1, "fal/seedance-2-fast-i2v");
-        let r = p.push(Op::Reference, [0.0, 0.0]);
+        let r = p.input_step(0).unwrap();
         assert!(p.connect(r, 1, 1));
         let k = key(&p);
         set(&mut p, 10);
@@ -1399,22 +1385,14 @@ mod tests {
     }
 
     #[test]
-    fn a_wired_prompt_keys_like_the_same_typed_prompt() {
-        let dir = std::env::temp_dir().join("wobble-genai-keys-none");
-        let mut ins = Inputs { prompt: Some("a moth".into()), comp: (2048, 1080), ..Default::default() };
-        let mut typed = Pipeline::default();
-        if let Op::Prompt { text } = &mut typed.steps[0].op {
-            *text = "a moth".into();
-        }
-        let mut wired = Pipeline::default();
-        wired.steps[0].op = Op::PromptIn;
-        let k = |p: &Pipeline, ins: &Inputs| plan(p, ins, &dir).unwrap().keys[1].clone();
-        assert_eq!(k(&wired, &ins), k(&typed, &ins), "moving a prompt into the graph re-bills nothing");
-        let before = k(&wired, &ins);
-        ins.prompt = Some("a lamp".into());
-        assert_ne!(k(&wired, &ins), before, "the wired text is in the key");
-        ins.prompt = None;
-        assert!(plan(&wired, &ins, &dir).unwrap_err().contains("no String node"));
+    fn an_input_keys_under_the_name_the_old_fixed_input_did() {
+        // A result cached before the input bar is still found.
+        assert_eq!(input_tag(false, 0, false), "reference");
+        assert_eq!(input_tag(false, 1, false), "second");
+        assert_eq!(input_tag(true, 0, false), "matte");
+        assert_eq!(input_tag(false, 0, true), "clip");
+        assert_eq!(input_tag(true, 0, true), "matte-clip");
+        assert_ne!(input_tag(false, 2, false), input_tag(true, 2, false));
     }
 
     fn clip(frames: u32, w: u32, h: u32) -> Clip {
@@ -1444,27 +1422,27 @@ mod tests {
     fn a_clip_pipeline_keys_on_the_clips_and_checks_them_before_sending() {
         let dir = std::env::temp_dir().join(format!("wobble-genai-clip-{}", std::process::id()));
         let p = Pipeline::for_model("fal/ltx-2.3-inpaint").unwrap();
-        assert!(p.wants_clip() && p.wants_matte_clip() && !p.wants_reference());
+        assert_eq!(p.reads(), vec![(0, true), (1, true)]);
         let mut ins = Inputs { comp: (1920, 1080), ..Default::default() };
         assert!(plan(&p, &ins, &dir).unwrap_err().contains("clip"));
-        ins.clip = Some(clip(72, 1280, 720));
-        ins.matte_clip = Some(clip(72, 1280, 720));
+        ins.clips.insert(0, clip(72, 1280, 720));
+        ins.clips.insert(1, clip(72, 1280, 720));
         let a = plan(&p, &ins, &dir).unwrap();
-        ins.matte_clip = Some(clip(73, 1280, 720));
+        ins.clips.insert(1, clip(73, 1280, 720));
         let b = plan(&p, &ins, &dir).unwrap();
         assert_ne!(a.keys[a.target], b.keys[b.target], "the matte clip's bytes are in the key");
         // The whole clip's megapixels, for a per-MP video price.
         let g = p.model_step().unwrap();
         assert!((a.mp[g] - 1280.0 * 720.0 * 72.0 / 1e6).abs() < 1e-6);
-        ins.clip = Some(clip(4, 1280, 720));
+        ins.clips.insert(0, clip(4, 1280, 720));
         assert!(plan(&p, &ins, &dir).unwrap_err().contains("9-481"));
 
         let k = Pipeline::for_model("fal/kling-o3-pro-video-edit").unwrap();
-        ins.clip = Some(clip(24, 1280, 720));
+        ins.clips.insert(0, clip(24, 1280, 720));
         assert!(plan(&k, &ins, &dir).unwrap_err().contains("3-15 s"));
-        ins.clip = Some(clip(72, 640, 360));
+        ins.clips.insert(0, clip(72, 640, 360));
         assert!(plan(&k, &ins, &dir).unwrap_err().contains("720 px"));
-        ins.clip = Some(clip(72, 1280, 720));
+        ins.clips.insert(0, clip(72, 1280, 720));
         assert!(plan(&k, &ins, &dir).is_ok());
     }
 }

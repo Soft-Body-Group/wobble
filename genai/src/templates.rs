@@ -33,7 +33,9 @@ pub struct Template {
 
 impl Template {
     pub fn pipeline(&self) -> Pipeline {
-        (self.build)()
+        let mut p = (self.build)();
+        p.normalize();
+        p
     }
 
     /// The catalog models it runs, in step order.
@@ -61,7 +63,9 @@ struct B {
 
 impl B {
     fn new() -> Self {
-        B { p: Pipeline { steps: vec![], takes: vec![], take: 0 }, row: -0.2 }
+        // Built with the old source steps (Reference, Matte, Second…):
+        // `Template::pipeline` normalizes them into the node's Inputs.
+        B { p: Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![] }, row: -0.2 }
     }
     fn src(&mut self, op: Op, x: f32) -> usize {
         self.p.push(op, [x, -0.6])
@@ -340,7 +344,7 @@ pub fn load(path: &Path) -> Result<Saved, String> {
     if t.kind != KIND {
         return Err(format!("not a wobble GenAI template ({})", t.kind));
     }
-    let mut p = Pipeline { steps: std::mem::take(&mut t.steps), takes: vec![], take: 0 };
+    let mut p = Pipeline { steps: std::mem::take(&mut t.steps), takes: vec![], take: 0, ins: vec![] };
     for i in 0..p.steps.len() {
         p.sync_ports(i);
     }
@@ -379,7 +383,10 @@ mod tests {
             let p = t.pipeline();
             let out = p.output().unwrap_or_else(|| panic!("{}: no Output", t.name));
             let order = p.plan(out).unwrap_or_else(|e| panic!("{}: {e}", t.name));
-            assert_eq!(order.len(), p.steps.len(), "{}: a step leads nowhere", t.name);
+            // Every step is on the way out, but an Input nothing reads (the
+            // node keeps its inputs whether a template uses them or not).
+            let used = p.steps.iter().filter(|s| !matches!(s.op, Op::Input { .. })).count() + p.reads().len();
+            assert_eq!(order.len(), used, "{}: a step leads nowhere", t.name);
             for s in &p.steps {
                 assert!(s.inputs.iter().all(|i| i.is_some()), "{}: {} has an unfed port", t.name, s.op.name());
                 if let Op::Generate { model, .. } = &s.op {

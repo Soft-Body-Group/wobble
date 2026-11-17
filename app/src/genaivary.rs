@@ -33,7 +33,7 @@ pub fn batch_id(node: u64) -> egui::Id {
 /// Does a run of this pipeline render any of the node's inputs? Only then
 /// does a frame list multiply it.
 fn captures(pl: &genai::Pipeline) -> bool {
-    pl.wants_reference() || pl.wants_matte() || pl.wants_second() || pl.wants_clip() || pl.wants_matte_clip()
+    !pl.reads().is_empty()
 }
 
 /// How many takes a run would make, or why it cannot be counted.

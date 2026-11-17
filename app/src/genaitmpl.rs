@@ -43,6 +43,9 @@ pub(super) fn menu(ui: &mut Ui, node: u64, p: &mut GenAiParams) {
             ));
             if r.clicked() {
                 p.pipeline.steps = pl.steps;
+                // Its inputs become this node's (more are added if it
+                // needs them; none are renumbered).
+                p.pipeline.normalize();
                 p.app = Default::default();
                 ui.close();
             }
@@ -58,6 +61,7 @@ pub(super) fn menu(ui: &mut Ui, node: u64, p: &mut GenAiParams) {
             let r = ui.add_enabled(runnable(&t.steps), egui::Button::new(small(&t.name)));
             if r.on_hover_text(about).clicked() {
                 p.pipeline.steps = t.steps;
+                p.pipeline.normalize();
                 // A template saved from an app opens as that app.
                 p.app = t.app.unwrap_or_default();
                 ui.close();

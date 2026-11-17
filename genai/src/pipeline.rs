@@ -49,36 +49,64 @@ pub struct Step {
     pub inputs: Vec<Option<usize>>,
 }
 
+/// What one of the host node's inputs carries. The node has as many as
+/// its pipeline lists (`Pipeline::ins`), and each one appears INSIDE as
+/// exactly one `Op::Input` step that cannot be deleted or added by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InKind {
+    /// A picture, sent as sRGB.
+    Image,
+    /// Coverage: white = where to work.
+    Matte,
+}
+
 /// What a step does.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
+    /// One of the host node's inputs (`input` indexes `Pipeline::ins`),
+    /// rendered at the playhead when the run starts, or over a frame range
+    /// from it when `clip` (sent as an mp4: what a video model reads).
+    /// One per input, made and removed by `Pipeline::sync_inputs` only.
+    /// A picture leaves the comp as display-referred sRGB (see `image`);
+    /// a matte as coverage.
+    Input {
+        input: usize,
+        /// Mirrors `Pipeline::ins[input]` (kept so by `sync_inputs`): the
+        /// step's name and its capture need it without the pipeline.
+        #[serde(default)]
+        matte: bool,
+        /// Which image (or matte) this is, counting from 0 — "image 2".
+        #[serde(default)]
+        nth: usize,
+        #[serde(default)]
+        clip: bool,
+        /// A clip's length, in seconds of comp time.
+        #[serde(default = "default_clip_seconds")]
+        seconds: f32,
+    },
     /// Text typed into the panel.
     Prompt { text: String },
-    /// The host node's image input, rendered at the playhead when the run
-    /// starts. Leaves the comp as display-referred sRGB (see `image`).
+    /// LEGACY (read from old files, converted by `Pipeline::normalize`
+    /// into an `Input`, never run): the host node's image input.
     Reference,
-    /// The host node's TEXT input: whatever Prompt node is wired into it,
-    /// read when the run starts. Keyed exactly like a Prompt step with the
-    /// same text, so moving a prompt out into the graph re-bills nothing.
+    /// LEGACY: the host node's old text input. The node has no prompt
+    /// input any more (prompts live inside); `normalize` makes this a
+    /// Prompt, and the app's setup migration copies in the text that was
+    /// wired.
     PromptIn,
-    /// The host node's MATTE input at the playhead — white where a fill or
-    /// an edit should land.
+    /// LEGACY: the host node's matte input (the first matte).
     Matte,
-    /// The host node's SECOND picture input at the playhead: a reference
-    /// for colour, style or content, beside the image being worked on.
+    /// LEGACY: the host node's second picture input (the second image).
     Second,
-    /// The host node's image input over a frame RANGE from the playhead,
-    /// encoded as an mp4 when the run starts: what a video-to-video model
-    /// reads. Leaves the comp as display-referred sRGB, like `Reference`.
+    /// LEGACY: the first image input as a clip.
     ClipIn {
         /// Length of the clip, in seconds of comp time.
         #[serde(default = "default_clip_seconds")]
         seconds: f32,
     },
-    /// The host node's MATTE input over the same range as the pipeline's
-    /// `ClipIn` (`Pipeline::clip_seconds`): white where a video model
-    /// should work (an object to remove, say).
+    /// LEGACY: the first matte input as a clip.
     MatteClip,
     /// One call to a remote model from the catalog, by stable id.
     Generate {
@@ -175,6 +203,7 @@ impl Op {
     pub fn ports(&self) -> Vec<(Pipe, &'static str)> {
         match self {
             Op::Prompt { .. }
+            | Op::Input { .. }
             | Op::PromptIn
             | Op::Reference
             | Op::Matte
@@ -205,6 +234,7 @@ impl Op {
             }
             Op::Output => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
+            Op::Input { clip: true, .. } => Some(Pipe::Video),
             Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_3d()) => {
                 Some(Pipe::Scene)
             }
@@ -238,6 +268,10 @@ impl Op {
     pub fn name(&self) -> &'static str {
         match self {
             Op::Prompt { .. } => "Prompt",
+            Op::Input { matte: false, clip: false, .. } => "Image In",
+            Op::Input { matte: true, clip: false, .. } => "Matte In",
+            Op::Input { matte: false, clip: true, .. } => "Image Clip In",
+            Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
@@ -262,6 +296,15 @@ impl Op {
                     format!("{t}…")
                 } else {
                     t
+                }
+            }
+            Op::Input { matte, nth, clip, seconds, .. } => {
+                let what = if *matte { "matte" } else { "image" };
+                match (*nth, *clip) {
+                    (0, false) => what.into(),
+                    (n, false) => format!("{what} {}", n + 1),
+                    (0, true) => format!("{what} clip {seconds:.1}s"),
+                    (n, true) => format!("{what} {} clip {seconds:.1}s", n + 1),
                 }
             }
             Op::PromptIn => "prompt in".into(),
@@ -387,13 +430,32 @@ pub struct Pipeline {
     /// Which take the node shows. Out of range = none.
     #[serde(default)]
     pub take: usize,
+    /// The host node's inputs, in node-input order: what each carries.
+    /// The node's bar draws the images on the left and the mattes on the
+    /// right, but an input's INDEX is the order it was added in, so adding
+    /// one never renumbers the wires already there. Empty only in a file
+    /// written before the node had a bar (`normalize` fills it: the old
+    /// image, matte, prompt and second-picture inputs).
+    #[serde(default)]
+    pub ins: Vec<InKind>,
+}
+
+/// What `normalize` found in a pipeline from before the input bar: where
+/// the old fixed inputs went, so the app can move their wires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Legacy {
+    /// The node input the old SECOND picture (old input 3) now is, if the
+    /// pipeline read it.
+    pub second: Option<usize>,
 }
 
 impl Default for Pipeline {
     /// Prompt -> text-to-image -> Output: the shortest thing that makes a
     /// picture.
     fn default() -> Self {
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        // The Inputs go after (`sync_inputs` below): step 0 is the prompt,
+        // 1 the model, 2 Output, which a lot of code and tests lean on.
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![InKind::Image, InKind::Matte] };
         let prompt = p.push(Op::Prompt { text: String::new() }, [-0.55, -0.45]);
         let gen = p.push(
             Op::Generate { model: catalog::DEFAULT_MODEL.into(), seed: 1, opts: Opts::default() },
@@ -402,6 +464,7 @@ impl Default for Pipeline {
         let out = p.push(Op::Output, [0.0, 0.55]);
         p.connect(prompt, gen, 0);
         p.connect(gen, out, 0);
+        p.sync_inputs();
         p
     }
 }
@@ -414,26 +477,223 @@ impl Pipeline {
     pub fn for_model(id: &str) -> Option<Self> {
         // A text model makes no picture: it is a step, not a node.
         let m = catalog::get(id).filter(|m| !m.task.is_text())?;
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        // The first image is always there (an unloaded node passes it
+        // through); the rest are what the model's ports name.
+        let mut p = Pipeline::bare(vec![InKind::Image]);
         let gen = p.push(Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
         let ports = task_ports(m.task);
         let n = ports.len().max(1) as f32;
+        let mut images = 0;
         for (port, (pipe, name)) in ports.into_iter().enumerate() {
-            let op = match (pipe, name) {
-                (Pipe::Text, _) => Op::Prompt { text: String::new() },
-                (Pipe::Video, "mask") => Op::MatteClip,
-                (Pipe::Video, _) => Op::ClipIn { seconds: default_clip_seconds() },
-                (_, "mask") => Op::Matte,
-                (_, "reference") => Op::Second,
-                _ => Op::Reference,
-            };
             let x = -0.6 + 1.2 * (port as f32 + 0.5) / n;
-            let src = p.push(op, [x, -0.55]);
+            let clip = pipe == Pipe::Video;
+            let kind = if name == "mask" { InKind::Matte } else { InKind::Image };
+            let src = match (pipe, kind) {
+                (Pipe::Text, _) => p.push(Op::Prompt { text: String::new() }, [x, -0.55]),
+                (_, InKind::Matte) => {
+                    let k = p.add_input(InKind::Matte);
+                    p.input_step(k).unwrap()
+                }
+                (_, InKind::Image) => {
+                    let k = if images == 0 { 0 } else { p.add_input(InKind::Image) };
+                    images += 1;
+                    p.input_step(k).unwrap()
+                }
+            };
+            if let Op::Input { clip: c, .. } = &mut p.steps[src].op {
+                *c = clip;
+            }
+            if pipe != Pipe::Text {
+                p.steps[src].at = [x, -0.55];
+            }
             p.connect(src, gen, port);
         }
         let out = p.push(Op::Output, [0.0, 0.55]);
         p.connect(gen, out, 0);
         Some(p)
+    }
+
+    /// No steps but one Input per input in `ins`.
+    pub fn bare(ins: Vec<InKind>) -> Self {
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins };
+        p.sync_inputs();
+        p
+    }
+
+    /// The Input step of node input `k`.
+    pub fn input_step(&self, k: usize) -> Option<usize> {
+        self.steps.iter().position(|s| matches!(s.op, Op::Input { input, .. } if input == k))
+    }
+
+    /// Add a node input of `kind` at the END (no wire already there is
+    /// renumbered), with its Input step. Returns its index.
+    pub fn add_input(&mut self, kind: InKind) -> usize {
+        self.ins.push(kind);
+        self.sync_inputs();
+        self.ins.len() - 1
+    }
+
+    /// Remove node input `k` and its Input step (wires out of it drop).
+    /// Later inputs slide down by one — the caller moves the host's wires
+    /// to match. Refused for the last image: the node passes its first
+    /// image through until something is generated.
+    pub fn remove_input(&mut self, k: usize) -> bool {
+        if k >= self.ins.len() {
+            return false;
+        }
+        if self.ins[k] == InKind::Image && self.ins.iter().filter(|i| **i == InKind::Image).count() <= 1 {
+            return false;
+        }
+        if let Some(i) = self.input_step(k) {
+            self.remove_step(i);
+        }
+        self.ins.remove(k);
+        for s in &mut self.steps {
+            if let Op::Input { input, .. } = &mut s.op {
+                if *input > k {
+                    *input -= 1;
+                }
+            }
+        }
+        self.sync_inputs();
+        true
+    }
+
+    /// Exactly one Input step per node input, each naming its own kind and
+    /// count; any for an input that no longer exists removed, a duplicate
+    /// (a paste) folded into the first, a missing one added along the top.
+    pub fn sync_inputs(&mut self) {
+        let mut i = 0;
+        while i < self.steps.len() {
+            if let Op::Input { input, .. } = self.steps[i].op {
+                let first = self.input_step(input);
+                if input >= self.ins.len() {
+                    self.remove_step(i);
+                    continue;
+                }
+                if let Some(f) = first.filter(|&f| f != i) {
+                    // Its consumers read the first one instead.
+                    for s in &mut self.steps {
+                        for inp in &mut s.inputs {
+                            if *inp == Some(i) {
+                                *inp = Some(f);
+                            }
+                        }
+                    }
+                    self.remove_step(i);
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        let n = self.ins.len();
+        for k in 0..n {
+            let kind = self.ins[k];
+            let nth = self.ins[..k].iter().filter(|x| **x == kind).count();
+            match self.input_step(k) {
+                Some(i) => {
+                    if let Op::Input { matte, nth: m, .. } = &mut self.steps[i].op {
+                        *matte = kind == InKind::Matte;
+                        *m = nth;
+                    }
+                }
+                None => {
+                    let x = -0.8 + 1.6 * (k as f32 + 0.5) / n as f32;
+                    self.push(
+                        Op::Input {
+                            input: k,
+                            matte: kind == InKind::Matte,
+                            nth,
+                            clip: false,
+                            seconds: default_clip_seconds(),
+                        },
+                        [x, -0.85],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Bring a pipeline from any older shape to this one: fill `ins` for a
+    /// file from before the input bar (the old image and matte inputs),
+    /// turn the old source steps (Reference, Matte, Second, ClipIn,
+    /// MatteClip — and a built-in template's) into the Input of the input
+    /// they meant, adding inputs they need, and a PromptIn into an empty
+    /// Prompt. An Input that names the wrong input (a template made on
+    /// another node) is re-pointed at the input of its kind and count.
+    /// Idempotent. `Some` when the pipeline was from before the bar.
+    pub fn normalize(&mut self) -> Option<Legacy> {
+        let legacy = self.ins.is_empty();
+        if legacy {
+            self.ins = vec![InKind::Image, InKind::Matte];
+        }
+        let mut found = Legacy::default();
+        // (step, kind, nth, clip, seconds) for every source to re-point.
+        let mut todo = vec![];
+        for (i, s) in self.steps.iter().enumerate() {
+            let t = match &s.op {
+                Op::Reference => (InKind::Image, 0, false, default_clip_seconds()),
+                Op::Second => (InKind::Image, 1, false, default_clip_seconds()),
+                Op::Matte => (InKind::Matte, 0, false, default_clip_seconds()),
+                Op::ClipIn { seconds } => (InKind::Image, 0, true, *seconds),
+                Op::MatteClip => (InKind::Matte, 0, true, default_clip_seconds()),
+                Op::Input { input, matte, nth, clip, seconds } => {
+                    let kind = if *matte { InKind::Matte } else { InKind::Image };
+                    if self.nth_input(kind, *nth) == Some(*input) {
+                        continue;
+                    }
+                    (kind, *nth, *clip, *seconds)
+                }
+                _ => continue,
+            };
+            todo.push((i, t));
+        }
+        // Inputs already spoken for, and as what (still or clip): a still
+        // and a clip of the same old input cannot share one Input step.
+        let mut taken: Vec<(usize, bool)> = self
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !todo.iter().any(|(j, _)| j == i))
+            .filter_map(|(_, s)| match s.op {
+                Op::Input { input, clip, .. } => Some((input, clip)),
+                _ => None,
+            })
+            .collect();
+        for (i, (kind, nth, clip, seconds)) in todo {
+            let mut k = loop {
+                match self.nth_input(kind, nth) {
+                    Some(k) => break k,
+                    None => {
+                        self.ins.push(kind);
+                    }
+                }
+            };
+            if taken.iter().any(|&(t, c)| t == k && c != clip) {
+                self.ins.push(kind);
+                k = self.ins.len() - 1;
+            }
+            taken.push((k, clip));
+            if legacy && matches!(self.steps[i].op, Op::Second) {
+                found.second = Some(k);
+            }
+            self.steps[i].op = Op::Input { input: k, matte: kind == InKind::Matte, nth, clip, seconds };
+        }
+        for s in &mut self.steps {
+            if matches!(s.op, Op::PromptIn) {
+                s.op = Op::Prompt { text: String::new() };
+            }
+        }
+        self.sync_inputs();
+        for i in 0..self.steps.len() {
+            self.sync_ports(i);
+        }
+        legacy.then_some(found)
+    }
+
+    /// The node input that is the `nth` of its kind.
+    pub fn nth_input(&self, kind: InKind, nth: usize) -> Option<usize> {
+        self.ins.iter().enumerate().filter(|(_, k)| **k == kind).nth(nth).map(|(i, _)| i)
     }
 
     /// The one model step of a one-model pipeline (see `for_model`).
@@ -483,10 +743,17 @@ impl Pipeline {
     /// Remove a step, dropping wires into and out of it and sliding every
     /// later index down. Output cannot be removed (the node would have no
     /// picture to point at, and a run nothing to finish on).
+    /// An Input cannot either: it IS one of the node's inputs (remove the
+    /// input instead, `remove_input`).
     pub fn remove(&mut self, i: usize) -> bool {
-        if i >= self.steps.len() || matches!(self.steps[i].op, Op::Output) {
+        if i >= self.steps.len() || matches!(self.steps[i].op, Op::Output | Op::Input { .. }) {
             return false;
         }
+        self.remove_step(i);
+        true
+    }
+
+    fn remove_step(&mut self, i: usize) {
         self.steps.remove(i);
         for s in &mut self.steps {
             for inp in &mut s.inputs {
@@ -497,7 +764,6 @@ impl Pipeline {
                 };
             }
         }
-        true
     }
 
     /// Make step `i`'s input list as long as its op's ports, dropping wires
@@ -626,19 +892,26 @@ impl Pipeline {
         })
     }
 
-    /// Does the pipeline read the host's image input? Its matte input?
-    pub fn wants_reference(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::Reference))
+    /// The node inputs a run reads — the Input steps on the way to Output,
+    /// as (input, clip) — in plan order. An Input nothing uses is not
+    /// captured, and its input need not be wired.
+    pub fn reads(&self) -> Vec<(usize, bool)> {
+        let Some(Ok(order)) = self.output().map(|o| self.plan(o)) else { return vec![] };
+        order
+            .into_iter()
+            .filter_map(|i| match self.steps[i].op {
+                Op::Input { input, clip, .. } => Some((input, clip)),
+                _ => None,
+            })
+            .collect()
     }
-    pub fn wants_matte(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::Matte))
+    /// Does a run read any input as a clip?
+    pub fn reads_clip(&self) -> bool {
+        self.reads().iter().any(|r| r.1)
     }
-    /// Its second picture input?
-    pub fn wants_second(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::Second))
-    }
-    pub fn wants_prompt(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::PromptIn))
+    /// What node input `k` carries (an image when out of range).
+    pub fn in_kind(&self, k: usize) -> InKind {
+        self.ins.get(k).copied().unwrap_or(InKind::Image)
     }
     /// Does the node's picture come straight out of an UPSCALER? Then the
     /// result's own size is the node's format: stretched back over the
@@ -665,21 +938,27 @@ impl Pipeline {
             usual
         }
     }
-    /// Does it read the host's image input as a clip? Its matte as one?
-    pub fn wants_clip(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::ClipIn { .. }))
+    /// Set every clip Input's length (they always match). Returns whether
+    /// anything changed.
+    pub fn set_clip_seconds(&mut self, v: f32) -> bool {
+        let mut changed = false;
+        for s in &mut self.steps {
+            if let Op::Input { clip: true, seconds, .. } = &mut s.op {
+                changed |= *seconds != v;
+                *seconds = v;
+            }
+        }
+        changed
     }
-    pub fn wants_matte_clip(&self) -> bool {
-        self.steps.iter().any(|s| matches!(s.op, Op::MatteClip))
-    }
-    /// How long a run's clips are: the first `ClipIn`'s length (a
-    /// `MatteClip` follows it, so the two always line up frame for frame),
-    /// else the default.
+
+    /// How long a run's clips are: the first clip Input's length (every
+    /// clip a run sends covers the same frames, so they line up frame for
+    /// frame), else the default.
     pub fn clip_seconds(&self) -> f32 {
         self.steps
             .iter()
             .find_map(|s| match s.op {
-                Op::ClipIn { seconds } => Some(seconds),
+                Op::Input { clip: true, seconds, .. } => Some(seconds),
                 _ => None,
             })
             .unwrap_or(default_clip_seconds())
@@ -712,13 +991,19 @@ mod tests {
             let plan = p.plan(out).unwrap_or_else(|e| panic!("{}: {e}", m.id));
             let g = p.model_step().unwrap();
             assert!(p.steps[g].inputs.iter().all(|i| i.is_some()), "{}", m.id);
-            assert_eq!(plan.len(), p.steps.len(), "{}: every step is on the way out", m.id);
             let ports = task_ports(m.task);
-            assert_eq!(p.wants_matte(), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "mask"), "{}", m.id);
-            assert_eq!(p.wants_matte_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n == "mask"), "{}", m.id);
-            assert_eq!(p.wants_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n != "mask"), "{}", m.id);
-            assert_eq!(p.wants_reference(), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "image"), "{}", m.id);
-            assert_eq!(p.wants_second(), ports.iter().any(|&(_, n)| n == "reference"), "{}", m.id);
+            // Every step is on the way out, but the first image when the
+            // model reads no picture (it is still the node's input).
+            let idle = usize::from(!ports.iter().any(|&(k, _)| k != Pipe::Text));
+            assert_eq!(plan.len() + idle, p.steps.len(), "{}: every step is on the way out", m.id);
+            let reads = p.reads();
+            let has = |matte: bool, clip: bool| reads.iter().any(|&(k, c)| (p.ins[k] == InKind::Matte) == matte && c == clip);
+            assert_eq!(has(true, false), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "mask"), "{}", m.id);
+            assert_eq!(has(true, true), ports.iter().any(|&(k, n)| k == Pipe::Video && n == "mask"), "{}", m.id);
+            assert_eq!(has(false, true), ports.iter().any(|&(k, n)| k == Pipe::Video && n != "mask"), "{}", m.id);
+            assert_eq!(has(false, false), ports.iter().any(|&(k, n)| k == Pipe::Image && n != "mask"), "{}", m.id);
+            assert_eq!(p.ins.iter().filter(|k| **k == InKind::Image).count() >= 2, ports.iter().any(|&(_, n)| n == "reference"), "{}", m.id);
+            assert_eq!(p.ins[0], InKind::Image, "{}: the first input is the image passed through", m.id);
         }
         assert!(Pipeline::for_model("no/such-model").is_none());
     }
@@ -856,7 +1141,7 @@ mod tests {
     #[test]
     fn text_steps_feed_prompts_and_a_template_s_ports_are_optional() {
         // image -> describe -> template -> schnell -> out
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        let mut p = Pipeline::bare(vec![InKind::Image]);
         let img = p.push(Op::Reference, [0.0, 0.0]);
         let ask = p.push(Op::Prompt { text: String::new() }, [0.0, 0.0]);
         let d = p.push(Op::Generate { model: "fal/describe".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
@@ -911,9 +1196,12 @@ mod tests {
 
     #[test]
     fn clip_steps_feed_video_ports_and_old_files_still_load() {
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
-        let c = p.push(Op::ClipIn { seconds: 3.0 }, [0.0, 0.0]);
-        let r = p.push(Op::Reference, [0.0, 0.0]);
+        let mut p = Pipeline::bare(vec![InKind::Image, InKind::Image]);
+        let c = p.input_step(0).unwrap();
+        if let Op::Input { clip, seconds, .. } = &mut p.steps[c].op {
+            (*clip, *seconds) = (true, 3.0);
+        }
+        let r = p.input_step(1).unwrap();
         let g = p.push(
             Op::Generate { model: "fal/kling-o3-pro-video-edit".into(), seed: 1, opts: Opts::default() },
             [0.0, 0.0],
@@ -929,5 +1217,66 @@ mod tests {
         assert_eq!(c, Op::ClipIn { seconds: 5.0 });
         let m: Op = serde_json::from_str(r#"{"op":"matte_clip"}"#).unwrap();
         assert_eq!(m.output(), Some(Pipe::Video));
+    }
+
+    #[test]
+    fn every_input_is_one_input_step_and_adding_one_renumbers_nothing() {
+        let mut p = Pipeline::default();
+        assert_eq!(p.ins, vec![InKind::Image, InKind::Matte], "one image, one matte");
+        let img = p.input_step(0).unwrap();
+        let ed = p.push(Op::Generate { model: "fal/flux-kontext-pro".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        assert!(p.connect(img, ed, 1));
+        let k = p.add_input(InKind::Image);
+        assert_eq!(k, 2);
+        assert_eq!(p.steps[p.input_step(2).unwrap()].op.label(), "image 2");
+        assert_eq!(p.steps[ed].inputs[1], Some(img), "nothing renumbered");
+        // An Input is the node's: not removable as a step.
+        assert!(!p.remove(img));
+        // A pasted duplicate folds into the first.
+        let dup = p.steps[img].clone();
+        p.steps.push(dup);
+        let d = p.steps.len() - 1;
+        let out = p.output().unwrap();
+        p.steps[out].inputs[0] = Some(d);
+        p.sync_inputs();
+        assert_eq!(p.steps.iter().filter(|s| matches!(s.op, Op::Input { input: 0, .. })).count(), 1);
+        // The last image cannot go; the matte can, and the input after it
+        // slides down.
+        assert!(p.remove_input(1));
+        assert_eq!(p.ins, vec![InKind::Image, InKind::Image]);
+        assert!(matches!(p.steps[p.input_step(1).unwrap()].op, Op::Input { nth: 1, matte: false, .. }));
+        assert!(p.remove_input(1));
+        assert!(!p.remove_input(0), "the image passed through stays");
+    }
+
+    #[test]
+    fn a_pipeline_from_before_the_input_bar_normalizes() {
+        // The old fixed inputs: image 0, matte 1, prompt 2, second 3.
+        let old = r#"{"steps":[
+            {"op":{"op":"prompt_in"},"at":[0,0]},
+            {"op":{"op":"reference"},"at":[0,0]},
+            {"op":{"op":"second"},"at":[0,0]},
+            {"op":{"op":"generate","model":"fal/nano-banana-pro-edit-ref","seed":1},"at":[0,0],"inputs":[0,1,2]},
+            {"op":{"op":"output"},"at":[0,0],"inputs":[3]}]}"#;
+        let mut p: Pipeline = serde_json::from_str(old).unwrap();
+        assert!(p.ins.is_empty());
+        let l = p.normalize().expect("legacy");
+        assert_eq!(p.ins, vec![InKind::Image, InKind::Matte, InKind::Image]);
+        assert_eq!(l.second, Some(2));
+        assert!(matches!(p.steps[0].op, Op::Prompt { .. }), "no prompt input outside");
+        assert!(matches!(p.steps[1].op, Op::Input { input: 0, .. }));
+        assert!(matches!(p.steps[2].op, Op::Input { input: 2, nth: 1, .. }));
+        assert!(p.input_step(1).is_some(), "the matte has its Input too");
+        assert_eq!(p.reads(), vec![(0, false), (2, false)]);
+        assert_eq!(p.normalize(), None, "idempotent");
+        // A still and a clip of the same old input get an input each.
+        let mut q = Pipeline::bare(vec![]);
+        q.push(Op::Reference, [0.0, 0.0]);
+        q.push(Op::ClipIn { seconds: 2.0 }, [0.0, 0.0]);
+        q.push(Op::MatteClip, [0.0, 0.0]);
+        q.ins.clear();
+        q.normalize();
+        assert_eq!(q.ins, vec![InKind::Image, InKind::Matte, InKind::Image]);
+        assert_eq!(q.clip_seconds(), 2.0);
     }
 }
