@@ -43,6 +43,10 @@ pub struct GenAiParams {
     /// pipeline node, steps and all.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub model: Option<String>,
+    /// How a run is multiplied (fan-out to other models): `genai::Vary`.
+    /// Empty = one run, one take.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "genai::Vary::is_empty"))]
+    pub vary: genai::Vary,
     /// TRANSIENT: a take is loaded in the reader slot. Set by the app on the
     /// engine-graph copy only; flipping it recompiles (sample vs pass
     /// through), exactly like a GraphBake's `baked`.
@@ -52,7 +56,7 @@ pub struct GenAiParams {
 
 impl Default for GenAiParams {
     fn default() -> Self {
-        Self { source: 0, pipeline: genai::Pipeline::default(), model: None, loaded: false }
+        Self { source: 0, pipeline: genai::Pipeline::default(), model: None, vary: Default::default(), loaded: false }
     }
 }
 
@@ -74,7 +78,9 @@ impl GenAiParams {
     /// id is unknown (so a menu built from the catalog can never panic).
     pub fn for_model(source: usize, id: &str) -> Self {
         match genai::Pipeline::for_model(id) {
-            Some(pipeline) => Self { source, pipeline, model: Some(id.to_string()), loaded: false },
+            Some(pipeline) => {
+                Self { source, pipeline, model: Some(id.to_string()), vary: Default::default(), loaded: false }
+            }
             None => Self::new(source),
         }
     }
@@ -105,7 +111,10 @@ impl GenAiParams {
     /// a model not free for commercial use, AND when the pipeline as it
     /// stands would run one — the licence is shown before anything is sent.
     pub fn commercial(&self) -> bool {
-        self.pipeline.picked().is_none_or(|t| t.commercial) && self.pipeline.all_commercial()
+        self.pipeline.picked().is_none_or(|t| t.commercial)
+            && self.pipeline.all_commercial()
+            // A fan-out would run these too: said before anything is sent.
+            && self.vary.all_commercial(&self.pipeline)
     }
 
     /// The node takes its RESULT's size as its format (an upscaler feeds

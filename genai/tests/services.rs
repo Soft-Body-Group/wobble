@@ -113,6 +113,22 @@ fn drain(job: &run::Job) -> Result<genai::Take, String> {
         match job.rx.recv_timeout(Duration::from_secs(20)).expect("run stalled") {
             Event::Done(t) => return Ok(t),
             Event::Failed(e) => return Err(e),
+            Event::Step(..) | Event::Take(_) => {}
+        }
+    }
+}
+
+/// Every take a batch lands, in order (the last one is the `Done`).
+fn drain_all(job: &run::Job) -> Result<Vec<genai::Take>, String> {
+    let mut takes = vec![];
+    loop {
+        match job.rx.recv_timeout(Duration::from_secs(20)).expect("run stalled") {
+            Event::Take(t) => takes.push(t),
+            Event::Done(t) => {
+                takes.push(t);
+                return Ok(takes);
+            }
+            Event::Failed(e) => return Err(e),
             Event::Step(..) => {}
         }
     }
@@ -618,5 +634,80 @@ fn a_wired_prompt_reaches_the_request() {
     let reqs = log.lock().unwrap();
     let body = reqs.iter().find(|r| r.method == "POST" && r.path == "/fal-ai/flux-pro/kontext").unwrap().json();
     assert_eq!(body["prompt"], "make it dusk");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Fan-out: one prompt and one reference through three edit models. Three
+/// requests to three endpoints, three takes with their own keys, labels
+/// and recipes, one summed quote, and a second run that sends nothing.
+#[test]
+fn a_fan_out_runs_each_model_once_and_lands_a_take_for_each() {
+    let (port, log) = fake_fal();
+    let base = format!("http://127.0.0.1:{port}");
+    let dir = tmp("fanout");
+    let mut p = edit_pipeline();
+    if let Op::Prompt { text } = &mut p.steps[0].op {
+        *text = "make it night".into();
+    }
+    let vary = genai::Vary { models: vec!["fal/seedream-5-pro-edit".into(), "fal/nano-banana-2-edit".into()] };
+    let variants = vary.expand(&p);
+    assert_eq!(variants.len(), 3);
+    let planned: Vec<(Pipeline, run::Plan)> =
+        variants.iter().map(|v| (v.clone(), run::plan(v, &inputs(), &dir).unwrap())).collect();
+
+    // One quote for the lot: the fake prices Kontext only, so two of the
+    // three calls come back unpriced rather than dropped.
+    let fal = Fal::with_bases("test-key", &base, &base);
+    let q = run::quote_many(&planned, &inputs(), &fal, &Http::new()).unwrap();
+    assert_eq!(q.items.len(), 3);
+    assert_eq!(q.items.iter().filter(|i| i.is_some()).count(), 1);
+
+    let start = |planned: &[(Pipeline, run::Plan)], remote: bool| {
+        let svcs = Services {
+            remote: remote.then(|| Box::new(Fal::with_bases("test-key", &base, &base)) as Box<dyn genai::service::Service>),
+            comfy: Comfy::new(&base),
+        };
+        let vs = planned
+            .iter()
+            .map(|(p, plan)| run::Variant { pipeline: p.clone(), plan: plan.clone(), approved: vec![] })
+            .collect();
+        run::start_many(vs, inputs(), svcs, dir.clone())
+    };
+    let takes = drain_all(&start(&planned, true)).unwrap();
+    assert_eq!(takes.len(), 3);
+    let mut keys: Vec<_> = takes.iter().map(|t| t.key.clone()).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), 3, "each model's result is its own");
+    for (t, short) in takes.iter().zip(["kontext", "seedream edit", "banana 2 edit"]) {
+        assert!(t.label.contains(short), "{} / {short}", t.label);
+        assert!(t.path(&dir).exists());
+        // The recipe beside each take is the variant that made it.
+        let recipe = genai::history::load_recipe(&dir, &t.key).expect("a recipe per take");
+        let model = recipe.iter().find_map(|s| match &s.op {
+            Op::Generate { model, .. } => genai::catalog::get(model).map(|m| m.short),
+            _ => None,
+        });
+        assert_eq!(model, Some(short));
+    }
+    {
+        let reqs = log.lock().unwrap();
+        let posts: Vec<_> = reqs.iter().filter(|r| r.method == "POST").map(|r| r.path.clone()).collect();
+        assert_eq!(
+            posts,
+            ["/fal-ai/flux-pro/kontext", "/bytedance/seedream/v5/pro/edit", "/fal-ai/nano-banana-2/edit"]
+        );
+        // The same prompt reached all three.
+        assert!(reqs.iter().filter(|r| r.method == "POST").all(|r| r.json()["prompt"] == "make it night"));
+    }
+
+    // Again, unchanged: three cache hits, no service needed, nothing sent.
+    let before = log.lock().unwrap().len();
+    let planned: Vec<(Pipeline, run::Plan)> =
+        variants.iter().map(|v| (v.clone(), run::plan(v, &inputs(), &dir).unwrap())).collect();
+    assert!(planned.iter().all(|(_, plan)| plan.todo.is_empty()));
+    let again = drain_all(&start(&planned, false)).unwrap();
+    assert_eq!(again.iter().map(|t| &t.key).collect::<Vec<_>>(), takes.iter().map(|t| &t.key).collect::<Vec<_>>());
+    assert_eq!(log.lock().unwrap().len(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }

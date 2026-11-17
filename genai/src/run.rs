@@ -628,6 +628,27 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
     svc.quote(http, &items)
 }
 
+/// [`quote`] for every variant of a batch: one quote, the items of each
+/// variant's billed steps in variant order (so `Plan::billed` lengths cut
+/// it back apart).
+pub fn quote_many(
+    variants: &[(Pipeline, Plan)],
+    inputs: &Inputs,
+    svc: &dyn Service,
+    http: &Http,
+) -> Result<Quote> {
+    let mut all = Quote::default();
+    for (p, plan) in variants {
+        if plan.billed(p).is_empty() {
+            continue;
+        }
+        let q = quote(p, plan, inputs, svc, http)?;
+        all.items.extend(q.items);
+        all.balance_usd = q.balance_usd.or(all.balance_usd);
+    }
+    Ok(all)
+}
+
 /// Progress, per step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepState {
@@ -642,6 +663,8 @@ pub enum StepState {
 #[derive(Debug, Clone)]
 pub enum Event {
     Step(usize, StepState),
+    /// One variant of a batch landed, and more follow (`start_many`).
+    Take(Take),
     Done(Take),
     Failed(String),
 }
@@ -682,16 +705,45 @@ pub type Approved = Vec<(usize, f64)>;
 
 /// Run a plan on a thread.
 pub fn start(p: Pipeline, plan: Plan, inputs: Inputs, svcs: Services, dir: PathBuf, approved: Approved) -> Job {
+    start_many(vec![Variant { pipeline: p, plan, approved }], inputs, svcs, dir)
+}
+
+/// One pipeline of a batch, planned and approved like a single run.
+pub struct Variant {
+    pub pipeline: Pipeline,
+    pub plan: Plan,
+    pub approved: Approved,
+}
+
+/// Run several planned pipelines over the same inputs, one after another,
+/// on a thread. Each lands a take: `Event::Take` for all but the last,
+/// `Event::Done` for the last. A failure stops the batch (what landed
+/// before it stays landed, and stays cached). Every take's recipe is
+/// written beside its result (`history`).
+pub fn start_many(variants: Vec<Variant>, inputs: Inputs, svcs: Services, dir: PathBuf) -> Job {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
     let fail = tx.clone();
     let spawned = std::thread::Builder::new().name("genai-run".into()).spawn(move || {
-        let r = execute(&p, &plan, &inputs, &svcs, &dir, &stop, &tx, &approved);
-        let _ = tx.send(match r {
-            Ok(t) => Event::Done(t),
-            Err(e) => Event::Failed(format!("{e:#}")),
-        });
+        let n = variants.len();
+        for (k, v) in variants.into_iter().enumerate() {
+            let r = execute(&v.pipeline, &v.plan, &inputs, &svcs, &dir, &stop, &tx, &v.approved);
+            match r {
+                Ok(t) => {
+                    let _ = crate::history::save_recipe(&dir, &t.key, &v.pipeline.steps);
+                    let _ = tx.send(if k + 1 == n { Event::Done(t) } else { Event::Take(t) });
+                }
+                Err(e) => {
+                    let which = if n > 1 { format!("run {} of {n}: ", k + 1) } else { String::new() };
+                    let _ = tx.send(Event::Failed(format!("{which}{e:#}")));
+                    return;
+                }
+            }
+        }
+        if n == 0 {
+            let _ = tx.send(Event::Failed("nothing to run".into()));
+        }
     });
     if spawned.is_err() {
         // No threads (the browser build): say so rather than panic.

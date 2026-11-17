@@ -1425,6 +1425,17 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   takes. Each built-in this build can run is also an add-menu entry making
   a wired GenAI Pipeline node; a template NAME is therefore a node label,
   and `editor::catalog_tests` will tell you when one steals a search.
+- **A fan-out is N ordinary runs** (`genai::vary`, `GenAiParams::vary`,
+  `app/src/genaivary.rs`). `Vary::expand` gives the pipeline plus one
+  variant per ticked model (same TASK only; unknown ids skipped); each is
+  planned, cached, licensed and recipe'd as a single run would be.
+  `Run::more` holds the extra `(Pipeline, Plan)`s; `run::quote_many`
+  concatenates the quotes in variant order and `genai_confirm` cuts the
+  approved prices back apart by `Plan::billed` lengths: keep those two in
+  step. `run::start_many` walks the variants on one thread
+  (`Event::Take` for all but the last). An edit to `vary` makes a waiting
+  quote stale. `GenAiParams::commercial` asks the fan-out's models too.
+  The recipe is now written by the run thread, per variant, not the app.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

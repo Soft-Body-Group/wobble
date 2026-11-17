@@ -31,6 +31,8 @@ use genai::{config, service, Take};
 
 /// Thumbnail height on screen, in points; decoded at twice that.
 const THUMB_H: f32 = 38.0;
+/// A sheet picture's height on screen, in points; decoded at twice that.
+const SHEET_H: f32 = 200.0;
 
 enum Slot {
     Pending,
@@ -41,8 +43,9 @@ enum Slot {
 
 #[derive(Default)]
 struct Thumbs {
-    map: HashMap<PathBuf, Slot>,
-    done: Vec<(PathBuf, Option<egui::ColorImage>)>,
+    /// By file and by size: a history thumbnail, or a sheet picture.
+    map: HashMap<(PathBuf, bool), Slot>,
+    done: Vec<((PathBuf, bool), Option<egui::ColorImage>)>,
 }
 
 fn thumbs() -> &'static Mutex<Thumbs> {
@@ -50,9 +53,9 @@ fn thumbs() -> &'static Mutex<Thumbs> {
     T.get_or_init(Default::default)
 }
 
-/// Decode `path`'s first frame to a small sRGB picture.
+/// Decode `path`'s first frame to an sRGB picture `high` points tall.
 #[cfg(not(target_arch = "wasm32"))]
-fn decode(path: &Path) -> Option<egui::ColorImage> {
+fn decode(path: &Path, high: f32) -> Option<egui::ColorImage> {
     use engine::decode::{AnyDecoder, ExrDecoder};
     static DEC: OnceLock<AnyDecoder> = OnceLock::new();
     let dec = DEC.get_or_init(|| AnyDecoder::new(true));
@@ -64,7 +67,7 @@ fn decode(path: &Path) -> Option<egui::ColorImage> {
     let stride = w * 4;
     let mut buf = vec![half::f16::ZERO; stride * h];
     dec.decode_frame_into(path, info, stride, None, 0, &mut buf).ok()?;
-    let th = ((THUMB_H * 2.0) as usize).min(h).max(1);
+    let th = ((high * 2.0) as usize).min(h).max(1);
     let tw = (w * th / h).max(1);
     let mut rgba = vec![255u8; tw * th * 4];
     for y in 0..th {
@@ -80,8 +83,10 @@ fn decode(path: &Path) -> Option<egui::ColorImage> {
     Some(egui::ColorImage::from_rgba_unmultiplied([tw, th], &rgba))
 }
 
-/// The thumbnail for a take's file, asking for it on first sight.
-fn thumb(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+/// The thumbnail for a take's file (`big`: the sheet's larger picture),
+/// asking for it on first sight.
+fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui::TextureHandle> {
+    let key = (path.to_path_buf(), big);
     let mut t = thumbs().lock().unwrap();
     for (p, img) in std::mem::take(&mut t.done) {
         let slot = match img {
@@ -90,7 +95,7 @@ fn thumb(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
         };
         t.map.insert(p, slot);
     }
-    match t.map.get(path) {
+    match t.map.get(&key) {
         Some(Slot::Ready(tex)) => return Some(tex.clone()),
         Some(_) => return None,
         None => {}
@@ -100,7 +105,7 @@ fn thumb(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
     if t.map.len() > 512 {
         t.map.clear();
     }
-    t.map.insert(path.to_path_buf(), Slot::Pending);
+    t.map.insert(key.clone(), Slot::Pending);
     drop(t);
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -110,13 +115,14 @@ fn thumb(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
             let ok = (!genai::pipeline::is_video_file(&name) || video_ok())
                 && !genai::pipeline::is_splat_file(&name)
                 && path.exists();
-            let img = if ok { decode(&path) } else { None };
-            thumbs().lock().unwrap().done.push((path, img));
+            let img = if ok { decode(&path, if big { SHEET_H } else { THUMB_H }) } else { None };
+            drop(name);
+            thumbs().lock().unwrap().done.push((key, img));
             ctx.request_repaint();
         });
     }
     #[cfg(target_arch = "wasm32")]
-    thumbs().lock().unwrap().done.push((path.to_path_buf(), None));
+    thumbs().lock().unwrap().done.push((key, None));
     None
 }
 
@@ -207,6 +213,16 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
             if r.clicked() {
                 act = Some(Action::TakeToLoad { take: picked, wire: true });
             }
+            let sheet_id = sheet_id(node);
+            let mut open: bool = ui.data(|d| d.get_temp(sheet_id)).unwrap_or(false);
+            let r = ui
+                .add(egui::Button::selectable(open, small("sheet")).small())
+                .on_hover_text("the takes side by side, large: click one to show it");
+            crate::widgets::note_rect(ui, button_id(node, "sheet"), r.rect);
+            if r.clicked() {
+                open = !open;
+                ui.data_mut(|d| d.insert_temp(sheet_id, open));
+            }
             if ui.add(egui::Button::new(small("×")).small()).on_hover_text("forget this take (its file stays on disk)").clicked() {
                 forget = Some(picked);
             }
@@ -217,7 +233,7 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
                 // Newest first.
                 for k in (0..pl.takes.len()).rev() {
                     let t = &pl.takes[k];
-                    let tex = thumb(ui.ctx(), &t.path(&dir));
+                    let tex = thumb(ui.ctx(), &t.path(&dir), false);
                     let w = match &tex {
                         Some(tex) => {
                             let s = tex.size_vec2();
@@ -271,6 +287,10 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
                 }
             });
         });
+        if let Some(k) = sheet(ui.ctx(), node, pl, &dir) {
+            pl.take = k;
+            act = Some(Action::Show);
+        }
         if let Some(k) = forget {
             pl.takes.remove(k);
             if pl.take > k || pl.take >= pl.takes.len() {
@@ -290,6 +310,85 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
         }
     }
     act
+}
+
+fn sheet_id(node: u64) -> egui::Id {
+    egui::Id::new(("genai-sheet", node))
+}
+
+/// The contact sheet: the node's takes side by side, large, newest first,
+/// each under what made it. A floating window, shut by default and by its
+/// own close button (it would cover the viewer's gizmos if it lingered).
+/// Returns the take clicked, if one was.
+fn sheet(ctx: &egui::Context, node: u64, pl: &genai::Pipeline, dir: &Path) -> Option<usize> {
+    let id = sheet_id(node);
+    let mut open: bool = ctx.data(|d| d.get_temp(id)).unwrap_or(false);
+    if !open {
+        return None;
+    }
+    let was = open;
+    let mut picked = None;
+    egui::Window::new("GenAI takes")
+        .id(id)
+        .open(&mut open)
+        .default_size([720.0, 520.0])
+        .show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    for k in (0..pl.takes.len()).rev() {
+                        let t = &pl.takes[k];
+                        let tex = thumb(ui.ctx(), &t.path(dir), true);
+                        let w = match &tex {
+                            Some(tex) => {
+                                let s = tex.size_vec2();
+                                (SHEET_H * s.x / s.y.max(1.0)).clamp(SHEET_H * 0.4, SHEET_H * 2.4)
+                            }
+                            None => SHEET_H * 16.0 / 9.0,
+                        };
+                        ui.vertical(|ui| {
+                            ui.set_width(w);
+                            let (rect, r) = ui.allocate_exact_size(egui::vec2(w, SHEET_H), Sense::click());
+                            crate::widgets::note_rect(ui, egui::Id::new(("genai-sheet-take", node, k)), rect);
+                            let pt = ui.painter_at(rect);
+                            match &tex {
+                                Some(tex) => {
+                                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                                    pt.image(tex.id(), rect, uv, Color32::WHITE);
+                                }
+                                None => {
+                                    pt.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+                                    let what = if t.is_splat() { "3D" } else { "…" };
+                                    pt.text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        what,
+                                        egui::FontId::proportional(14.0),
+                                        ui.visuals().weak_text_color(),
+                                    );
+                                }
+                            }
+                            if k == pl.take {
+                                let s = Stroke::new(2.0, ui.visuals().selection.stroke.color);
+                                pt.rect_stroke(rect.shrink(1.0), 2.0, s, egui::StrokeKind::Inside);
+                            }
+                            if r.clicked() {
+                                picked = Some(k);
+                            }
+                            let mut text = small(hover(k, t).lines().next().unwrap_or_default().to_string());
+                            if !t.commercial {
+                                text = text.color(theme::cost_nc());
+                            }
+                            ui.add(egui::Label::new(text).truncate());
+                        });
+                    }
+                });
+            });
+        });
+    if open != was {
+        ctx.data_mut(|d| d.insert_temp(id, open));
+    }
+    picked.filter(|&k| k != pl.take)
 }
 
 impl crate::Gfx {

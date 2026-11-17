@@ -331,6 +331,12 @@ pub struct Run {
     pub tick: i64,
     pub phase: Phase,
     pub steps: BTreeMap<usize, StepState>,
+    /// The node's fan-out when the run was asked for; an edit since makes
+    /// the quote stale, like an edit to the pipeline.
+    pub vary: genai::Vary,
+    /// The fan-out's other variants, planned beside `pipeline` (which is
+    /// variant one): each lands its own take.
+    pub more: Vec<(Pipeline, Plan)>,
 }
 
 pub enum Phase {
@@ -411,6 +417,8 @@ pub enum Key {
 pub(crate) mod hist;
 #[path = "genaitmpl.rs"]
 pub(crate) mod tmpl;
+#[path = "genaivary.rs"]
+pub(crate) mod varyui;
 
 // ------------------------------------------------------------ panel
 
@@ -777,6 +785,9 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
     });
     ui.separator();
 
+    // --- fan-out: the other models a run also goes through
+    varyui::row(ui, node, p);
+
     // --- the run
     match &v.state {
         ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_) => {
@@ -987,8 +998,11 @@ impl Gfx {
             Some(Phase::Ready { plan, quote, inputs }) => {
                 let r = mine.unwrap();
                 let stale = self.genai_runnable(node).is_none_or(|p| p.steps != r.pipeline.steps)
-                    || self.genai_prompt_moved(node, &r.pipeline, inputs);
-                ViewState::Ready { quote: quote.clone(), billed: plan.billed(&r.pipeline).len(), stale }
+                    || self.genai_prompt_moved(node, &r.pipeline, inputs)
+                    || self.egraph.node(node).and_then(|n| params(&n.kind)).is_none_or(|p| p.vary != r.vary);
+                let billed = plan.billed(&r.pipeline).len()
+                    + r.more.iter().map(|(p, plan)| plan.billed(p).len()).sum::<usize>();
+                ViewState::Ready { quote: quote.clone(), billed, stale }
             }
             Some(Phase::Running { .. }) => ViewState::Running,
             Some(Phase::Failed(e)) => ViewState::Failed(e.clone()),
@@ -1084,6 +1098,8 @@ impl Gfx {
             tick: self.timeline_pos as i64,
             phase: Phase::Failed(msg.into()),
             steps: BTreeMap::new(),
+            vary: Default::default(),
+            more: vec![],
         });
     }
 
@@ -1146,6 +1162,7 @@ impl Gfx {
             return self.genai_fail(node, pl, "nothing is rendering yet");
         };
         let tick = self.timeline_pos as i64;
+        let vary = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone()).unwrap_or_default();
         self.jobs.genai.captured.clear();
         self.jobs.genai.clip_frames.clear();
         self.jobs.genai.run = Some(Run {
@@ -1154,6 +1171,8 @@ impl Gfx {
             tick,
             phase: Phase::Capturing { inputs: Inputs { prompt, comp, tick, ..Default::default() }, todo },
             steps: BTreeMap::new(),
+            vary,
+            more: vec![],
         });
         self.genai_capture_next();
     }
@@ -1288,24 +1307,35 @@ impl Gfx {
                 return;
             }
         };
-        if plan.billed(&r.pipeline).is_empty() {
-            let job = run::start(
-                r.pipeline.clone(),
-                plan,
-                inputs,
-                run::Services::from_config(&self.jobs.genai.cfg),
-                dir,
-                vec![],
-            );
+        // The fan-out's other variants: the same inputs, planned the same
+        // way. One that cannot be planned stops the lot before a quote.
+        r.more.clear();
+        for v in r.vary.expand(&r.pipeline).into_iter().skip(1) {
+            match run::plan(&v, &inputs, &dir) {
+                Ok(p) => r.more.push((v, p)),
+                Err(e) => {
+                    r.phase = Phase::Failed(format!("fan-out: {e}"));
+                    return;
+                }
+            }
+        }
+        let mut all = vec![(r.pipeline.clone(), plan.clone())];
+        all.extend(r.more.iter().cloned());
+        if all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
+            let variants = all
+                .into_iter()
+                .map(|(pipeline, plan)| run::Variant { pipeline, plan, approved: vec![] })
+                .collect();
+            let job = run::start_many(variants, inputs, run::Services::from_config(&self.jobs.genai.cfg), dir);
             r.phase = Phase::Running { job };
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let (pl, pl2, ins) = (r.pipeline.clone(), plan.clone(), inputs.clone());
+        let ins = inputs.clone();
         let cfg = self.jobs.genai.cfg.clone();
         let spawned = std::thread::Builder::new().name("genai-quote".into()).spawn(move || {
             let q = run::service_for(&cfg).and_then(|svc| {
-                run::quote(&pl, &pl2, &ins, svc.as_ref(), &genai::http::Http::new()).map_err(|e| format!("{e:#}"))
+                run::quote_many(&all, &ins, svc.as_ref(), &genai::http::Http::new()).map_err(|e| format!("{e:#}"))
             });
             let _ = tx.send(q);
         });
@@ -1323,30 +1353,39 @@ impl Gfx {
             }
             _ => false,
         };
+        let vary_now = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone());
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
-        if moved || current.as_ref() != Some(&r.pipeline.steps) {
+        if moved || current.as_ref() != Some(&r.pipeline.steps) || vary_now.as_ref() != Some(&r.vary) {
             return; // stale: the panel says so and disables the button
         }
         let Phase::Ready { plan, inputs, quote } = std::mem::replace(&mut r.phase, Phase::Failed(String::new())) else {
             return;
         };
         // What was shown is what may be charged, per billed step.
-        let approved: run::Approved = match &quote {
-            Ok(q) => plan
-                .billed(&r.pipeline)
+        // The quote's items run variant by variant, billed step by billed
+        // step (`run::quote_many`): cut it back apart the same way.
+        let mut prices = quote.as_ref().ok().map(|q| q.items.iter());
+        let mut approve = |p: &Pipeline, plan: &Plan| -> run::Approved {
+            plan.billed(p)
                 .into_iter()
-                .zip(q.items.iter())
-                .filter_map(|(i, p)| p.as_ref().map(|p| (i, p.usd + 1e-6)))
-                .collect(),
-            Err(_) => vec![],
+                .filter_map(|i| {
+                    let price = prices.as_mut()?.next()?.as_ref()?;
+                    Some((i, price.usd + 1e-6))
+                })
+                .collect()
         };
-        let job = run::start(
-            r.pipeline.clone(),
-            plan,
+        let mut variants = vec![];
+        let approved = approve(&r.pipeline, &plan);
+        variants.push(run::Variant { pipeline: r.pipeline.clone(), plan, approved });
+        for (p, plan) in r.more.clone() {
+            let approved = approve(&p, &plan);
+            variants.push(run::Variant { pipeline: p, plan, approved });
+        }
+        let job = run::start_many(
+            variants,
             inputs,
             run::Services::from_config(&self.jobs.genai.cfg),
             config::results_dir(),
-            approved,
         );
         r.phase = Phase::Running { job };
     }
@@ -1393,7 +1432,7 @@ impl Gfx {
             r.phase = Phase::Failed(why);
             return;
         }
-        let mut landed = None;
+        let mut landed = vec![];
         match &mut r.phase {
             Phase::Quoting { rx, .. } => {
                 if let Ok(q) = rx.try_recv() {
@@ -1410,6 +1449,13 @@ impl Gfx {
                         Event::Step(i, s) => {
                             r.steps.insert(i, s);
                         }
+                        // One of a fan-out's takes: it lands now, the
+                        // run goes on, and the next variant's steps start
+                        // from a clean slate.
+                        Event::Take(t) => {
+                            landed.push(t);
+                            r.steps.clear();
+                        }
                         Event::Done(t) => end = Some(Ok(t)),
                         Event::Failed(e) => end = Some(Err(e)),
                     }
@@ -1417,8 +1463,13 @@ impl Gfx {
                 match end {
                     Some(Ok(t)) => {
                         let spent = t.usd.map(|u| format!(", {}", service::usd(u))).unwrap_or_default();
-                        r.phase = Phase::Done(format!("take landed{spent}"));
-                        landed = Some(t);
+                        let n = 1 + r.more.len();
+                        r.phase = Phase::Done(if n > 1 {
+                            format!("{n} takes landed")
+                        } else {
+                            format!("take landed{spent}")
+                        });
+                        landed.push(t);
                     }
                     Some(Err(e)) => r.phase = Phase::Failed(e),
                     None => {}
@@ -1426,11 +1477,7 @@ impl Gfx {
             }
             _ => {}
         }
-        if let Some(t) = landed {
-            // What made it, kept beside it: the history's "settings".
-            if let Some(r) = &self.jobs.genai.run {
-                let _ = genai::history::save_recipe(&config::results_dir(), &t.key, &r.pipeline.steps);
-            }
+        for t in landed {
             // An undo step, on purpose: one generation, one user action.
             // Running an unchanged pipeline again is a cache hit with the
             // same key: pick the take it already made, never a duplicate.
@@ -1591,11 +1638,17 @@ pub mod fake {
     pub struct Fal {
         pub url: String,
         pub submits: Arc<AtomicUsize>,
+        /// Requests to the OTHER model a fan-out names (FLUX dev), counted
+        /// apart so the single-run stages' counts stay what they were.
+        pub fanned: Arc<AtomicUsize>,
     }
 
     impl Fal {
         pub fn submits(&self) -> usize {
             self.submits.load(Ordering::SeqCst)
+        }
+        pub fn fanned(&self) -> usize {
+            self.fanned.load(Ordering::SeqCst)
         }
     }
 
@@ -1606,12 +1659,13 @@ pub mod fake {
         let l = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://127.0.0.1:{}", l.local_addr()?.port());
         let submits = Arc::new(AtomicUsize::new(0));
-        let (base, n) = (url.clone(), submits.clone());
+        let fanned = Arc::new(AtomicUsize::new(0));
+        let (base, n, nf) = (url.clone(), submits.clone(), fanned.clone());
         let lin = genai::image::srgb_decode(GREY as f32 / 255.0);
         let png = genai::image::png_srgb_rgb(&vec![lin; 64 * 36 * 4], 64, 36).unwrap_or_default();
         std::thread::spawn(move || {
             for c in l.incoming().flatten() {
-                let (base, n, png) = (base.clone(), n.clone(), png.clone());
+                let (base, n, nf, png) = (base.clone(), n.clone(), nf.clone(), png.clone());
                 std::thread::spawn(move || {
                     let mut conn = c;
                     let mut r = BufReader::new(conn.try_clone().unwrap());
@@ -1633,8 +1687,8 @@ pub mod fake {
                     let (m, p) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
                     let json = |v: serde_json::Value| ("application/json", serde_json::to_vec(&v).unwrap());
                     let (ct, out) = match (m, p) {
-                        ("POST", "/fal-ai/flux/schnell") => {
-                            n.fetch_add(1, Ordering::SeqCst);
+                        ("POST", p @ ("/fal-ai/flux/schnell" | "/fal-ai/flux/dev")) => {
+                            if p.ends_with("dev") { &nf } else { &n }.fetch_add(1, Ordering::SeqCst);
                             json(serde_json::json!({
                                 "request_id": "r1",
                                 "status_url": format!("{base}/fal-ai/flux/requests/r1/status"),
@@ -1669,7 +1723,7 @@ pub mod fake {
                 });
             }
         });
-        Ok(Fal { url, submits })
+        Ok(Fal { url, submits, fanned })
     }
 }
 
@@ -1908,6 +1962,63 @@ impl Gfx {
                     }
                     if up != Some((64, 36)) || plain == up || res(self) != plain {
                         fail(format!("an upscaler's node is {up:?} (its take is 64x36); without one it is {plain:?}"));
+                    }
+                    // Fan-out: the same pipeline through FLUX dev as well.
+                    self.genai_action(t.node, Action::Dismiss);
+                    if let Some(p) = self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
+                        p.vary.models = vec!["fal/flux-dev".into()];
+                    }
+                    self.genai_action(t.node, Action::Prepare);
+                    next(&mut t, 70);
+                }
+                _ => {}
+            },
+            70 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the fan-out failed before its quote: {e}")),
+                Some(Phase::Done(_)) => fail("a fan-out to a model that never ran was not asked to be paid for".into()),
+                Some(Phase::Ready { .. }) => {
+                    // schnell's take is cached: the one billed call is dev's.
+                    match self.genai_view(t.node).state {
+                        ViewState::Ready { billed: 1, stale: false, .. } => {}
+                        ViewState::Ready { billed, stale, .. } => {
+                            fail(format!("the fan-out quotes {billed} billed call(s) (stale: {stale}), expected 1"))
+                        }
+                        _ => unreachable!(),
+                    }
+                    if t.fake.as_ref().unwrap().fanned() != 0 {
+                        fail("the fan-out sent a request before pay & run".into());
+                    }
+                    self.genai_action(t.node, Action::Confirm);
+                    next(&mut t, 71);
+                }
+                _ => {}
+            },
+            71 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the fan-out's run failed: {e}")),
+                Some(Phase::Done(_)) => {
+                    let fake = t.fake.as_ref().unwrap();
+                    let (submits, fanned) = (fake.submits(), fake.fanned());
+                    let takes = self.egraph.node(t.node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
+                    if (submits, fanned, takes) != (1, 1, Some(3)) {
+                        fail(format!(
+                            "the fan-out sent {} schnell and {fanned} dev request(s) and left {takes:?} takes; \
+                             expected 0, 1 and 3",
+                            submits - 1
+                        ));
+                    }
+                    // FLUX dev is research-only: its take is on screen.
+                    let lic = |me: &Self| engine::cost::licence_of(&me.egraph.node(t.node).unwrap().kind);
+                    if lic(self) != engine::cost::Licence::NonCommercial {
+                        fail("a FLUX dev take from the fan-out is not tagged non-commercial".into());
+                    }
+                    // Back to one run, and to the schnell take.
+                    if let Some(p) = self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
+                        p.vary.models.clear();
+                        p.pipeline.take = 1;
+                    }
+                    self.genai_show(t.node);
+                    if lic(self) != engine::cost::Licence::Permissive {
+                        fail("the node stayed tagged after the fan-out was cleared and schnell's take picked".into());
                     }
                     // One-model nodes, made the way the add menu makes them.
                     self.genai_action(t.node, Action::Dismiss);

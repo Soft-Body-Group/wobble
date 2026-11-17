@@ -3603,6 +3603,15 @@ shows the take as `3D`, and **load** makes another Splat node of it. There
 is no video-to-3D model: fal lists none that answers today (a clip's camera
 is CameraTrack's job, and its depth the Depth node's).
 
+**Fan-out: one prompt, several models.** Above `run…`, **also run on…**
+lists the other models that do the same job as the node's own (text to
+image with text to image, edit with edit). Tick some and `run…` sends the
+same prompt, seed and inputs through each: one price for the lot, one
+confirm, one take per model. They land side by side in the history;
+**sheet** opens them large in a window, each under the model that made it,
+and a click shows that one. A model already run is a cache hit and is not
+billed again. Ticking a research-only model tags the node straight away.
+
 **Templates.** A GenAI Pipeline's panel has a **templates…** menu: whole
 pipelines, ready-made (Clean plate, Restyle the plate, New background
 upscaled, Outpaint the plate, Match a look, Relight, Concept to clip,
