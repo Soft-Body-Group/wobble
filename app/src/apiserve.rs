@@ -2053,6 +2053,8 @@ impl Gfx {
             NodeKind::Depth(_) => "render",
             NodeKind::LtxHdr(_) => "render",
             NodeKind::GenAi(_) => "quote",
+            // A model step inside a GenAI pipeline runs from its own node.
+            NodeKind::GenAiStep(genai::Op::Generate { .. } | genai::Op::Comfy { .. }) => "quote",
             _ => return Err(ApiError::invalid(format!("{} has nothing to run", type_name(&kind)))),
         };
         let action = p.get("action").and_then(|a| a.as_str()).unwrap_or(default);
@@ -2192,6 +2194,19 @@ impl Gfx {
             // A quote only: `Confirm` is what bills, and that stays a click.
             (NodeKind::GenAi(_), "quote") => self.genai_action(id, crate::genaiui::Action::Prepare),
             (NodeKind::GenAi(_), "cancel") => self.genai_action(id, crate::genaiui::Action::Cancel),
+            (NodeKind::GenAiStep(_), a @ ("quote" | "cancel")) => {
+                let owner = self.dive.last().filter(|d| d.kind == crate::DiveKind::GenAi).and_then(|d| d.from);
+                let step = self.egraph.nodes.iter().filter(|(_, n)| crate::genaiui::is_step(&n.kind)).position(|(k, _)| *k == id);
+                let (Some(owner), Some(step)) = (owner, step) else {
+                    return Err(ApiError::invalid("not a step of an open GenAI pipeline".to_string()));
+                };
+                let act = if a == "quote" {
+                    crate::genaiui::Action::PrepareStep(step)
+                } else {
+                    crate::genaiui::Action::Cancel
+                };
+                self.genai_in_comp(|me| me.genai_action(owner, act));
+            }
             (k, a) => {
                 return Err(ApiError::invalid(format!("{} has no '{a}' (it takes: {default}, cancel)", type_name(k))))
             }

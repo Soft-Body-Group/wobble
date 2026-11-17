@@ -354,11 +354,44 @@ pub fn step_entries() -> Vec<(&'static str, Op)> {
 }
 
 /// A step node's properties, inside the dive. `v` is the OWNER's view.
-pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) {
+pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Action> {
     let id = move |what: &str| egui::Id::new(("genai-step", node, what.to_string()));
     let _ = op_fields(ui, &id, op, v, false);
     ui.add_space(4.0);
-    ui.weak(small("run… is on the pipeline node: step out (U) to run"));
+    // A model runs from its own node: its inputs are rendered, the steps
+    // above it run (or are found cached), and its result is what viewing
+    // it shows — ready for the next model to read.
+    let runs = matches!(op, Op::Generate { .. } | Op::Comfy { .. }) && op.output() != Some(genai::Pipe::Text);
+    let me = v.step_ids.iter().position(|x| *x == node);
+    let (true, Some(me)) = (runs, me) else {
+        if matches!(op, Op::Generate { .. }) {
+            ui.weak(small("a text step runs with the model that reads it"));
+        }
+        return None;
+    };
+    let idle = matches!(v.state, ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_));
+    if !idle && v.to_step != Some(me) {
+        // Another run is going: say whose, and let it be stopped.
+        let mut act = None;
+        ui.horizontal(|ui| {
+            ui.weak(small(match v.to_step {
+                Some(_) => "another step is running",
+                None => "the whole pipeline is running",
+            }));
+            if ui.small_button("cancel").clicked() {
+                act = Some(Action::Cancel);
+            }
+        });
+        return act;
+    }
+    if let Err(e) = &v.bill {
+        if matches!(op, Op::Generate { .. }) {
+            ui.colored_label(theme::warn(), small(e));
+        }
+    }
+    let r = run_ui(ui, v, &[], "run this step…", || Action::PrepareStep(me));
+    ui.weak(small("view the node to see its result; the pipeline node's run… makes the take"));
+    r
 }
 
 // ------------------------------------------------------------ graph marks
@@ -426,6 +459,10 @@ pub struct Runs {
     /// comp cannot change while inside): what a Spline drawn in there is
     /// rendered at, so it lines up with the plate.
     pub dive_fmt: Option<(u32, u32)>,
+    /// Per GenAI node, each step's (name, cache key) as its LAST run
+    /// planned them (a whole run or one step's): what viewing a step
+    /// inside shows, before any take's own stages.
+    step_keys: std::collections::HashMap<u64, Vec<(String, String)>>,
     account: Account,
 }
 
@@ -504,6 +541,7 @@ impl Default for Runs {
             clip_frames: vec![],
             stages: Default::default(),
             dive_fmt: None,
+            step_keys: Default::default(),
             account: Account::Unknown,
         }
     }
@@ -536,6 +574,13 @@ pub struct Run {
     /// What the run's text steps wrote (an enhanced prompt, a
     /// description), per step: the words the next step was really sent.
     pub texts: BTreeMap<usize, String>,
+    /// A run of ONE STEP, from inside the pipeline: `pipeline`'s Output
+    /// reads this step, and what lands is that step's result to look at
+    /// (`Runs::step_keys`), never a take.
+    pub to_step: Option<usize>,
+    /// Per step, its name and the cache key the plan gave it: where each
+    /// step's result is, for the dive to show.
+    pub keys: Vec<(String, String)>,
 }
 
 pub enum Phase {
@@ -569,6 +614,10 @@ pub struct View {
     pub busy_elsewhere: bool,
     /// Per node input, whether something is wired into it, for the hints.
     pub wired: Vec<bool>,
+    /// The run going is of ONE step (its index), not the whole pipeline.
+    pub to_step: Option<usize>,
+    /// Inside the pipeline: the dive's node ids in step order.
+    pub step_ids: Vec<u64>,
     /// The picked take's file is not on this machine.
     pub take_missing: bool,
     /// The comp's frame rate, for a clip's frame count.
@@ -606,6 +655,9 @@ pub enum Action {
     /// Remove node input `k` (and its Input step); the wires after it
     /// move down one, so it needs the graph.
     RemoveInput(usize),
+    /// Run ONE step (its index), from inside the pipeline: its inputs
+    /// are captured and everything above it run or found cached.
+    PrepareStep(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1005,6 +1057,106 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
     model_change
 }
 
+/// The run's own controls and state: the button, the capture and the
+/// quote as they come, pay & run, the steps as they go, how it ended.
+/// Shared by the pipeline node's panel and a step's inside it (`label`
+/// and `prepare` say which run the button starts).
+fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn() -> Action) -> Option<Action> {
+    let mut act = None;
+    match &v.state {
+        ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_) => {
+            if let ViewState::Failed(e) = &v.state {
+                ui.colored_label(theme::error(), small(e));
+            }
+            if let ViewState::Done(s) = &v.state {
+                ui.weak(small(s));
+            }
+            let busy = v.busy_elsewhere;
+            let b = ui.add_enabled(!busy, egui::Button::new(label));
+            let b = if busy {
+                b.on_disabled_hover_text("another GenAI node is running")
+            } else {
+                b.on_hover_text("renders the inputs at the playhead and asks the price; nothing is billed until you confirm")
+            };
+            if b.clicked() {
+                act = Some(prepare());
+            }
+        }
+        ViewState::Capturing => {
+            ui.label(small("rendering the inputs at the playhead…"));
+            if ui.small_button("cancel").clicked() {
+                act = Some(Action::Cancel);
+            }
+        }
+        ViewState::Quoting => {
+            ui.label(small("asking the price…"));
+            if ui.small_button("cancel").clicked() {
+                act = Some(Action::Cancel);
+            }
+        }
+        ViewState::Ready { quote, billed, stale } => {
+            let calls = if *billed == 1 { "1 billed call".to_string() } else { format!("{billed} billed calls") };
+            match quote {
+                Ok(q) => {
+                    let price = match q.total() {
+                        Some(t) if q.exact() => service::usd(t),
+                        Some(t) => format!("≈ {}", service::usd(t)),
+                        None => "price unknown".into(),
+                    };
+                    ui.label(small(format!("{calls}: {price}")));
+                    let unpriced = q.items.iter().filter(|p| p.is_none()).count();
+                    if unpriced > 0 {
+                        ui.colored_label(
+                            theme::warn(),
+                            small(format!("{unpriced} call(s) have no price from the service: running bills what it bills")),
+                        );
+                    }
+                    if let Some(b) = q.balance_usd.filter(|_| cfg!(feature = "commerce")) {
+                        ui.weak(small(format!("balance {}", service::usd(b))));
+                    }
+                }
+                Err(e) => {
+                    ui.label(small(calls));
+                    ui.colored_label(theme::warn(), small(format!("no price: {e}")));
+                }
+            }
+            if *stale {
+                ui.colored_label(theme::warn(), small("the pipeline changed since: run… again"));
+            }
+            ui.horizontal(|ui| {
+                let label = if quote.is_ok() { "pay & run" } else { "run without a price" };
+                if ui.add_enabled(!*stale, egui::Button::new(label)).clicked() {
+                    act = Some(Action::Confirm);
+                }
+                if ui.small_button("cancel").clicked() {
+                    act = Some(Action::Cancel);
+                }
+            });
+        }
+        ViewState::Running => {
+            for (i, s) in &v.steps {
+                let name = names.get(*i).cloned().unwrap_or_default();
+                ui.label(small(format!("{name}: {}", state_words(s))));
+            }
+            if ui.small_button("cancel").on_hover_text("stops waiting and cancels the remote job").clicked() {
+                act = Some(Action::Cancel);
+            }
+        }
+    }
+    // What the text steps wrote: the prompt the model was really sent.
+    for (i, words) in &v.texts {
+        let name = names.get(*i).cloned().unwrap_or_default();
+        let short: String = words.chars().take(160).collect();
+        let more = if words.chars().count() > 160 { "…" } else { "" };
+        ui.add(egui::Label::new(small(format!("{name}: {short}{more}")).weak()).wrap())
+            .on_hover_text(words.as_str());
+    }
+    if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("ok").clicked() {
+        act = Some(Action::Dismiss);
+    }
+    act
+}
+
 fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Action> {
     let mut act = None;
     // --- who pays
@@ -1072,96 +1224,9 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
     varyui::row(ui, node, p);
 
     // --- the run
-    match &v.state {
-        ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_) => {
-            if let ViewState::Failed(e) = &v.state {
-                ui.colored_label(theme::error(), small(e));
-            }
-            if let ViewState::Done(s) = &v.state {
-                ui.weak(small(s));
-            }
-            let busy = v.busy_elsewhere;
-            let b = ui.add_enabled(!busy, egui::Button::new("run…"));
-            let b = if busy {
-                b.on_disabled_hover_text("another GenAI node is running")
-            } else {
-                b.on_hover_text("renders the inputs at the playhead and asks the price; nothing is billed until you confirm")
-            };
-            if b.clicked() {
-                act = Some(Action::Prepare);
-            }
-        }
-        ViewState::Capturing => {
-            ui.label(small("rendering the inputs at the playhead…"));
-            if ui.small_button("cancel").clicked() {
-                act = Some(Action::Cancel);
-            }
-        }
-        ViewState::Quoting => {
-            ui.label(small("asking the price…"));
-            if ui.small_button("cancel").clicked() {
-                act = Some(Action::Cancel);
-            }
-        }
-        ViewState::Ready { quote, billed, stale } => {
-            let calls = if *billed == 1 { "1 billed call".to_string() } else { format!("{billed} billed calls") };
-            match quote {
-                Ok(q) => {
-                    let price = match q.total() {
-                        Some(t) if q.exact() => service::usd(t),
-                        Some(t) => format!("≈ {}", service::usd(t)),
-                        None => "price unknown".into(),
-                    };
-                    ui.label(small(format!("{calls}: {price}")));
-                    let unpriced = q.items.iter().filter(|p| p.is_none()).count();
-                    if unpriced > 0 {
-                        ui.colored_label(
-                            theme::warn(),
-                            small(format!("{unpriced} call(s) have no price from the service: running bills what it bills")),
-                        );
-                    }
-                    if let Some(b) = q.balance_usd.filter(|_| cfg!(feature = "commerce")) {
-                        ui.weak(small(format!("balance {}", service::usd(b))));
-                    }
-                }
-                Err(e) => {
-                    ui.label(small(calls));
-                    ui.colored_label(theme::warn(), small(format!("no price: {e}")));
-                }
-            }
-            if *stale {
-                ui.colored_label(theme::warn(), small("the pipeline changed since: run… again"));
-            }
-            ui.horizontal(|ui| {
-                let label = if quote.is_ok() { "pay & run" } else { "run without a price" };
-                if ui.add_enabled(!*stale, egui::Button::new(label)).clicked() {
-                    act = Some(Action::Confirm);
-                }
-                if ui.small_button("cancel").clicked() {
-                    act = Some(Action::Cancel);
-                }
-            });
-        }
-        ViewState::Running => {
-            for (i, s) in &v.steps {
-                let name = p.pipeline.steps.get(*i).map(|s| s.op.label()).unwrap_or_default();
-                ui.label(small(format!("{name}: {}", state_words(s))));
-            }
-            if ui.small_button("cancel").on_hover_text("stops waiting and cancels the remote job").clicked() {
-                act = Some(Action::Cancel);
-            }
-        }
-    }
-    // What the text steps wrote: the prompt the model was really sent.
-    for (i, words) in &v.texts {
-        let name = p.pipeline.steps.get(*i).map(|s| s.op.label()).unwrap_or_default();
-        let short: String = words.chars().take(160).collect();
-        let more = if words.chars().count() > 160 { "…" } else { "" };
-        ui.add(egui::Label::new(small(format!("{name}: {short}{more}")).weak()).wrap())
-            .on_hover_text(words.as_str());
-    }
-    if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("ok").clicked() {
-        act = Some(Action::Dismiss);
+    let names: Vec<String> = p.pipeline.steps.iter().map(|s| s.op.label()).collect();
+    if let Some(a) = run_ui(ui, v, &names, "run…", || Action::Prepare) {
+        act = Some(a);
     }
     ui.separator();
 
@@ -1389,8 +1454,9 @@ impl Gfx {
             Some(Phase::Quoting { .. }) => ViewState::Quoting,
             Some(Phase::Ready { plan, quote, .. }) => {
                 let r = mine.unwrap();
-                let stale = self.genai_runnable(node).is_none_or(|p| p.steps != r.pipeline.steps)
-                    || self.egraph.node(node).and_then(|n| params(&n.kind)).is_none_or(|p| p.vary != r.vary);
+                let stale = self.genai_runnable_to(node, r.to_step).is_none_or(|p| p.steps != r.pipeline.steps)
+                    || (r.to_step.is_none()
+                        && self.genai_params(node).is_none_or(|p| p.vary != r.vary));
                 let billed = plan.billed(&r.pipeline).len()
                     + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
                 ViewState::Ready { quote: quote.clone(), billed, stale }
@@ -1416,6 +1482,8 @@ impl Gfx {
             texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
+            to_step: mine.and_then(|r| r.to_step),
+            step_ids: vec![],
             take_missing,
             fps: self.fps,
         }
@@ -1423,7 +1491,8 @@ impl Gfx {
 
     pub(crate) fn genai_action(&mut self, node: u64, a: Action) {
         match a {
-            Action::Prepare => self.genai_prepare(node),
+            Action::Prepare => self.genai_prepare(node, None),
+            Action::PrepareStep(i) => self.genai_prepare(node, Some(i)),
             Action::RemoveInput(k) => {
                 if remove_input(&mut self.egraph, node, k) {
                     self.playback_dirty = true;
@@ -1500,14 +1569,16 @@ impl Gfx {
             frames: vec![],
             lead: None,
             texts: BTreeMap::new(),
+            to_step: None,
+            keys: vec![],
         });
     }
 
-    fn genai_prepare(&mut self, node: u64) {
+    fn genai_prepare(&mut self, node: u64, to: Option<usize>) {
         if self.jobs.genai.run.as_ref().is_some_and(|r| r.active()) {
             return;
         }
-        let Some(pl) = self.genai_runnable(node) else { return };
+        let Some(pl) = self.genai_runnable_to(node, to) else { return };
         // Everything that can be said without rendering or sending, first.
         let Some(out) = pl.output() else {
             return self.genai_fail(node, pl, "the pipeline has no Output step");
@@ -1560,6 +1631,8 @@ impl Gfx {
             return self.genai_fail(node, pl, "nothing is rendering yet");
         };
         let vary = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone()).unwrap_or_default();
+        // One step, once: a fan-out or a batch is the whole pipeline's.
+        let vary = if to.is_some() { Default::default() } else { vary };
         // A batch over frames captures the inputs at each; with nothing to
         // capture a frame changes nothing, so the list is not walked.
         let mut ticks = match vary.ticks() {
@@ -1592,6 +1665,8 @@ impl Gfx {
             frames: vec![],
             lead: None,
             texts: BTreeMap::new(),
+            to_step: to,
+            keys: vec![],
         });
         self.genai_capture_next();
     }
@@ -1789,6 +1864,7 @@ impl Gfx {
                 return;
             }
         };
+        r.keys = lead.steps.iter().zip(&plan.keys).map(|(s, k)| (s.op.name().to_string(), k.clone())).collect();
         // The fan-out's other variants: the same inputs, planned the same
         // way. One that cannot be planned stops the lot before a quote.
         r.more.clear();
@@ -1837,8 +1913,10 @@ impl Gfx {
     }
 
     fn genai_confirm(&mut self, node: u64) {
-        let current = self.genai_runnable(node).map(|p| p.steps);
+        let to = self.jobs.genai.run.as_ref().filter(|r| r.node == node).and_then(|r| r.to_step);
+        let current = self.genai_runnable_to(node, to).map(|p| p.steps);
         let vary_now = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone());
+        let vary_now = if to.is_some() { Some(Default::default()) } else { vary_now };
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
         if current.as_ref() != Some(&r.pipeline.steps) || vary_now.as_ref() != Some(&r.vary) {
             return; // stale: the panel says so and disables the button
@@ -1958,12 +2036,21 @@ impl Gfx {
                     Some(Ok(t)) => {
                         let spent = t.usd.map(|u| format!(", {}", service::usd(u))).unwrap_or_default();
                         let n = 1 + r.more.len();
-                        r.phase = Phase::Done(if n > 1 {
-                            format!("{n} takes landed")
+                        // Where every step's result is now: what viewing
+                        // a step inside shows.
+                        self.jobs.genai.step_keys.insert(node, r.keys.clone());
+                        if r.to_step.is_some() {
+                            // One step's run: its result to look at (and
+                            // to feed onward, cached), never a take.
+                            r.phase = Phase::Done(format!("step ran{spent}: view it to see the result"));
                         } else {
-                            format!("take landed{spent}")
-                        });
-                        landed.push(t);
+                            r.phase = Phase::Done(if n > 1 {
+                                format!("{n} takes landed")
+                            } else {
+                                format!("take landed{spent}")
+                            });
+                            landed.push(t);
+                        }
                     }
                     Some(Err(e)) => r.phase = Phase::Failed(e),
                     None => {}
@@ -2019,13 +2106,89 @@ impl Gfx {
     /// this build's shape (a pipeline the setup migration did not reach —
     /// a pasted one — still runs). Staleness compares against this.
     pub(crate) fn genai_runnable(&self, node: u64) -> Option<Pipeline> {
-        let p = self.egraph.node(node).and_then(|n| params(&n.kind))?;
-        let mut pl = p.pipeline.clone();
+        // The node whose pipeline is OPEN: its steps are the dive's, live,
+        // and its wiring the parked comp's.
+        let open = self.dive.last().filter(|d| {
+            d.kind == crate::DiveKind::GenAi && d.from == Some(node) && self.egraph.node(node).and_then(|n| params(&n.kind)).is_none()
+        });
+        let (mut pl, wired) = match open {
+            Some(d) => {
+                let mut pl = d.graph.node(node).and_then(|n| params(&n.kind))?.pipeline.clone();
+                pl.steps = from_editor(&self.egraph);
+                pl.sync_inputs();
+                (pl, self.genai_wired(&d.graph, node))
+            }
+            None => {
+                let p = self.egraph.node(node).and_then(|n| params(&n.kind))?;
+                (p.pipeline.clone(), self.genai_wired(&self.egraph, node))
+            }
+        };
         pl.normalize();
         // An optional reference whose node input has nothing wired is not
         // asked for.
-        pl.drop_unfed_optional(&self.genai_wired(&self.egraph, node));
+        pl.drop_unfed_optional(&wired);
         Some(pl)
+    }
+
+    /// `genai_runnable`, as a run of step `to` alone would walk it: Output
+    /// reads that step (so the plan, the captures, the quote and the cache
+    /// are the ordinary ones, stopping there). `None` when the step makes
+    /// nothing Output can take (text).
+    pub(crate) fn genai_runnable_to(&self, node: u64, to: Option<usize>) -> Option<Pipeline> {
+        let mut pl = self.genai_runnable(node)?;
+        if let Some(i) = to {
+            let out = pl.output()?;
+            if i == out {
+                return Some(pl);
+            }
+            pl.steps[out].inputs = vec![None];
+            if !pl.connect(i, out, 0) {
+                return None;
+            }
+        }
+        Some(pl)
+    }
+
+    /// GenAI node `node`'s params, in the open graph or the comp a dive
+    /// parked.
+    fn genai_params(&self, node: u64) -> Option<&GenAiParams> {
+        self.egraph
+            .node(node)
+            .and_then(|n| params(&n.kind))
+            .or_else(|| self.dive.iter().rev().find_map(|d| d.graph.node(node).and_then(|n| params(&n.kind))))
+    }
+
+    /// Run `f` with the COMP as the open graph. Inside a GenAI pipeline
+    /// the open graph is its steps, but a run is the comp's business (its
+    /// inputs are rendered there, its stand-ins live there): the parked
+    /// comp — with the live steps written into the pipeline node — and its
+    /// undo baseline are swapped in for the call, and back after.
+    pub(crate) fn genai_in_comp<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let inside = self.dive.last().is_some_and(|d| {
+            d.kind == crate::DiveKind::GenAi
+                && d.from.is_some_and(|o| self.egraph.node(o).and_then(|n| params(&n.kind)).is_none())
+        });
+        if !inside {
+            return f(self);
+        }
+        let steps = from_editor(&self.egraph);
+        let swap = |me: &mut Self| {
+            let d = me.dive.last_mut().unwrap();
+            std::mem::swap(&mut me.egraph, &mut d.graph);
+            std::mem::swap(&mut me.undo_last, &mut d.undo_last);
+        };
+        if let Some(d) = self.dive.last_mut() {
+            if let Some(p) = d.from.and_then(|o| d.graph.node_mut(o)).and_then(|n| params_mut(&mut n.kind)) {
+                if p.pipeline.steps != steps {
+                    p.pipeline.steps = steps;
+                    p.pipeline.sync_inputs();
+                }
+            }
+        }
+        swap(self);
+        let r = f(self);
+        swap(self);
+        r
     }
 
     /// Per input of `node` in `g`, whether something is wired into it.
@@ -2071,7 +2234,8 @@ impl Gfx {
         else {
             return self.genai_view(0);
         };
-        View { wired: self.genai_wired(g, owner), ..self.genai_view(owner) }
+        let step_ids = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
+        View { wired: self.genai_wired(g, owner), step_ids, ..self.genai_view(owner) }
     }
 
     /// Point the node's reader at its picked take (or at nothing).
@@ -2132,10 +2296,8 @@ impl Gfx {
         }
         let Some(d) = self.dive.last().filter(|d| d.kind == crate::DiveKind::GenAi) else { return };
         let Some(owner) = d.from else { return };
-        let Some(take) = d.graph.node(owner).and_then(|n| params(&n.kind)).and_then(|p| p.pipeline.picked()).cloned()
-        else {
-            return;
-        };
+        // No take yet is fine: a step run inside has results of its own.
+        let take = d.graph.node(owner).and_then(|n| params(&n.kind)).and_then(|p| p.pipeline.picked()).cloned();
         let dir = config::results_dir();
         let playable = |p: &std::path::Path| {
             let s = p.to_string_lossy();
@@ -2158,7 +2320,16 @@ impl Gfx {
                 _ => None,
             }
         });
-        let stage = viewed.and_then(|(i, name)| {
+        let ran = viewed.and_then(|(i, name)| {
+            let (n, key) = self.jobs.genai.step_keys.get(&owner)?.get(i)?;
+            if n != name || key.is_empty() {
+                return None;
+            }
+            let m = run::cached(&dir, key)?;
+            Some(dir.join(key).join(m.file)).filter(|p| playable(p))
+        });
+        let stage = ran.or_else(|| viewed.and_then(|(i, name)| {
+            let take = take.as_ref()?;
             if !self.jobs.genai.stages.contains_key(&take.key) {
                 let got = genai::history::load_stages(&dir, &take.key)?;
                 self.jobs.genai.stages.insert(take.key.clone(), got);
@@ -2169,8 +2340,8 @@ impl Gfx {
             }
             let m = run::cached(&dir, key)?;
             Some(dir.join(key).join(m.file)).filter(|p| playable(p))
-        });
-        let want = stage.or_else(|| Some(take.path(&dir)).filter(|p| playable(p)));
+        }));
+        let want = stage.or_else(|| take.as_ref().map(|t| t.path(&dir)).filter(|p| playable(p)));
         let want = want.map(|p| p.to_string_lossy().into_owned());
         if self.loaded.get(&owner).map(|l| &l.path) != want.as_ref() {
             match want {
@@ -2798,6 +2969,53 @@ impl Gfx {
                     if after.pipeline.takes != before.pipeline.takes {
                         fail("opening and closing the pipeline changed its takes".into());
                     }
+                    // A model runs from its own node, inside: step back in
+                    // and run schnell there. It was run before, so it is a
+                    // cache hit: free, and straight through.
+                    self.dive_into(t.pipe).unwrap_or_else(|e| fail(format!("the pipeline would not reopen: {e}")));
+                    let step = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .filter(|(_, n)| is_step(&n.kind))
+                        .position(|(_, n)| matches!(&n.kind, NodeKind::GenAiStep(Op::Generate { model, .. }) if model == "fal/flux-schnell"))
+                        .unwrap_or_else(|| fail("no schnell step inside".into()));
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareStep(step)));
+                    next(&mut t, 85);
+                }
+                _ => {}
+            },
+            85 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the step's own run failed: {e}")),
+                Some(Phase::Ready { .. }) => fail("a cached step asked to be paid for when run from its node".into()),
+                Some(Phase::Done(words)) => {
+                    if !words.contains("step ran") {
+                        fail(format!("a step's run ended with \"{words}\""));
+                    }
+                    if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
+                        fail("running a step threw you out of the pipeline".into());
+                    }
+                    if self.egraph.nodes.keys().any(|id| *id >= SHAPE_IDS) {
+                        fail("a stand-in was left in the pipeline's graph".into());
+                    }
+                    let takes_in = |me: &Self| me.dive.last().and_then(|d| d.graph.node(t.pipe)).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
+                    let before = takes_in(self);
+                    if !self.jobs.genai.step_keys.get(&t.pipe).is_some_and(|k| k.iter().any(|(n, key)| n == "FLUX.1 [schnell]" && !key.is_empty())) {
+                        fail("the step's result was not recorded for viewing".into());
+                    }
+                    let submits = t.fake.as_ref().unwrap().submits();
+                    if submits != 1 {
+                        fail(format!("a step's cached run sent {} request(s)", submits - 1));
+                    }
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
+                    let after = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
+                    if after != before {
+                        fail(format!("a step's own run made a take ({before:?} -> {after:?})"));
+                    }
                     if clip_ok() {
                         // A clip model: the plate as the clip AND the matte
                         // (any picture is a matte), half a second of it.
@@ -2836,7 +3054,8 @@ impl Gfx {
                          run below an un-run model, and key a typed prompt as the same request; \
                          the pipeline opens as a graph of step nodes with one Input per node input \
                          (none in the menu, a removed one restored), and a step added there comes \
-                         back out as a step"
+                         back out as a step; a model step run from its own node inside \
+                         is a cache hit that lands no take"
                     );
                     std::process::exit(0);
                 }
@@ -2871,7 +3090,7 @@ impl Gfx {
                         fail(format!("the clip run submitted {} request(s) before pay & run", submits - 1));
                     }
                     println!(
-                        "GENAI TEST PASS: local, remote, cached, one-model and dive stages as before; \
+                        "GENAI TEST PASS: local, remote, cached, one-model, dive and run-a-step-inside stages as before; \
                          an LTX video inpaint node captured {want} frames of the plate and of its \
                          matte from the playhead, encoded them as a {}x{} mp4 that decodes back \
                          to {want} frames, and stopped at the quote with nothing sent",
@@ -3012,6 +3231,8 @@ mod tests {
             steps: BTreeMap::new(),
             busy_elsewhere: false,
             wired: vec![true, false],
+            to_step: None,
+            step_ids: vec![],
             take_missing: true,
             fps: 24.0,
             texts: BTreeMap::new(),

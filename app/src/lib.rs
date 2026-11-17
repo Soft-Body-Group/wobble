@@ -11029,13 +11029,19 @@ impl Gfx {
             self.step_render_bake();
         }
         if self.graph_bake.is_some() {
-            self.step_graph_bake();
+            // A GenAI capture started from inside its pipeline renders the
+            // COMP (`genai_in_comp`).
+            if matches!(self.graph_bake.as_ref().map(|b| &b.sink), Some(BakeSink::Capture { .. })) {
+                self.genai_in_comp(|me| me.step_graph_bake());
+            } else {
+                self.step_graph_bake();
+            }
         }
         if self.track_job.is_some() {
             self.poll_track();
         }
         if self.jobs.genai.run.is_some() || self.jobs.genai.cfg.relay_token.is_some() {
-            self.genai_poll();
+            self.genai_in_comp(|me| me.genai_poll());
         }
         if self.jobs.corridor.run.is_some() || self.jobs.corridor.install.is_some() {
             self.corridor_poll();
@@ -23453,7 +23459,7 @@ impl Gfx {
                     NodeKind::GenAi(gp) => {
                         genai_click = genaiui::panel(ui, node, gp, &genai_view);
                     }
-                    NodeKind::GenAiStep(op) => genaiui::step_panel(ui, node, op, &genai_view),
+                    NodeKind::GenAiStep(op) => genai_click = genaiui::step_panel(ui, node, op, &genai_view),
                     NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) => {
                         if let Some(h) = rotodive::axis_panel(ui, &mut rcx, a) {
                             hud_drag_out = Some(h);
@@ -24317,7 +24323,17 @@ impl Gfx {
                     self.blender_action(key, a);
                 }
                 if let Some(a) = genai_click {
-                    self.genai_action(key, a);
+                    // A step's panel inside a pipeline acts on the pipeline
+                    // node, which lives in the comp the dive parked.
+                    let owner = self
+                        .dive
+                        .last()
+                        .filter(|d| d.kind == DiveKind::GenAi && !matches!(self.egraph.node(key).map(|n| &n.kind), Some(NodeKind::GenAi(_))))
+                        .and_then(|d| d.from);
+                    match owner {
+                        Some(o) => self.genai_in_comp(|me| me.genai_action(o, a)),
+                        None => self.genai_action(key, a),
+                    }
                 }
                 if let Some(nodes::scene3d::SourceAct::CardsFrom(src)) = r3d_act {
                     scene3dui::cards_from(&mut self.egraph, key, &src);

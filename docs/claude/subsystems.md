@@ -1574,6 +1574,18 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   picture. An Input read ONLY through Comps is not captured on its own
   (`Pipeline::reads` / `input_is_read`). Adding a kind = `COMP_NODES`,
   `comp_name`, and `Op::name`'s match.
+- **A model step runs from its OWN node inside** (`Action::PrepareStep`,
+  `Run::to_step`): the run's copy has Output re-pointed at that step
+  (`genai_runnable_to`), so plan, capture, quote and cache are the
+  ordinary ones, stopping there; it lands NO take, only
+  `Runs::step_keys[node]` (per step, name + cache key), which
+  `genai_dive_show` prefers over a take's stages. Text steps cannot be a
+  target. A run is the COMP's business, so everything that drives one
+  from inside the dive goes through `genai_in_comp` (swaps the parked
+  comp and its undo baseline in, live steps written to the node): the
+  step panel's actions, `genai_poll`, a Capture's `step_graph_bake`, the
+  API's node_run on a step. `genai_runnable` of the OPEN node reads the
+  dive's live steps.
 - **Clips** (an `Op::Input` with `clip` on, `Task::VideoEdit` /
   `VideoInpaint`): that input over `Pipeline::clip_seconds` (all clip
   Inputs share one length, `set_clip_seconds`) from the playhead, on the
