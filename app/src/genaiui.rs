@@ -376,6 +376,10 @@ pub(crate) fn stand_in(
     let park = egui::pos2(1.0e7, 1.0e7 + i as f32 * 100.0);
     match &steps.get(i)?.op {
         Op::Input { input, .. } => comp.input_of(owner, *input),
+        // A model's result: the pipeline node itself, whose reader the
+        // caller points at that result's file (`genai_dive_show` for the
+        // view, `genai_capture_next` for a run).
+        Op::Generate { .. } | Op::Comfy { .. } => Some(owner),
         Op::Shape { node, .. } => {
             let mut n = shape_node(node);
             if let NodeKind::Spline(sp) = &mut n.kind {
@@ -539,6 +543,12 @@ pub struct Runs {
     /// planned them (a whole run or one step's): what viewing a step
     /// inside shows, before any take's own stages.
     step_keys: std::collections::HashMap<u64, Vec<(String, String)>>,
+    /// A capture is waiting for the rig to take in a model's result it
+    /// just pointed the node's reader at (a comp node after a model).
+    pending_load: bool,
+    /// The node whose reader a capture pointed at a model's result: put
+    /// back on its take when the capture is over.
+    reader_moved: Option<u64>,
     account: Account,
 }
 
@@ -618,6 +628,8 @@ impl Default for Runs {
             stages: Default::default(),
             dive_fmt: None,
             step_keys: Default::default(),
+            pending_load: false,
+            reader_moved: None,
             account: Account::Unknown,
         }
     }
@@ -657,6 +669,10 @@ pub struct Run {
     /// Per step, its name and the cache key the plan gave it: where each
     /// step's result is, for the dive to show.
     pub keys: Vec<(String, String)>,
+    /// Model results the captures were rendered FROM (comp nodes after a
+    /// model): (step, the cache key of the result used). The plan must
+    /// give those steps the same keys, or the picture sent is stale.
+    pub used: Vec<(usize, String)>,
 }
 
 pub enum Phase {
@@ -1647,6 +1663,7 @@ impl Gfx {
             texts: BTreeMap::new(),
             to_step: None,
             keys: vec![],
+            used: vec![],
         });
     }
 
@@ -1691,7 +1708,28 @@ impl Gfx {
             }
         }
         // Mattes drawn inside: rendered from a stand-in node, by step.
+        let mut used: Vec<(usize, String)> = vec![];
         for (step, clip) in pl.shapes() {
+            // A comp node below a model works on that model's last result:
+            // it must have one (run the model from its own node first).
+            let above = pl.models_above(step);
+            if above.len() > 1 {
+                return self.genai_fail(node, pl, "a comp node inside can work on one model's result at a time, for now");
+            }
+            if let Some(&a) = above.first() {
+                let name = pl.steps[a].op.name();
+                match self.genai_step_result(node, a, name) {
+                    Some((key, _)) => used.push((a, key)),
+                    None => {
+                        let what = pl.steps[step].op.name();
+                        return self.genai_fail(
+                            node,
+                            pl,
+                            format!("{what} works on {name}'s result, and it has none yet: run {name} first, from its own node inside"),
+                        );
+                    }
+                }
+            }
             let matte = if step_is_matte(&pl.steps, step) { MATTE } else { 0 };
             todo.push((step & 0xff) | SHAPE | matte | if clip { CLIP } else { 0 });
         }
@@ -1743,6 +1781,7 @@ impl Gfx {
             texts: BTreeMap::new(),
             to_step: to,
             keys: vec![],
+            used,
         });
         self.genai_capture_next();
     }
@@ -1754,6 +1793,25 @@ impl Gfx {
         let (node, tick, next, pl) = (r.node, r.tick, todo.first().copied(), r.pipeline.clone());
         match next {
             Some(port) => {
+                // A comp node below a model: the node's reader must hold
+                // that model's result before the chain is rendered. Point
+                // it there and come back when the rig has taken it in.
+                if port & SHAPE != 0 {
+                    if let Some(&a) = pl.models_above(input_of_port(port)).first() {
+                        let path = self
+                            .genai_step_result(node, a, pl.steps[a].op.name())
+                            .map(|(_, p)| p.to_string_lossy().into_owned());
+                        let Some(path) = path else {
+                            return self.genai_fail(node, pl, "a model's result went missing mid-run");
+                        };
+                        if self.loaded.get(&node).map(|l| l.path.as_str()) != Some(path.as_str()) {
+                            self.load_read(node, &path);
+                            self.jobs.genai.pending_load = true;
+                            self.jobs.genai.reader_moved = Some(node);
+                            return;
+                        }
+                    }
+                }
                 let input = if port & SHAPE != 0 {
                     self.shape_stand_in(node, &pl, input_of_port(port))
                 } else {
@@ -1769,6 +1827,18 @@ impl Gfx {
             }
             None => self.genai_next_frame(),
         }
+    }
+
+    /// Where step `i` of `node`'s pipeline last left its result, if it is
+    /// still on disk and still that step (`name`): (cache key, file).
+    fn genai_step_result(&self, node: u64, i: usize, name: &str) -> Option<(String, std::path::PathBuf)> {
+        let (n, key) = self.jobs.genai.step_keys.get(&node)?.get(i)?;
+        if n != name || key.is_empty() {
+            return None;
+        }
+        let dir = config::results_dir();
+        let m = run::cached(&dir, key)?;
+        Some((key.clone(), dir.join(key).join(m.file)))
     }
 
     /// Put step `step`'s Spline in the comp as a stand-in node the capture
@@ -1941,6 +2011,14 @@ impl Gfx {
             }
         };
         r.keys = lead.steps.iter().zip(&plan.keys).map(|(s, k)| (s.op.name().to_string(), k.clone())).collect();
+        // A comp node was rendered from a model's last result: that must
+        // still be the result the model would make now, or what is sent
+        // is a picture of something since changed.
+        if let Some((a, _)) = r.used.iter().find(|(a, key)| plan.keys.get(*a) != Some(key)) {
+            let name = lead.steps.get(*a).map(|s| s.op.name()).unwrap_or("a model");
+            r.phase = Phase::Failed(format!("{name} changed since it was run: run it again first, from its own node inside"));
+            return;
+        }
         // The fan-out's other variants: the same inputs, planned the same
         // way. One that cannot be planned stops the lot before a quote.
         r.more.clear();
@@ -2036,6 +2114,13 @@ impl Gfx {
         // aborted) must not leave its stand-in in the comp.
         if !self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Capturing { .. })) {
             self.genai_drop_stand_ins();
+            // And the node's reader goes back to its take (inside its
+            // pipeline, `genai_dive_show` decides what it holds).
+            if let Some(n) = self.jobs.genai.reader_moved.take() {
+                if self.egraph.node(n).is_some() && self.dive.is_empty() {
+                    self.genai_show(n);
+                }
+            }
         }
         // The relay balance, fetched once per config change.
         #[cfg(feature = "commerce")]
@@ -2062,6 +2147,20 @@ impl Gfx {
                     }
                 }
                 Account::Known(_) => {}
+            }
+        }
+        // A capture waiting on the rig (`pending_load`): go on once it has
+        // been rebuilt with the model's result in the node's reader.
+        if self.jobs.genai.pending_load {
+            let capturing = self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Capturing { .. }));
+            if !capturing {
+                self.jobs.genai.pending_load = false;
+            } else if !self.playback_dirty {
+                self.jobs.genai.pending_load = false;
+                self.genai_capture_next();
+                return;
+            } else {
+                return;
             }
         }
         let Some(r) = self.jobs.genai.run.as_mut() else { return };
@@ -2414,6 +2513,13 @@ impl Gfx {
             let i = ids.iter().position(|&x| x == v)?;
             match &self.egraph.node(v)?.kind {
                 NodeKind::GenAiStep(op @ (Op::Generate { .. } | Op::Comfy { .. })) => Some((i, op.name())),
+                // A comp node below a model shows that model's result
+                // through itself: the reader holds the model's.
+                k if comp_ok(k) => {
+                    let pl = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![] };
+                    let a = *pl.models_above(i).first()?;
+                    Some((a, pl.steps[a].op.name()))
+                }
                 _ => None,
             }
         });
@@ -3108,10 +3214,66 @@ impl Gfx {
                     }
                     let owner = t.pipe;
                     self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    t.before = before.map(|n| n as f32);
+                    // A comp node AFTER the model works on its result: a
+                    // Mult at a half, viewed in here, is half the grey card.
+                    let schnell = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| matches!(&n.kind, NodeKind::GenAiStep(Op::Generate { model, .. }) if model == "fal/flux-schnell"))
+                        .map(|(id, _)| *id)
+                        .unwrap();
+                    let half = NodeKind::Mult(engine::graph::MultParams { value: [0.5; 3], ..Default::default() });
+                    let m = self.egraph.add(half, egui::pos2(300.0, 300.0));
+                    self.egraph.connect(m, 0, schnell);
+                    self.egraph.view = Some(m);
+                    t.node = m;
+                    next(&mut t, 86);
+                }
+                _ => {}
+            },
+            86 => {
+                if let Some(v) = stable(self, &mut t) {
+                    let want = genai::image::srgb_decode(fake::GREY as f32 / 255.0) * 0.5;
+                    if (v - want).abs() > 0.01 {
+                        fail(format!("a Mult after the model reads {v:.4} inside, expected {want:.4} (half its result)"));
+                    }
+                    // And the pipeline's own run sends it: Output reads the
+                    // Mult, the model is cached, nothing is billed.
+                    let out = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(Op::Output)))
+                        .map(|(id, _)| *id)
+                        .unwrap();
+                    self.egraph.edges.retain(|e| e.0 != out);
+                    self.egraph.connect(out, 0, t.node);
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Prepare));
+                    next(&mut t, 87);
+                }
+            }
+            87 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("a run through a comp node after a model failed: {e}")),
+                Some(Phase::Ready { .. }) => fail("a comp node after a cached model asked to be paid for".into()),
+                Some(Phase::Done(_)) => {
+                    let submits = t.fake.as_ref().unwrap().submits();
+                    if submits != 1 {
+                        fail(format!("a comp node after a model sent {} request(s)", submits - 1));
+                    }
+                    let before = t.before.map(|n| n as usize);
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
                     self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
                     let after = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
-                    if after != before {
-                        fail(format!("a step's own run made a take ({before:?} -> {after:?})"));
+                    // The step's own run made none; the pipeline's made one.
+                    if after != before.map(|n| n + 1) {
+                        fail(format!("takes went {before:?} -> {after:?}; expected one more, from the pipeline's run"));
+                    }
+                    if self.egraph.nodes.keys().any(|id| *id >= SHAPE_IDS) {
+                        fail("a stand-in was left in the comp".into());
                     }
                     if clip_ok() {
                         // A clip model: the plate as the clip AND the matte
@@ -3152,7 +3314,7 @@ impl Gfx {
                          the pipeline opens as a graph of step nodes with one Input per node input \
                          (none in the menu, a removed one restored), and a step added there comes \
                          back out as a step; a model step run from its own node inside \
-                         is a cache hit that lands no take"
+                         is a cache hit that lands no take, and a Mult after it works on its result"
                     );
                     std::process::exit(0);
                 }

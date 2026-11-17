@@ -11792,21 +11792,28 @@ impl Gfx {
         // wrong size, or blank.
         let genai_dive = self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
         match preview {
+            // The readers too (`sync_time_maps`): which of them the frame
+            // samples is decided by looking nodes up by id, and the
+            // pipeline's steps reuse the comp's ids — the pipeline node's
+            // own reader (a take, a step's result) was looked up as a
+            // step, found unloaded, and never shown in here.
             Some(mut comp) if genai_dive => {
                 std::mem::swap(&mut self.egraph, &mut comp);
                 self.stamp_formats(&mut graph);
                 self.apply_bake_state(&mut graph);
+                self.sync_time_maps(&mut graph);
                 std::mem::swap(&mut self.egraph, &mut comp);
             }
+            // Time nodes: which frame each reader decodes. Pushed from
+            // here so the walk rides the graph this frame already built; a
+            // changed map re-seeks the player, so it takes effect on the
+            // next pump.
             _ => {
                 self.stamp_formats(&mut graph);
                 self.apply_bake_state(&mut graph);
+                self.sync_time_maps(&mut graph);
             }
         }
-        // Time nodes: which frame each reader decodes. Pushed from here so
-        // the walk rides the graph this frame already built; a changed map
-        // re-seeks the player, so it takes effect on the next pump.
-        self.sync_time_maps(&mut graph);
         // A seek the UI pass just made is issued NOW (after the time maps
         // that could invalidate it), not at the top of the next redraw: on
         // a vsync-paced display that is one redraw — 16.7ms — off every

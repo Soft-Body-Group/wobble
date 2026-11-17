@@ -1577,6 +1577,19 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   picture. An Input read ONLY through Comps is not captured on its own
   (`Pipeline::reads` / `input_is_read`). Known gap: a generator inside
   (Gradient, Grid) takes the SCRIPT format, not the pipeline node's.
+- **A comp node AFTER a model** works on that model's LAST result
+  (`Pipeline::models_above`, one model per chain for now): the stand-in
+  chain ends at the pipeline node itself, whose reader is pointed at the
+  result's file (`genai_dive_show` for the view; `genai_capture_next`
+  for a run, which waits one rebuild — `Runs::pending_load` — and puts
+  the reader back after, `reader_moved`). `genai_prepare` refuses when
+  the model has no result yet ("run it first, from its own node"), and
+  `genai_plan` refuses when the result used is not the one the model
+  would make now (`Run::used` vs the plan's keys).
+- **Inside the dive the redraw's reader pass runs on the COMP too**
+  (`sync_time_maps` inside the swap in `redraw`): step ids reuse comp
+  ids, and the pipeline node's own reader was being looked up as a step
+  and never shown in there.
 - **A model step runs from its OWN node inside** (`Action::PrepareStep`,
   `Run::to_step`): the run's copy has Output re-pointed at that step
   (`genai_runnable_to`), so plan, capture, quote and cache are the

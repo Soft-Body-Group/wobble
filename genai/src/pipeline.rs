@@ -1039,13 +1039,13 @@ impl Pipeline {
                 return Err(format!("this build does not know the model \"{model}\""));
             }
         }
+        // A Comp may read a MODEL's result too: the host renders it from
+        // that step's last run (and refuses, before anything is sent, when
+        // there is none). Words are not a picture.
         if let Op::Comp { .. } = &step.op {
             let mut srcs = step.inputs.iter().flatten().filter_map(|j| self.steps.get(*j));
-            if srcs.any(|s| !matches!(s.op, Op::Input { .. } | Op::Shape { .. } | Op::Comp { .. })) {
-                return Err(format!(
-                    "{} works on the node's inputs (or a Spline, or another such node): a model's result cannot feed it yet",
-                    step.op.name()
-                ));
+            if srcs.any(|s| s.op.output() == Some(Pipe::Text)) {
+                return Err(format!("{} works on pictures: a text step cannot feed it", step.op.name()));
             }
         }
         let ports = step.op.ports();
@@ -1123,6 +1123,25 @@ impl Pipeline {
             })
             .collect()
     }
+    /// The model steps whose RESULTS step `i` (a Comp) works on, through
+    /// any Comps between: the host renders the chain from them.
+    pub fn models_above(&self, i: usize) -> Vec<usize> {
+        let mut seen = vec![false; self.steps.len()];
+        let mut stack = vec![i];
+        let mut out = vec![];
+        while let Some(j) = stack.pop() {
+            if j >= self.steps.len() || std::mem::replace(&mut seen[j], true) {
+                continue;
+            }
+            match &self.steps[j].op {
+                Op::Generate { .. } | Op::Comfy { .. } => out.push(j),
+                Op::Comp { .. } => stack.extend(self.steps[j].inputs.iter().flatten().copied()),
+                _ => {}
+            }
+        }
+        out
+    }
+
     /// Does a run read anything as a clip?
     pub fn reads_clip(&self) -> bool {
         self.reads().iter().any(|r| r.1) || self.shapes().iter().any(|r| r.1)
