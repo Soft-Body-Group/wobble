@@ -11252,7 +11252,10 @@ impl Gfx {
         if self.track_job.is_some() {
             self.poll_track();
         }
-        if self.jobs.genai.run.is_some() || self.jobs.genai.cfg.relay_token.is_some() {
+        if self.jobs.genai.run.is_some()
+            || !self.jobs.genai.background.is_empty()
+            || self.jobs.genai.cfg.relay_token.is_some()
+        {
             self.genai_in_comp(|me| me.genai_poll());
         }
         if self.jobs.corridor.run.is_some() || self.jobs.corridor.install.is_some() {
@@ -23024,7 +23027,7 @@ impl Gfx {
                 let mut blender_click: Option<blenderui::Action> = None;
                 // A step inside a pipeline's dive shows its OWNER's view.
                 let genai_view = match self.egraph.node(node).map(|n| &n.kind) {
-                    Some(NodeKind::GenAiStep(_)) => self.genai_step_view(),
+                    Some(NodeKind::GenAiStep(_)) => self.genai_step_view(node),
                     _ => self.genai_view(node),
                 };
                 let mut genai_click: Option<genaiui::Action> = None;

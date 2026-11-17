@@ -1590,6 +1590,16 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   (`sync_time_maps` inside the swap in `redraw`): step ids reuse comp
   ids, and the pipeline node's own reader was being looked up as a step
   and never shown in there.
+- **Runs go side by side once PAID.** `Runs::run` is the one being
+  prepared (capture, quote, waiting for pay & run: one at a time, they
+  share the capture bake) or the last that ended; a run that reaches
+  `Phase::Running` moves to `Runs::background` (in `genai_poll` and at
+  the top of `genai_prepare`), any number of them, polled by
+  `genai_poll_running`. One that ends goes back to `run` when it is free
+  (so a single run reads exactly as before), else waits in `background`.
+  Panels pick their run with `genai_run_for(node, step)`; a step's panel
+  uses `CancelStep` / `DismissStep`. `step_keys` MERGE per step.
+  `genai_busy` (the graph's turning ring) walks them all.
 - **A model step runs from its OWN node inside** (`Action::PrepareStep`,
   `Run::to_step`): the run's copy has Output re-pointed at that step
   (`genai_runnable_to`), so plan, capture, quote and cache are the

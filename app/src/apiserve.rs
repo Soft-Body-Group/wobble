@@ -2262,7 +2262,11 @@ impl Gfx {
         if let Some(r) = self.jobs.genai.run.as_ref().filter(|r| r.active()) {
             // "ready" = quoted and waiting for pay & run (a click in the
             // app): nothing more will happen until then.
-            jobs.push(json!({ "node": r.node, "kind": "genai", "state": self.genai_state_words() }));
+            jobs.push(json!({ "node": r.node, "kind": "genai", "state": self.genai_state_words(), "step": r.to_step }));
+        }
+        // Paid runs going beside it, any number.
+        for r in self.jobs.genai.background.iter().filter(|r| r.active()) {
+            jobs.push(json!({ "node": r.node, "kind": "genai", "state": "running", "step": r.to_step }));
         }
         if let Some(r) = self.jobs.flow.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {

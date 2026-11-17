@@ -451,12 +451,14 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
     };
     let idle = matches!(v.state, ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_));
     if !idle && v.to_step != Some(me) {
-        // Another run is going: say whose, and let it be stopped.
+        // Another run is being prepared (one at a time: they share the
+        // capture): say whose, and let it be stopped. Once it is paid and
+        // running, this one can start beside it.
         let mut act = None;
         ui.horizontal(|ui| {
             ui.weak(small(match v.to_step {
-                Some(_) => "another step is running",
-                None => "the whole pipeline is running",
+                Some(_) => "another step is being prepared: pay & run it (or cancel), then run this one beside it",
+                None => "the whole pipeline is being prepared",
             }));
             if ui.small_button("cancel").clicked() {
                 act = Some(Action::Cancel);
@@ -469,7 +471,15 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
             ui.colored_label(theme::warn(), small(e));
         }
     }
-    let r = run_ui(ui, v, &[], "run this step…", || Action::PrepareStep(me));
+    let r = run_ui(
+        ui,
+        v,
+        &[],
+        "run this step…",
+        || Action::PrepareStep(me),
+        || Action::CancelStep(me),
+        || Action::DismissStep(me),
+    );
     ui.weak(small("view the node to see its result; the pipeline node's run… makes the take"));
     r
 }
@@ -523,7 +533,14 @@ pub fn money_badge(painter: &egui::Painter, sp: Pos2, r: f32) {
 /// going says so rather than queueing money.
 pub struct Runs {
     pub cfg: Config,
+    /// The run being PREPARED (capturing, pricing, waiting for pay & run)
+    /// — one at a time: they share the capture bake — or the last one
+    /// that ended, until dismissed.
     pub run: Option<Run>,
+    /// Runs that are paid and going: each on its own thread, any number
+    /// at once (another model, another node). One that ends goes back to
+    /// `run` when that is free, else waits here to be dismissed.
+    pub background: Vec<Run>,
     /// Captures handed over by the bake loop: (node, port, working-space
     /// RGBA, w, h). Written from inside `step_graph_bake`, where only field
     /// borrows are available, and consumed at `finish_graph_bake`.
@@ -623,6 +640,7 @@ impl Default for Runs {
         Self {
             cfg: Config::load(),
             run: None,
+            background: vec![],
             captured: vec![],
             clip_frames: vec![],
             stages: Default::default(),
@@ -757,6 +775,9 @@ pub enum Action {
     /// Run ONE step (its index), from inside the pipeline: its inputs
     /// are captured and everything above it run or found cached.
     PrepareStep(usize),
+    /// Cancel / dismiss the run of ONE step (several can be going).
+    CancelStep(usize),
+    DismissStep(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1170,7 +1191,15 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
 /// quote as they come, pay & run, the steps as they go, how it ended.
 /// Shared by the pipeline node's panel and a step's inside it (`label`
 /// and `prepare` say which run the button starts).
-fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn() -> Action) -> Option<Action> {
+fn run_ui(
+    ui: &mut Ui,
+    v: &View,
+    names: &[String],
+    label: &str,
+    prepare: impl Fn() -> Action,
+    cancel: impl Fn() -> Action,
+    dismiss: impl Fn() -> Action,
+) -> Option<Action> {
     let mut act = None;
     match &v.state {
         ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_) => {
@@ -1197,7 +1226,7 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
                 ui.label(small(format!("rendering the inputs at the playhead… {}", clock(v.run_secs))));
             });
             if ui.small_button("cancel").clicked() {
-                act = Some(Action::Cancel);
+                act = Some(cancel());
             }
         }
         ViewState::Quoting => {
@@ -1206,7 +1235,7 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
                 ui.label(small(format!("asking the price… {}", clock(v.run_secs))));
             });
             if ui.small_button("cancel").clicked() {
-                act = Some(Action::Cancel);
+                act = Some(cancel());
             }
         }
         ViewState::Ready { quote, billed, stale } => {
@@ -1244,7 +1273,7 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
                     act = Some(Action::Confirm);
                 }
                 if ui.small_button("cancel").clicked() {
-                    act = Some(Action::Cancel);
+                    act = Some(cancel());
                 }
             });
         }
@@ -1263,7 +1292,7 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
             }
             ui.weak(small(format!("{} in all", clock(v.run_secs))));
             if ui.small_button("cancel").on_hover_text("stops waiting and cancels the remote job").clicked() {
-                act = Some(Action::Cancel);
+                act = Some(cancel());
             }
         }
     }
@@ -1276,7 +1305,7 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
             .on_hover_text(words.as_str());
     }
     if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("ok").clicked() {
-        act = Some(Action::Dismiss);
+        act = Some(dismiss());
     }
     act
 }
@@ -1349,7 +1378,7 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
 
     // --- the run
     let names: Vec<String> = p.pipeline.steps.iter().map(|s| s.op.label()).collect();
-    if let Some(a) = run_ui(ui, v, &names, "run…", || Action::Prepare) {
+    if let Some(a) = run_ui(ui, v, &names, "run…", || Action::Prepare, || Action::Cancel, || Action::Dismiss) {
         act = Some(a);
     }
     ui.separator();
@@ -1553,6 +1582,44 @@ fn to_rec709(rgba: &mut [f32], working: engine::color::Colorspace) {
 
 impl Gfx {
     pub(crate) fn genai_view(&self, node: u64) -> View {
+        self.genai_view_of(node, None)
+    }
+
+    /// The run a panel is about: `node`'s, and for a step's panel
+    /// (`step` = its index) that step's own. The one being prepared
+    /// first, then one going, then the last that ended.
+    fn genai_run_for(&self, node: u64, step: Option<usize>) -> Option<&Run> {
+        let g = &self.jobs.genai;
+        let fits = |r: &&Run| r.node == node && step.is_none_or(|s| r.to_step == Some(s));
+        g.run
+            .as_ref()
+            .filter(|r| r.active())
+            .filter(fits)
+            .or_else(|| g.background.iter().rev().filter(|r| r.active()).find(fits))
+            .or_else(|| g.run.as_ref().filter(fits))
+            .or_else(|| g.background.iter().rev().find(fits))
+            // A step with no run of its own still sees one being PREPARED
+            // on its node (it has to wait for that).
+            .or_else(|| g.run.as_ref().filter(|r| r.active() && r.node == node && step.is_some()))
+    }
+
+    /// Take that run out (to cancel or dismiss it).
+    fn genai_take_run(&mut self, node: u64, step: Option<usize>, ended_only: bool) -> Option<Run> {
+        let fits = |r: &Run| r.node == node && step.is_none_or(|s| r.to_step == Some(s)) && !(ended_only && r.active());
+        let g = &mut self.jobs.genai;
+        if g.run.as_ref().is_some_and(|r| fits(r) && (r.active() || ended_only)) {
+            return g.run.take();
+        }
+        if let Some(k) = g.background.iter().rposition(|r| fits(r) && (r.active() || ended_only)) {
+            return Some(g.background.remove(k));
+        }
+        if g.run.as_ref().is_some_and(fits) {
+            return g.run.take();
+        }
+        g.background.iter().rposition(fits).map(|k| g.background.remove(k))
+    }
+
+    pub(crate) fn genai_view_of(&self, node: u64, step: Option<usize>) -> View {
         let cfg = &self.jobs.genai.cfg;
         let bill = match cfg.route {
             #[cfg(not(feature = "commerce"))]
@@ -1571,7 +1638,7 @@ impl Gfx {
                 None => Err("no fal key on this machine: set FAL_KEY or add one under keys…".to_string()),
             },
         };
-        let mine = self.jobs.genai.run.as_ref().filter(|r| r.node == node);
+        let mine = self.genai_run_for(node, step);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
             Some(Phase::Capturing { .. }) => ViewState::Capturing,
@@ -1604,6 +1671,8 @@ impl Gfx {
             state,
             steps: mine.map(|r| r.steps.clone()).unwrap_or_default(),
             texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
+            // Only a run being PREPARED blocks another (the capture is
+            // shared); paid ones go on beside it.
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
             elapsed: mine.map(|r| r.since.iter().map(|(i, t)| (*i, t.elapsed().as_secs_f32())).collect()).unwrap_or_default(),
@@ -1625,8 +1694,12 @@ impl Gfx {
                 }
             }
             Action::Confirm => self.genai_confirm(node),
-            Action::Cancel => {
-                if let Some(r) = self.jobs.genai.run.take() {
+            Action::Cancel | Action::CancelStep(_) => {
+                let step = match a {
+                    Action::CancelStep(i) => Some(i),
+                    _ => None,
+                };
+                if let Some(r) = self.genai_take_run(node, step, false).filter(|r| r.active()) {
                     if let Phase::Running { job } = &r.phase {
                         job.cancel();
                     }
@@ -1639,10 +1712,12 @@ impl Gfx {
                     // the remote request; nobody is listening for its end.
                 }
             }
-            Action::Dismiss => {
-                if self.jobs.genai.run.as_ref().is_some_and(|r| !r.active()) {
-                    self.jobs.genai.run = None;
-                }
+            Action::Dismiss | Action::DismissStep(_) => {
+                let step = match a {
+                    Action::DismissStep(i) => Some(i),
+                    _ => None,
+                };
+                let _ = self.genai_take_run(node, step, true);
             }
             Action::Show => self.genai_show(node),
             Action::TakeToLoad { take, wire } => self.genai_take_to_load(node, take, wire),
@@ -1704,9 +1779,21 @@ impl Gfx {
     }
 
     fn genai_prepare(&mut self, node: u64, to: Option<usize>) {
-        if self.jobs.genai.run.as_ref().is_some_and(|r| r.active()) {
+        // A run that is paid and going leaves the front (as `genai_poll`
+        // does), so this one can be prepared beside it.
+        if self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Running { .. })) {
+            let r = self.jobs.genai.run.take().unwrap();
+            self.jobs.genai.background.push(r);
+        }
+        // One run is PREPARED at a time; and the same one is not started
+        // twice while it is going.
+        if self.jobs.genai.run.as_ref().is_some_and(|r| r.active())
+            || self.jobs.genai.background.iter().any(|r| r.active() && r.node == node && r.to_step == to)
+        {
             return;
         }
+        // Its last ended run makes way.
+        self.jobs.genai.background.retain(|r| r.active() || !(r.node == node && r.to_step == to));
         let Some(pl) = self.genai_runnable_to(node, to) else { return };
         // Everything that can be said without rendering or sending, first.
         let Some(out) = pl.output() else {
@@ -2201,6 +2288,34 @@ impl Gfx {
                 return;
             }
         }
+        // A run that is paid and going leaves the front, so another can be
+        // prepared beside it.
+        if self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Running { .. })) {
+            let r = self.jobs.genai.run.take().unwrap();
+            self.jobs.genai.background.push(r);
+        }
+        for mut r in std::mem::take(&mut self.jobs.genai.background) {
+            if r.active() {
+                self.genai_poll_running(&mut r);
+            }
+            // One that ended shows where a single run always has (the
+            // front), when that is free.
+            if !r.active() && self.jobs.genai.run.is_none() {
+                self.jobs.genai.run = Some(r);
+            } else {
+                self.jobs.genai.background.push(r);
+            }
+        }
+        // Ended runs nobody dismissed do not pile up.
+        let ended = self.jobs.genai.background.iter().filter(|r| !r.active()).count();
+        if ended > 8 {
+            let mut drop = ended - 8;
+            self.jobs.genai.background.retain(|r| {
+                let go = !r.active() && drop > 0;
+                drop -= usize::from(go);
+                !go
+            });
+        }
         let Some(r) = self.jobs.genai.run.as_mut() else { return };
         let node = r.node;
         // A capture whose bake died (the input stopped rendering, the rig
@@ -2214,16 +2329,22 @@ impl Gfx {
             r.phase = Phase::Failed(why);
             return;
         }
+        if let Phase::Quoting { rx, .. } = &mut r.phase {
+            if let Ok(q) = rx.try_recv() {
+                let Phase::Quoting { plan, inputs, .. } = std::mem::replace(&mut r.phase, Phase::Failed(String::new())) else {
+                    unreachable!()
+                };
+                r.phase = Phase::Ready { plan, inputs, quote: q };
+            }
+        }
+    }
+
+    /// One going run's events: its steps' states, its takes as they land,
+    /// how it ended.
+    fn genai_poll_running(&mut self, r: &mut Run) {
+        let node = r.node;
         let mut landed = vec![];
         match &mut r.phase {
-            Phase::Quoting { rx, .. } => {
-                if let Ok(q) = rx.try_recv() {
-                    let Phase::Quoting { plan, inputs, .. } = std::mem::replace(&mut r.phase, Phase::Failed(String::new())) else {
-                        unreachable!()
-                    };
-                    r.phase = Phase::Ready { plan, inputs, quote: q };
-                }
-            }
             Phase::Running { job } => {
                 let mut end = None;
                 while let Ok(ev) = job.rx.try_recv() {
@@ -2257,7 +2378,15 @@ impl Gfx {
                         let n = 1 + r.more.len();
                         // Where every step's result is now: what viewing
                         // a step inside shows.
-                        self.jobs.genai.step_keys.insert(node, r.keys.clone());
+                        // Merged: another run of this node may have
+                        // ended meanwhile with other steps' keys.
+                        let keys = self.jobs.genai.step_keys.entry(node).or_default();
+                        if keys.len() < r.keys.len() {
+                            keys.resize(r.keys.len(), Default::default());
+                        }
+                        for (k, new) in r.keys.iter().enumerate().filter(|(_, n)| !n.1.is_empty()) {
+                            keys[k] = new.clone();
+                        }
                         if r.to_step.is_some() {
                             // One step's run: its result to look at (and
                             // to feed onward, cached), never a take.
@@ -2374,7 +2503,14 @@ impl Gfx {
     /// pipeline, the step being run (and each step as its turn comes).
     pub(crate) fn genai_busy(&self) -> std::collections::HashMap<u64, (String, f32)> {
         let mut out = std::collections::HashMap::new();
-        let Some(r) = self.jobs.genai.run.as_ref().filter(|r| r.active()) else { return out };
+        let g = &self.jobs.genai;
+        for r in g.run.iter().chain(g.background.iter()).filter(|r| r.active()) {
+            self.genai_busy_of(r, &mut out);
+        }
+        out
+    }
+
+    fn genai_busy_of(&self, r: &Run, out: &mut std::collections::HashMap<u64, (String, f32)>) {
         let all = r.t0.elapsed().as_secs_f32();
         let phase = match &r.phase {
             Phase::Capturing { .. } => Some("rendering inputs"),
@@ -2416,7 +2552,6 @@ impl Gfx {
                 out.insert(r.node, (words, all));
             }
         }
-        out
     }
 
     /// GenAI node `node`'s params, in the open graph or the comp a dive
@@ -2495,7 +2630,7 @@ impl Gfx {
 
     /// The view a step inside a GenAI Pipeline's dive shows: its owner's,
     /// with the owner's wiring read off the graph the dive parked.
-    pub(crate) fn genai_step_view(&self) -> View {
+    pub(crate) fn genai_step_view(&self, sel: u64) -> View {
         let Some((owner, g)) = self
             .dive
             .last()
@@ -2504,8 +2639,10 @@ impl Gfx {
         else {
             return self.genai_view(0);
         };
-        let step_ids = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
-        View { wired: self.genai_wired(g, owner), step_ids, ..self.genai_view(owner) }
+        let step_ids: Vec<u64> = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
+        // The selected step's OWN run (several can be going at once).
+        let me = step_ids.iter().position(|x| *x == sel);
+        View { wired: self.genai_wired(g, owner), step_ids, ..self.genai_view_of(owner, me) }
     }
 
     /// Point the node's reader at its picked take (or at nothing).
@@ -3281,17 +3418,46 @@ impl Gfx {
                     let owner = t.pipe;
                     self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
                     self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareStep(step)));
+                    // And the whole pipeline BESIDE it: two runs at once.
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Prepare));
+                    let g = &self.jobs.genai;
+                    let going = g.run.iter().chain(g.background.iter()).filter(|r| r.active()).count();
+                    if going != 2 {
+                        fail(format!("{going} run(s) going after starting a step and the pipeline together; expected 2"));
+                    }
                     next(&mut t, 85);
                 }
                 _ => {}
             },
+            85 if self.jobs.genai.run.iter().chain(self.jobs.genai.background.iter()).any(|r| r.active()) => {
+                if matches!(self.jobs.genai.run.as_ref().map(|r| &r.phase), Some(Phase::Ready { .. })) {
+                    fail("a cached run asked to be paid for when run beside another".into());
+                }
+            }
             85 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the step's own run failed: {e}")),
                 Some(Phase::Ready { .. }) => fail("a cached step asked to be paid for when run from its node".into()),
-                Some(Phase::Done(words)) => {
-                    if !words.contains("step ran") {
-                        fail(format!("a step's run ended with \"{words}\""));
+                Some(Phase::Done(_)) => {
+                    // Both ended, each as itself: the step's left a result
+                    // to view, the pipeline's a take.
+                    let ends: Vec<String> = self
+                        .jobs
+                        .genai
+                        .run
+                        .iter()
+                        .chain(self.jobs.genai.background.iter())
+                        .map(|r| match &r.phase {
+                            Phase::Done(w) => w.clone(),
+                            Phase::Failed(e) => fail(format!("one of two runs at once failed: {e}")),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    if ends.len() != 2 || !ends.iter().any(|w| w.contains("step ran")) || !ends.iter().any(|w| w.contains("take landed")) {
+                        fail(format!("two runs at once ended as {ends:?}"));
                     }
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    self.jobs.genai.background.clear();
                     if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
                         fail("running a step threw you out of the pipeline".into());
                     }
@@ -3461,6 +3627,7 @@ impl Gfx {
 
     pub(crate) fn genai_state_words(&self) -> String {
         match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+            None if self.jobs.genai.background.iter().any(|r| r.active()) => "running".into(),
             None => "none".into(),
             Some(Phase::Capturing { todo, .. }) => format!("capturing {todo:?}, bake {}", self.graph_bake.is_some()),
             Some(Phase::Quoting { .. }) => "quoting".into(),
