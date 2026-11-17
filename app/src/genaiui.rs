@@ -673,6 +673,10 @@ pub struct Run {
     /// model): (step, the cache key of the result used). The plan must
     /// give those steps the same keys, or the picture sent is stale.
     pub used: Vec<(usize, String)>,
+    /// When the run was asked for, and when each step last changed
+    /// state: the progress the graph and the panel show.
+    pub t0: web_time::Instant,
+    pub since: BTreeMap<usize, web_time::Instant>,
 }
 
 pub enum Phase {
@@ -706,6 +710,9 @@ pub struct View {
     pub busy_elsewhere: bool,
     /// Per node input, whether something is wired into it, for the hints.
     pub wired: Vec<bool>,
+    /// Seconds each step has been in its state, and the run in all.
+    pub elapsed: BTreeMap<usize, f32>,
+    pub run_secs: f32,
     /// The run going is of ONE step (its index), not the whole pipeline.
     pub to_step: Option<usize>,
     /// Inside the pipeline: the dive's node ids in step order.
@@ -771,6 +778,16 @@ pub(crate) mod appui;
 
 fn small(t: impl Into<String>) -> egui::RichText {
     egui::RichText::new(t.into()).small()
+}
+
+/// "12 s", "1:05".
+fn clock(secs: f32) -> String {
+    let s = secs.max(0.0) as u32;
+    if s >= 60 {
+        format!("{}:{:02}", s / 60, s % 60)
+    } else {
+        format!("{s} s")
+    }
 }
 
 fn state_words(s: &StepState) -> String {
@@ -1175,13 +1192,19 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
             }
         }
         ViewState::Capturing => {
-            ui.label(small("rendering the inputs at the playhead…"));
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(small(format!("rendering the inputs at the playhead… {}", clock(v.run_secs))));
+            });
             if ui.small_button("cancel").clicked() {
                 act = Some(Action::Cancel);
             }
         }
         ViewState::Quoting => {
-            ui.label(small("asking the price…"));
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(small(format!("asking the price… {}", clock(v.run_secs))));
+            });
             if ui.small_button("cancel").clicked() {
                 act = Some(Action::Cancel);
             }
@@ -1228,8 +1251,17 @@ fn run_ui(ui: &mut Ui, v: &View, names: &[String], label: &str, prepare: impl Fn
         ViewState::Running => {
             for (i, s) in &v.steps {
                 let name = names.get(*i).cloned().unwrap_or_default();
-                ui.label(small(format!("{name}: {}", state_words(s))));
+                let going = !matches!(s, StepState::Done | StepState::Cached);
+                ui.horizontal(|ui| {
+                    if going {
+                        ui.spinner();
+                    }
+                    let secs = v.elapsed.get(i).filter(|_| going).map(|t| format!(" · {}", clock(*t))).unwrap_or_default();
+                    let sep = if name.is_empty() { "" } else { ": " };
+                    ui.label(small(format!("{name}{sep}{}{secs}", state_words(s))));
+                });
             }
+            ui.weak(small(format!("{} in all", clock(v.run_secs))));
             if ui.small_button("cancel").on_hover_text("stops waiting and cancels the remote job").clicked() {
                 act = Some(Action::Cancel);
             }
@@ -1574,6 +1606,8 @@ impl Gfx {
             texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
+            elapsed: mine.map(|r| r.since.iter().map(|(i, t)| (*i, t.elapsed().as_secs_f32())).collect()).unwrap_or_default(),
+            run_secs: mine.map_or(0.0, |r| r.t0.elapsed().as_secs_f32()),
             to_step: mine.and_then(|r| r.to_step),
             step_ids: vec![],
             take_missing,
@@ -1664,6 +1698,8 @@ impl Gfx {
             to_step: None,
             keys: vec![],
             used: vec![],
+            t0: web_time::Instant::now(),
+            since: BTreeMap::new(),
         });
     }
 
@@ -1782,6 +1818,8 @@ impl Gfx {
             to_step: to,
             keys: vec![],
             used,
+            t0: web_time::Instant::now(),
+            since: BTreeMap::new(),
         });
         self.genai_capture_next();
     }
@@ -2191,6 +2229,11 @@ impl Gfx {
                 while let Ok(ev) = job.rx.try_recv() {
                     match ev {
                         Event::Step(i, s) => {
+                            // Timed from when it left the queue, not from
+                            // every poll that says the same thing.
+                            if r.steps.get(&i).map(std::mem::discriminant) != Some(std::mem::discriminant(&s)) {
+                                r.since.insert(i, web_time::Instant::now());
+                            }
                             r.steps.insert(i, s);
                         }
                         Event::Text(i, words) => {
@@ -2202,6 +2245,7 @@ impl Gfx {
                         Event::Take(t) => {
                             landed.push(t);
                             r.steps.clear();
+                            r.since.clear();
                         }
                         Event::Done(t) => end = Some(Ok(t)),
                         Event::Failed(e) => end = Some(Err(e)),
@@ -2322,6 +2366,57 @@ impl Gfx {
             }
         }
         Some(pl)
+    }
+
+    /// What the graph draws a turning ring on: the node (in the OPEN
+    /// graph) a GenAI job is working at, with what it is doing and for
+    /// how long. In the comp that is the pipeline node; inside its
+    /// pipeline, the step being run (and each step as its turn comes).
+    pub(crate) fn genai_busy(&self) -> std::collections::HashMap<u64, (String, f32)> {
+        let mut out = std::collections::HashMap::new();
+        let Some(r) = self.jobs.genai.run.as_ref().filter(|r| r.active()) else { return out };
+        let all = r.t0.elapsed().as_secs_f32();
+        let phase = match &r.phase {
+            Phase::Capturing { .. } => Some("rendering inputs"),
+            Phase::Quoting { .. } => Some("pricing"),
+            Phase::Ready { .. } => None,
+            _ => Some("running"),
+        };
+        let going: Vec<(usize, String, f32)> = r
+            .steps
+            .iter()
+            .filter(|(_, s)| !matches!(s, StepState::Done | StepState::Cached))
+            .map(|(i, s)| (*i, state_words(s), r.since.get(i).map_or(all, |t| t.elapsed().as_secs_f32())))
+            .collect();
+        let inside = self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi && d.from == Some(r.node))
+            && self.egraph.node(r.node).and_then(|n| params(&n.kind)).is_none();
+        if inside {
+            let ids: Vec<u64> = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
+            for (i, words, secs) in &going {
+                if let Some(id) = ids.get(*i) {
+                    out.insert(*id, (words.clone(), *secs));
+                }
+            }
+            // Before any step reports: the step (or Output) being run.
+            if going.is_empty() {
+                let target = r.to_step.or_else(|| r.pipeline.output());
+                if let (Some(words), Some(id)) = (phase, target.and_then(|i| ids.get(i))) {
+                    out.insert(*id, (words.to_string(), all));
+                }
+            }
+        } else if self.egraph.node(r.node).is_some() {
+            let words = match going.first() {
+                Some((i, w, _)) => {
+                    let name = r.pipeline.steps.get(*i).map(|s| s.op.label()).unwrap_or_default();
+                    Some(format!("{name}: {w}"))
+                }
+                None => phase.map(String::from),
+            };
+            if let Some(words) = words {
+                out.insert(r.node, (words, all));
+            }
+        }
+        out
     }
 
     /// GenAI node `node`'s params, in the open graph or the comp a dive
@@ -3490,6 +3585,8 @@ mod tests {
             steps: BTreeMap::new(),
             busy_elsewhere: false,
             wired: vec![true, false],
+            elapsed: BTreeMap::new(),
+            run_secs: 0.0,
             to_step: None,
             step_ids: vec![],
             take_missing: true,

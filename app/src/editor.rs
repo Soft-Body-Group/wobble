@@ -3198,6 +3198,10 @@ pub struct NodeEditor {
     /// graph cannot see — and because the properties panel and the Write
     /// warning read the same answer (manifesto rules 8 and 10).
     pub cost_flow: crate::costviz::Flow,
+    /// Nodes with a job going (a GenAI run, a model step inside one):
+    /// what it is doing, and for how many seconds. Drawn as a turning
+    /// ring and a line under the node; the app fills it each frame.
+    pub busy_nodes: std::collections::HashMap<u64, (String, f32)>,
     /// The node a viewer key (1-4) just took, while the pointer is still on
     /// it: not a target again until the pointer leaves it or clicks.
     view_spent: Option<u64>,
@@ -3600,6 +3604,7 @@ impl Default for NodeEditor {
             tab_open_request: false,
             link_mode: false,
             cost_flow: Default::default(),
+            busy_nodes: Default::default(),
             view_spent: None,
             in_tool: false,
             in_noise: false,
@@ -10371,6 +10376,37 @@ impl NodeEditor {
                     Stroke::new((br * 0.3).max(1.0), theme::node_outline()),
                 );
             }
+            // A job going on this node (a GenAI run, a model step): a ring
+            // that turns, and under it what the job is doing and for how
+            // long. Never a silent wait (manifesto 8, for time).
+            if let Some((words, secs)) = self.busy_nodes.get(id) {
+                let t = ui.input(|i| i.time) as f32;
+                let rr = r + 5.0;
+                let a0 = t * 4.0;
+                let pts: Vec<Pos2> = (0..=24)
+                    .map(|k| {
+                        let a = a0 + k as f32 / 24.0 * std::f32::consts::PI * 1.4;
+                        sp + Vec2::new(a.cos(), a.sin()) * rr
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, Stroke::new((r * 0.16).clamp(1.5, 4.0), theme::selection())));
+                if r > 6.0 {
+                    let mins = (*secs as u32) / 60;
+                    let line = if mins > 0 {
+                        format!("{words} · {mins}:{:02}", (*secs as u32) % 60)
+                    } else {
+                        format!("{words} · {:.0} s", secs)
+                    };
+                    painter.text(
+                        sp + Vec2::new(0.0, rr + 6.0),
+                        egui::Align2::CENTER_TOP,
+                        line,
+                        egui::FontId::proportional((r * 0.5).clamp(9.0, 13.0)),
+                        theme::selection(),
+                    );
+                }
+                ui.ctx().request_repaint();
+            }
             // A pipeline that bills when you press run: a `$` in the same
             // corner (a GenAI node never declares weights).
             if let NodeKind::GenAi(p) = &n.kind {
@@ -14434,6 +14470,9 @@ mod link_view_tests {
         let ctx = egui::Context::default();
         let mut ed = NodeEditor::default();
         ed.zoom = 1.3;
+        // A job going on it: the turning ring and its line (the dump shows
+        // them; the app fills `busy_nodes` from the run).
+        ed.busy_nodes.insert(gen, ("wan 2.7 edit: running".into(), 72.0));
         let (mut sel, mut act, mut pins, mut slot, mut rects) =
             (Vec::new(), Vec::new(), Vec::new(), 3usize, Vec::new());
         let mut input = egui::RawInput {

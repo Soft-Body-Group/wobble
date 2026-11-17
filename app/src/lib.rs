@@ -14533,6 +14533,7 @@ impl Gfx {
                     // Control node types are offered only inside a tool.
                     self.node_editor.in_tool = !self.dive.is_empty();
                     self.node_editor.cost_flow = self.cost_flow.clone();
+                    self.node_editor.busy_nodes = self.genai_busy();
                     self.node_editor.eval_tick = self.eval_tick();
                 self.node_editor.in_noise =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Noise);
@@ -18619,6 +18620,7 @@ impl Gfx {
                 // Control node types are offered only inside a tool.
                 self.node_editor.in_tool = !self.dive.is_empty();
                 self.node_editor.cost_flow = self.cost_flow.clone();
+                self.node_editor.busy_nodes = self.genai_busy();
                 self.node_editor.eval_tick = self.eval_tick();
                 self.node_editor.in_noise =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Noise);
