@@ -1542,6 +1542,14 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   every still's key is unchanged (no `KEY_VERSION` bump); keep it so.
   Request quirks per model live in `catalog::Dialect`, not in endpoint
   string tests.
+- **Viewing a step inside shows what it made.** Each landed take writes
+  `stages.json` beside its result (`history::save_stages`: per step, its
+  name and cache key); `genai_dive_show` (once a redraw, GenAI dive only)
+  points the OWNER's reader at the viewed Generate/Comfy step's cached
+  result, and `genai_show` points it back on the way out. A take that
+  lands while you are inside the pipeline is written to the PARKED graph
+  (`genai_params_anywhere`) — writing it to `self.egraph` lost it (reported
+  "ran it, see nothing", 2026-11-17).
 - **Clips** (an `Op::Input` with `clip` on, `Task::VideoEdit` /
   `VideoInpaint`): that input over `Pipeline::clip_seconds` (all clip
   Inputs share one length, `set_clip_seconds`) from the playhead, on the

@@ -1715,7 +1715,11 @@ impl Gfx {
             // An undo step, on purpose: one generation, one user action.
             // Running an unchanged pipeline again is a cache hit with the
             // same key: pick the take it already made, never a duplicate.
-            if let Some(p) = self.egraph.node_mut(node).and_then(|n| params_mut(&mut n.kind)) {
+            // The node may be in a graph a dive parked (its run landed
+            // while you were inside its pipeline): the take goes THERE, or it
+            // would be written to whatever the dive's graph calls `node` and
+            // lost on the way out.
+            if let Some(p) = self.genai_params_anywhere(node) {
                 let pl = &mut p.pipeline;
                 match pl.takes.iter().position(|x| x.key == t.key && x.file == t.file) {
                     Some(k) => pl.take = k,
@@ -1737,6 +1741,18 @@ impl Gfx {
                 self.jobs.genai.account = Account::Unknown;
             }
         }
+    }
+
+    /// GenAI node `node`'s params, in the open graph or, when a dive has
+    /// parked the comp, in the graph that holds it (innermost first).
+    fn genai_params_anywhere(&mut self, node: u64) -> Option<&mut GenAiParams> {
+        if self.egraph.node(node).is_some_and(|n| matches!(n.kind, NodeKind::GenAi(_))) {
+            return self.egraph.node_mut(node).and_then(|n| params_mut(&mut n.kind));
+        }
+        self.dive
+            .iter_mut()
+            .rev()
+            .find_map(|d| d.graph.node_mut(node).and_then(|n| params_mut(&mut n.kind)))
     }
 
     /// The pipeline a run of `node` would walk: the node's own, brought to
