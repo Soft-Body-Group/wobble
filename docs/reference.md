@@ -4035,103 +4035,14 @@ the copies; the feature path is used on other backends.
 
 See `bench_results_4k.txt` / the stats HUD for current numbers.
 
-## Edit mode — a timeline over shots
+## Scrub — the timeline editor
 
-```bash
-wobble --edit                      # empty edit
-wobble --edit my_edit.wedit        # or just: wobble my_edit.wedit
-```
-
-Scrub (the standalone `wobble_edit` app) is now a **mode of wobble**: the same
-engine, node editor, panels, patch bay and colour, with a timeline where
-wobble alone has a per-shot playhead. No second process, no socket.
-
-The edit window looks like an edit: bin, viewer, timeline, shot panel — no
-node graph. **`enter wobble ⚙`** (transport row) opens the comp editor —
-graph over properties/animation — in its own window, on the shot under the
-playhead. It is the same instance and the same graph: move the playhead to
-another clip and the comp window follows; change a node there and the
-timeline shows it.
-
-- **The BIN CLIP owns the shot.** Dropping a clip from the bin mints a shot
-  — a `Load(plate)` graph — embedded in the project and owned by
-  the **bin** entry, so cutting that clip into two places leaves both halves
-  driven by the SAME wobble graph. Want a different graph for the second?
-  Duplicate the clip in the bin (`⧉`) and place that. Removing a timeline
-  clip keeps the graph; removing the bin entry takes it (and its clips). **The shot under
-  the playhead is the graph in the editor**: add a Grade, cable a Slider to
-  it in the patch bay, arrange the panel with `panel` — the timeline shows it
-  as you work. Crossing a cut writes the shot back into the project and
-  applies the next one, through the same (de)serialiser a setup file uses.
-- **Shot controls pane** — its own panel at the very bottom, always present
-  at a fixed (resizable) height and scrolling inside, so the layout never
-  jumps as the playhead crosses shots with and without controls. It shows the
-  **selected** clip's shot panel, not the playhead's, drawn with wobble's own
-  panel widgets. If the selected shot is the one under the playhead the knobs
-  are live; otherwise your edits are written straight into that shot's
-  document and are there when the playhead reaches it.
-- **Import a script** (clip strip → `import script…`) to use an existing
-  wobble comp as a clip's shot; the edit takes its own copy, node ids moved
-  into the shot's range. Project files from the standalone app that pointed
-  at scripts import them on open.
-- **Sequence manipulator is the loader, when you have it.** `add
-  sequences…` opens it (`../sequence_manipulator`), and without it opens
-  wobble's own footage browser instead (and keeps doing so for the
-  session) — no error, the picks land in the bin either way. With it, its
-  recursive search finds the footage and
-  right-click → **Send to wobble edit** delivers it over
-  `~/Library/Application Support/WobbleEdit/ingest.sock` (one JSON line
-  `{"sample": path}` per sequence — anything can feed it). Already-held
-  sequences are ignored, version siblings included. `browse…` is wobble's
-  own footage browser (also **R**) with its picks landing in the bin rather
-  than in the shot's graph; `file…` points at one exact frame.
-- **Blank clips.** `blank clip` in the bin makes a clip with no footage:
-  its shot is an empty wobble graph whose script range IS the clip (100
-  frames to start; drag its out point on the timeline for more), so
-  generators — a Gradient, Noise, 2dini, a Blender node — run over exactly
-  its frames. Export leaves its frames out (there are no files to copy) but
-  keeps the numbering.
-- **Bin with folders and posters.** `new folder` makes one; drag a clip's
-  `::` handle onto a folder header (or pick it in the row's folder combo) to file it;
-  right-click a folder to delete it (its clips return to root). Every clip
-  shows a poster — its middle frame, decoded through the engine's own
-  readers and tone-mapped like the viewer — with a `big` toggle.
-- **One viewer, until you view a source.** An edit opens with the whole
-  viewer on the timeline. Viewing a bin clip splits it into the standard NLE
-  arrangement — the source on the left, the timeline's frame on the right,
-  captioned and divided — and leaving the source closes the split again.
-  Only the pane you are driving renders live; the other **holds its last
-  frame**, so scrubbing the source leaves the program frame standing. That
-  costs one texture copy at the moment you switch, not a second comp every
-  frame.
-- **Undo for the edit.** ⌘Z / ⌘⇧Z with the pointer over the bin or the
-  timeline (or the transport's ↺ ↻) step through timeline and bin edits —
-  placing, moving, trimming, removing, folders, versions — one step per
-  settled gesture. Undoing a removal brings the clip back with its shot.
-  Over the viewer or the shot controls ⌘Z is the shot graph's own undo, as
-  in a comp. The shots' graphs are never rolled back by a timeline undo.
-- **Unsaved work asks before it goes.** `save*` on the transport means the
-  edit (or a shot's graph) changed since it was saved or opened, and closing
-  the window then asks: save, don't save, or cancel. Saving keeps the shot
-  you are in open, with its undo history.
-- **Source viewer.** `▶ view` (or double-click) plays a bin clip in the
-  viewer WITHOUT putting it on the timeline; the timeline's playhead holds
-  still. A SOURCE strip replaces the clip strip: mark `I`/`O` (buttons or
-  keys over the strip), drag the marks, scrub the ruler, then **insert at
-  playhead** or **append** — the marked range lands on the timeline, gets
-  its shot minted, and the viewer follows it there. Moving the timeline
-  playhead leaves the source viewer.
-- **Delete / backspace** lifts the selected clip off the timeline (its bin
-  entry and graph stay).
-- **Versions, trims, gaps, slip, roll, handles, ingest** from sequence
-  manipulator (`ingest.sock`) — all as before, in `app/src/edit/`.
-- Footage of every shot stays loaded across cuts (node ids are namespaced per
-  shot, `edit::ID_STRIDE`); a cut still rebuilds the playback rig, so live
-  playback hitches at cuts. The ProRes proxy tier is the planned fix.
-- Movies as clips need the `movie` feature: `cargo build --release -p app --features movie`.
-
-`.wedit` = `{fps, clips, bin, shots: {id: <setup document>}}`; extracting a
-shot for another artist is a file write of its sub-document.
+Scrub is its own program: the `scrub` binary built from `scrub/app`
+(`cargo build --release -p scrub_app`; see `scrub/README.md`). The menubar's
+**scrub ↗** button starts it as a separate process, looking for `scrub`
+beside the wobble executable first and then on `PATH`; the comp in wobble
+stays as it is. Wobble's old in-process edit mode (`--edit`, `.wedit`
+projects, `app/src/edit/`) is gone.
 
 ## Dual view (two viewers)
 

@@ -1727,8 +1727,7 @@ pane's drawing (`pane_ui`, `viewer_ui`). Q / W (`viewer_mode`) show one
 leaf alone (`Docks::solo`); V (`props_visible`) opens or closes the
 properties and animation tabs; `bottom` and the dock's active tab are
 kept in step both ways. The layout is saved in prefs (`dock`) on exit
-and restored on the first turn. EDIT MODE's comp window is still a
-`DetachedPane` (`PaneKind::Comp`): a mode, not a panel.
+and restored on the first turn.
 
 `WOBBLE_SHOT=<png>` with any `--test-*` run writes the interface as
 drawn (the picture itself left out) after 20 frames and exits: the way

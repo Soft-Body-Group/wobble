@@ -247,20 +247,6 @@ pub(crate) struct SuiteState {
     pub(crate) precache: Option<(u32, Instant)>,
     /// --test-bin: (stage, frames, nodes before).
     pub(crate) bin: Option<(u32, u32, usize)>,
-    /// (stage, frames, bin size before) for `--edit-browse`.
-    pub(crate) edit_browse: Option<(u8, u32, usize)>,
-    /// (stage, frames, stage clock) for `--edit-blank`.
-    pub(crate) edit_blank: Option<(u8, u32, Instant)>,
-    /// (stage, frames, stage clock) for `--edit-undo`.
-    pub(crate) edit_undo: Option<(u8, u32, Instant)>,
-    pub(crate) edit_undo_shot: Option<u64>,
-    /// (stage, frames) for `--edit-source`: marks then insert.
-    pub(crate) source_insert: Option<(u8, u32)>,
-    /// (period, frames seen, flips done) for `--edit-churn`.
-    pub(crate) churn: Option<(u32, u32, u32)>,
-    /// Timeline uids before the test insert, so the new one can be found —
-    /// clips are kept sorted by start, so it is not simply the last.
-    pub(crate) source_before: Vec<u64>,
     /// --test-thumbs: (stage, frames).
     pub(crate) thumbs: Option<(u32, u32)>,
     /// --test-dpx: (stage, frames, node).

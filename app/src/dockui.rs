@@ -6,8 +6,7 @@
 //! would land. Q / W (`viewer_mode`) show one leaf alone.
 //!
 //! The tabs: the node graph, the properties, the animation (curves and
-//! dope sheet) and the viewer. EDIT MODE's comp window stays what it was
-//! (`PaneKind::Comp`, `DetachedPane`): it is a mode, not a panel.
+//! dope sheet) and the viewer.
 
 use egui::Ui;
 // In a page the dock is a fixed layout of the same panes (`webdock`).
@@ -36,19 +35,6 @@ pub enum Pane {
 pub enum Role {
     Main,
     Detached,
-}
-
-impl Pane {
-    /// The pane of the old scheme this tab is, for what still asks in
-    /// those terms (`Gfx::detached`, the detach button).
-    pub fn of(kind: PaneKind) -> Option<Pane> {
-        match kind {
-            PaneKind::Nodes => Some(Pane::Nodes),
-            PaneKind::Properties => Some(Pane::Properties),
-            PaneKind::Animation => Some(Pane::Curves),
-            PaneKind::Comp => None,
-        }
-    }
 }
 
 impl dock::Tab for Pane {

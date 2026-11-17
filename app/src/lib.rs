@@ -94,7 +94,6 @@ mod viewui;
 mod eyedrop;
 mod bandui;
 mod keyerui;
-mod edit;
 #[cfg(test)]
 mod snapshot;
 mod layerpick;
@@ -1488,18 +1487,6 @@ struct GeoHudCache {
     geos: Vec<(u64, engine::geo::Geometry)>,
 }
 
-/// EDIT MODE: the editing context of a shot that is not under the playhead
-/// — everything `Dive` parks for a tool body, minus the graph itself, which
-/// lives in the project as a document.
-struct ShotCtx {
-    undo_stack: Vec<EditorGraph>,
-    redo_stack: Vec<EditorGraph>,
-    undo_last: EditorGraph,
-    selected: Vec<u64>,
-    zoom: f32,
-    pan: egui::Vec2,
-}
-
 struct Dive {
     kind: DiveKind,
     type_id: String,
@@ -1780,40 +1767,6 @@ fn tool_path(id: &str, known: Option<&std::path::Path>) -> std::path::PathBuf {
 /// Free function, not a method: the caller is already holding `&mut` borrows
 /// of the node's kind and its animation map, so `&mut self` is out of reach
 /// here — the same reason every other properties arm works off `RowCtx`.
-
-/// The current value of every control knob in `g`, by the knob name a panel
-/// uses (`lane_param`). Works on any graph — the one in the editor or one
-/// parsed out of a parked shot document.
-fn control_values_of(g: &EditorGraph) -> std::collections::BTreeMap<String, f32> {
-    let mut out = std::collections::BTreeMap::new();
-    for (id, n) in crate::tools::ordered_controls(g) {
-        let Some(k) = crate::tools::control_of(&n.kind) else { continue };
-        let NodeKind::Custom { params, .. } = &n.kind else { continue };
-        for (i, lane) in k.lanes().iter().enumerate() {
-            out.insert(crate::tools::lane_param(id, k, i), params.get(*lane).copied().unwrap_or(0.0));
-        }
-    }
-    out
-}
-
-/// Set one control knob in `g`; returns the (node, lane) it landed on so a
-/// caller holding the shot's DOCUMENT can patch the same field there.
-fn set_control_value_in(g: &mut EditorGraph, name: &str, value: f32) -> Option<(u64, String)> {
-    let mut target = None;
-    for (id, n) in crate::tools::ordered_controls(g) {
-        let Some(k) = crate::tools::control_of(&n.kind) else { continue };
-        for (i, lane) in k.lanes().iter().enumerate() {
-            if crate::tools::lane_param(id, k, i) == name {
-                target = Some((id, lane.to_string()));
-            }
-        }
-    }
-    let (id, lane) = target?;
-    let node = g.nodes.get_mut(&id)?;
-    let NodeKind::Custom { params, .. } = &mut node.kind else { return None };
-    params.insert(lane.clone(), value);
-    Some((id, lane))
-}
 
 /// Does this node draw controls ON THE VIEWER — transform handles, corner
 /// pins, warp grids, spline points? Exactly the kinds the viewer's
@@ -2575,1130 +2528,6 @@ fn pick_spec(working: engine::color::Colorspace, alpha: bool) -> colorpicker::Pi
     .with_eyedrop(eyedrop::pick_hook)
 }
 
-/// Move every node id in `g` up by `off`, everywhere an id is stored: nodes,
-/// wires, per-port output picks, view targets, patch cables. Modulator ids
-/// are a separate space and stay. Used when a standalone script is imported
-/// into an edit as a shot, so its ids land in that shot's own range
-/// (`edit::ID_STRIDE`) and cannot collide with another shot's.
-fn offset_graph_ids(g: &mut EditorGraph, off: u64) {
-    use crate::editor::{PDst, PSrc};
-    let nodes = std::mem::take(&mut g.nodes);
-    g.nodes = nodes.into_iter().map(|(id, n)| (id + off, n)).collect();
-    for (a, _, b) in g.edges.iter_mut() {
-        *a += off;
-        *b += off;
-    }
-    let outs = std::mem::take(&mut g.edge_out);
-    g.edge_out = outs.into_iter().map(|((n, p), o)| ((n + off, p), o)).collect();
-    g.next_id += off;
-    for v in [&mut g.view, &mut g.view_b] {
-        if let Some(id) = v.as_mut() {
-            *id += off;
-        }
-    }
-    for l in g.patch.links.iter_mut() {
-        if let PSrc::Chan(n, _) = &mut l.from {
-            *n += off;
-        }
-        if let PDst::Chan(n, _) = &mut l.to {
-            *n += off;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EDIT MODE — a timeline over shots, inside this application.
-//
-// The shot under the playhead IS the graph in the editor: every pane, the
-// panel composer, undo, the patch bay — all of wobble — works on it with no
-// ceremony, and what you change is what the timeline shows. When the
-// playhead crosses a cut the current shot is written back into the project
-// as a setup document and the next one is applied through the same
-// deserialiser a file goes through. No socket, no second runtime, no save
-// step. See `edit/mod.rs`.
-// ---------------------------------------------------------------------------
-impl Gfx {
-    fn enter_edit_mode(&mut self, project: Option<std::path::PathBuf>) {
-        let mut e = edit::EditState::new(self.decoder.clone());
-        e.project.fps = self.fps;
-        self.edit = Some(e);
-        // One viewer on the edit; the source pane opens beside it only while
-        // a bin clip is being viewed (`edit_enter_source`).
-        self.dual_view = false;
-        self.egraph = EditorGraph::default();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.undo_last = self.egraph.clone();
-        self.comp_range = None;
-        self.playback_dirty = true;
-        match project {
-            Some(p) => self.edit_open(&p),
-            None => {
-                if let Some(e) = self.edit.as_mut() {
-                    e.reset_history();
-                }
-            }
-        }
-        log::info!("edit mode");
-    }
-
-    /// Start scrub (edit mode) as a second wobble process. Entering it in
-    /// place would replace the comp in the editor; a process of its own
-    /// leaves this one exactly as it is.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn launch_scrub(&mut self) {
-        let started = std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg("--edit").spawn());
-        if let Err(e) = started {
-            log::error!("could not start scrub: {e}");
-            self.scrub_error = Some(format!("could not start scrub: {e}"));
-        }
-    }
-
-    /// Per frame, before anything draws: apply the timeline's requests and
-    /// keep the playhead and the editor's shot in step with the transport.
-    fn edit_sync(&mut self, ctx: &egui::Context) {
-        let Some(e) = self.edit.as_mut() else { return };
-        self.fps = e.project.fps;
-        e.poll_ingest(ctx);
-        let new_clips = std::mem::take(&mut e.new_clips);
-        let rebind = std::mem::take(&mut e.rebind);
-        let removed = std::mem::take(&mut e.removed_shots);
-        let seek = e.seek_request.take();
-        let save = e.save_request.take();
-        let open = e.open_request.take();
-        let imports = std::mem::take(&mut e.import_requests);
-        let enter = std::mem::take(&mut e.enter_wobble);
-        let browse = std::mem::take(&mut e.browse_request);
-        let source_req = e.source_request.take();
-        let source_seek = e.source_seek.take();
-        let insert = e.insert_request.take();
-        let cur = e.current;
-        if browse {
-            self.open_footage_browser();
-        }
-        if enter {
-            // Same instance, same graph: the comp editor opens in its own
-            // window on whatever shot the playhead is on.
-            self.detach_requests.push(PaneKind::Comp);
-            log::info!("edit: comp window requested");
-        }
-        let minted = !new_clips.is_empty();
-        for uid in new_clips {
-            self.edit_mint_shot(uid);
-        }
-        if minted {
-            self.edit_prewarm();
-        }
-        for uid in rebind {
-            self.edit_rebind(uid);
-        }
-        for (uid, path) in imports {
-            self.edit_import_script(uid, &path);
-        }
-        for shot in removed {
-            self.edit_parked.remove(&shot);
-            if cur == Some(shot) {
-                // The editor holds a shot that no longer exists: drop it
-                // without writing it back.
-                if let Some(e) = self.edit.as_mut() {
-                    e.current = None;
-                    e.current_clip = None;
-                }
-                self.egraph = EditorGraph::default();
-                self.playback_dirty = true;
-            }
-        }
-        if let Some(path) = open {
-            self.edit_open(&path);
-        }
-        if let Some(path) = save {
-            self.edit_save(&path);
-        }
-        // SOURCE VIEWER: the transport plays a bin clip; the timeline waits.
-        match source_req {
-            Some(Some(uid)) => self.edit_enter_source(uid),
-            Some(None) => self.edit_leave_source(),
-            None => {}
-        }
-        if let Some(mode) = insert {
-            self.edit_insert_source(mode);
-        }
-        let in_source = self.edit.as_ref().is_some_and(|e| e.source.is_some());
-        if in_source {
-            if let Some(f) = source_seek {
-                self.seek_to(f);
-            }
-            if let Some(t) = seek {
-                // Moving the timeline's playhead leaves the source viewer.
-                self.edit_leave_source();
-                self.edit_goto(t, true);
-            }
-        } else {
-            match seek {
-                Some(t) => self.edit_goto(t, true),
-                None => self.edit_follow_transport(),
-            }
-        }
-        if self.playing {
-            ctx.request_repaint();
-        }
-        let settled = !ctx.input(|i| i.pointer.any_down());
-        if let Some(e) = self.edit.as_mut() {
-            let settled = settled && e.tl_drag.is_none();
-            e.track_history(settled);
-        }
-    }
-
-    /// Timeline undo/redo (⌘Z / ⌘⇧Z over the bin or the timeline, or the
-    /// transport's ↺ ↻): the editor follows the playhead onto whatever the
-    /// restored edit has there.
-    fn edit_history(&mut self, redo: bool) {
-        let Some(e) = self.edit.as_mut() else { return };
-        let moved = if redo { e.redo() } else { e.undo() };
-        if moved {
-            log::info!("edit: {}", if redo { "redo" } else { "undo" });
-        }
-    }
-
-    /// The window was closed with unsaved edit work: save it, drop it, or
-    /// stay.
-    fn edit_close_prompt_ui(&mut self, ctx: &egui::Context) {
-        if !self.edit_close_prompt {
-            return;
-        }
-        let name = self
-            .edit
-            .as_ref()
-            .and_then(|e| e.project_path.as_ref())
-            .and_then(|p| p.file_name())
-            .map_or("this edit".to_string(), |n| n.to_string_lossy().into_owned());
-        let (mut save, mut discard, mut cancel) = (false, false, false);
-        egui::Modal::new(egui::Id::new("edit-close-prompt")).show(ctx, |ui| {
-            ui.label(egui::RichText::new(format!("save changes to {name}?")).strong());
-            ui.label("closing without saving loses the timeline and shot edits made since the last save.");
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                save = ui.button("save").clicked();
-                discard = ui.button("don't save").clicked();
-                cancel = ui.button("cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
-            });
-        });
-        if save {
-            let target = self.edit.as_ref().and_then(|e| e.project_path.clone()).or_else(|| {
-                crate::filedialog::FileDialog::new().add_filter("wobble edit", &["wedit"]).set_file_name("edit.wedit").save_file()
-            });
-            if let Some(t) = target {
-                self.edit_save(&t);
-                // Quit only if it really saved; an error stays on screen.
-                self.quit_now = self.edit.as_ref().is_some_and(|e| !e.is_dirty());
-                self.edit_close_prompt = !self.quit_now;
-            }
-        } else if discard {
-            self.quit_now = true;
-            self.edit_close_prompt = false;
-        } else if cancel {
-            self.edit_close_prompt = false;
-        }
-        if self.quit_now {
-            ctx.request_repaint();
-        }
-    }
-
-    /// Whether ⌘Z means the timeline: the pointer is over the bin or the
-    /// timeline (last frame's panels), not the viewer or the shot controls.
-    fn edit_history_here(&self, ctx: &egui::Context) -> bool {
-        self.edit.is_some()
-            && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| self.edit_history_rects.iter().any(|r| r.contains(p)))
-    }
-
-    /// The recursive footage browser, opened from the edit's bin. Same
-    /// browser wobble opens with R — depth-10 scan, thumbnails, filters,
-    /// multi-pick — its picks just land in the bin instead of the graph.
-    fn open_footage_browser(&mut self) {
-        let start = self
-            .recent_dirs
-            .first()
-            .cloned()
-            .or_else(|| self.bookmarks().first().cloned())
-            .filter(|d| d.is_dir())
-            .unwrap_or_else(|| {
-                home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
-            });
-        self.browser = Some(browser::SeqBrowser::new(None, start, self.decoder.clone()));
-    }
-
-    /// Browser picks become BIN CLIPS: one sample frame is all the bin needs,
-    /// since its own scan finds every version of that sequence from it.
-    fn edit_add_picks(&mut self, picks: Vec<browser::Picked>) {
-        let mut dirs = Vec::new();
-        if let Some(e) = self.edit.as_mut() {
-            for p in picks {
-                let Some(sample) = p.frames.first().cloned() else { continue };
-                if let Some(d) = sample.parent() {
-                    dirs.push(d.to_path_buf());
-                }
-                e.add_clip_from_sample(sample);
-            }
-        }
-        for d in dirs {
-            self.push_recent(d);
-        }
-    }
-
-    /// View a bin clip in the viewer without putting it on the timeline:
-    /// the editor holds a one-node graph of its plate (in the reserved
-    /// `SOURCE_SHOT` id range, so the plate stays loaded like any shot's).
-    fn edit_enter_source(&mut self, uid: u64) {
-        let Some(e) = self.edit.as_ref() else { return };
-        let Some(clip) = e.project.bin.iter().find(|c| c.uid == uid) else { return };
-        let path = edit::EditState::plate_path(clip);
-        let input = engine::color::InputSpace::Explicit(clip.effective_input());
-        let in_off = clip.in_off as u64;
-        // A blank clip has no plate to show: an empty graph over its frames.
-        let blank = clip.is_blank().then_some(clip.out_off as u64);
-        // Write the timeline's shot back first, so nothing of the source
-        // graph can be mistaken for it.
-        self.edit_stash_current();
-        let mut g = EditorGraph::default();
-        g.working = engine::color::Colorspace::ACESCG;
-        g.next_id = edit::plate_node(edit::SOURCE_SHOT);
-        if blank.is_none() {
-            let read = g.add(
-                NodeKind::Read { source: 0, path, range: None, ram_cache: false, nvme_cache: true, layer: None, input, multi: false, start: None, first: None, last: None, edges: Default::default(), cache_on_play: true, single: Default::default(), eight_bit: false },
-                egui::pos2(0.0, 0.0),
-            );
-            g.view = Some(read);
-            // The previous source's plate under this id is stale.
-            self.loaded.remove(&read);
-            self.load_errors.remove(&read);
-        }
-        self.egraph = g;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.undo_last = self.egraph.clone();
-        self.selected.clear();
-        self.comp_range = blank.map(|out| (0, out));
-        let t0 = web_time::Instant::now();
-        self.adopt_loads();
-        log::info!("edit: source plate load took {:?}", t0.elapsed());
-        self.playback_dirty = true;
-        self.seek_to(in_off);
-        if let Some(e) = self.edit.as_mut() {
-            e.current = None;
-            e.current_clip = None;
-            e.gap = None;
-            e.last_local = None;
-            e.source = Some(uid);
-        }
-        // Source left, the held edit frame right — the NLE arrangement, for
-        // as long as a source is up.
-        self.dual_view = true;
-        log::info!("edit: source view of bin clip {uid}");
-    }
-
-    fn edit_leave_source(&mut self) {
-        let Some(e) = self.edit.as_mut() else { return };
-        if e.source.take().is_none() {
-            return;
-        }
-        log::info!("edit: left the source viewer");
-        self.dual_view = false;
-        let t = e.playhead;
-        e.current = None;
-        e.current_clip = None;
-        e.gap = None;
-        self.egraph = EditorGraph::default();
-        self.edit_goto(t, true);
-    }
-
-    /// The source clip's marked range lands on the timeline; the viewer
-    /// follows it there so the result is what you see.
-    fn edit_insert_source(&mut self, mode: edit::Insert) {
-        let Some(e) = self.edit.as_mut() else { return };
-        let Some(uid) = e.source else { return };
-        let at = match mode {
-            edit::Insert::AtPlayhead => e.playhead as i64,
-            edit::Insert::Append => e.project.total_len() as i64,
-        };
-        let placed = e.place_from_bin(uid, at);
-        let start = placed
-            .and_then(|id| e.project.clips.iter().find(|c| c.uid == id))
-            .map(|c| c.start);
-        let minted = std::mem::take(&mut e.new_clips);
-        for c in minted {
-            self.edit_mint_shot(c);
-        }
-        self.edit_prewarm();
-        self.edit_leave_source();
-        if let Some(st) = start {
-            self.edit_goto(st as f64, true);
-        }
-    }
-
-    /// Derive the timeline playhead from the shot-local transport, and step
-    /// to the next clip when playback runs off the end of this one.
-    fn edit_follow_transport(&mut self) {
-        // The rig for the shot in the editor is not built yet: whatever tick
-        // the transport shows belongs to the previous shot. Wait one frame.
-        if self.playback_dirty {
-            return;
-        }
-        let Some(e) = self.edit.as_ref() else { return };
-        let total = e.project.total_len();
-        if total == 0 {
-            return;
-        }
-        let local = self.timeline_pos;
-        if let Some(uid) = e.current_clip {
-            self.edit_blank_range(uid);
-            let Some(e) = self.edit.as_ref() else { return };
-            let Some(clip) = e.project.clips.iter().find(|c| c.uid == uid) else {
-                self.edit_goto(e.playhead, true);
-                return;
-            };
-            let past_out = local > clip.out_off as u64;
-            // A LOOP WRAP is the player running off the end of its timeline
-            // (we were on or past the out frame; now we are before it). A
-            // plain backwards jump is not one: a rig rebuild restarts at 0,
-            // and a user can step back — neither is the end of the clip.
-            let wrapped = e.last_local.is_some_and(|l| l >= clip.out_off as u64 && local < l);
-            if self.playing && (past_out || wrapped) {
-                let next = if clip.end() >= total { 0 } else { clip.end() };
-                self.edit_goto(next as f64, true);
-                return;
-            }
-            let t = clip.start as f64 + local as f64 - clip.in_off as f64;
-            let (start, end) = (clip.start, clip.end());
-            let e = self.edit.as_mut().unwrap();
-            e.playhead = t.clamp(start as f64, end.saturating_sub(1) as f64);
-            e.last_local = Some(local);
-        } else if let Some((gs, ge)) = e.gap {
-            let len = ge.saturating_sub(gs).max(1);
-            let wrapped = e.last_local.is_some_and(|l| l + 1 >= len as u64 && local < l);
-            if self.playing && (wrapped || local as usize >= len) {
-                let next = if ge >= total { 0 } else { ge };
-                self.edit_goto(next as f64, true);
-                return;
-            }
-            let e = self.edit.as_mut().unwrap();
-            e.playhead = (gs + (local as usize).min(len - 1)) as f64;
-            e.last_local = Some(local);
-        } else {
-            // Nothing under the editor yet: land on the playhead.
-            let t = e.playhead;
-            self.edit_goto(t, true);
-        }
-    }
-
-    /// Put the playhead at timeline frame `t`: swap the editor to that
-    /// clip's shot when it changes, and seek the shot-local transport.
-    fn edit_goto(&mut self, t: f64, force: bool) {
-        let Some(e) = self.edit.as_ref() else { return };
-        let total = e.project.total_len();
-        if total == 0 {
-            if e.current.is_some() || e.current_clip.is_some() {
-                self.edit_switch_to_gap(0, 0);
-            }
-            return;
-        }
-        let t = (t.floor().max(0.0) as usize).min(total - 1);
-        match e.project.locate(t) {
-            Some((ci, local)) => {
-                let clip = &e.project.clips[ci];
-                let (uid, shot, in_off) = (clip.uid, clip.shot, clip.in_off);
-                match shot {
-                    Some(shot) if e.current != Some(shot) || e.current_clip != Some(uid) => {
-                        self.edit_switch_to_shot(shot, uid);
-                    }
-                    None => {
-                        // A clip whose shot failed to mint plays as a gap.
-                        if e.current.is_some() || e.gap.is_none() {
-                            let (a, b) = (clip.start, clip.end());
-                            self.edit_switch_to_gap(a, b);
-                        }
-                    }
-                    _ => {}
-                }
-                let tick = (in_off + local) as u64;
-                if force || self.timeline_pos != tick {
-                    self.seek_to(tick);
-                }
-                let e = self.edit.as_mut().unwrap();
-                e.playhead = t as f64;
-                e.last_local = Some(tick);
-            }
-            None => {
-                let gs = e.project.clips.iter().map(|c| c.end()).filter(|end| *end <= t).max().unwrap_or(0);
-                let ge = e.project.clips.iter().map(|c| c.start).filter(|st| *st > t).min().unwrap_or(total);
-                if e.current.is_some() || e.current_clip.is_some() || e.gap != Some((gs, ge)) {
-                    self.edit_switch_to_gap(gs, ge);
-                }
-                let tick = (t - gs) as u64;
-                if force || self.timeline_pos != tick {
-                    self.seek_to(tick);
-                }
-                let e = self.edit.as_mut().unwrap();
-                e.playhead = t as f64;
-                e.last_local = Some(tick);
-            }
-        }
-    }
-
-    /// Write the editor's shot into the project, leaving it in the editor.
-    fn edit_write_current(&mut self) {
-        let Some(cur) = self.edit.as_ref().and_then(|e| e.current) else { return };
-        match serde_json::to_value(self.setup_save()) {
-            Ok(doc) => {
-                if let Some(e) = self.edit.as_mut() {
-                    e.project.shots.insert(cur, doc);
-                }
-            }
-            Err(err) => log::error!("edit: could not serialise shot {cur}: {err}"),
-        }
-    }
-
-    /// Write the editor's shot back into the project and park its context.
-    fn edit_stash_current(&mut self) {
-        let Some(cur) = self.edit.as_ref().and_then(|e| e.current) else { return };
-        let doc = match serde_json::to_value(self.setup_save()) {
-            Ok(v) => v,
-            Err(err) => {
-                log::error!("edit: could not serialise shot {cur}: {err}");
-                return;
-            }
-        };
-        if let Some(e) = self.edit.as_mut() {
-            e.project.shots.insert(cur, doc);
-        }
-        self.edit_panel_cache = None;
-        self.edit_parked.insert(
-            cur,
-            ShotCtx {
-                undo_stack: std::mem::take(&mut self.undo_stack),
-                redo_stack: std::mem::take(&mut self.redo_stack),
-                undo_last: std::mem::replace(&mut self.undo_last, EditorGraph::default()),
-                selected: std::mem::take(&mut self.selected),
-                zoom: self.node_editor.zoom,
-                pan: self.node_editor.pan,
-            },
-        );
-    }
-
-    fn edit_switch_to_shot(&mut self, shot: u64, clip_uid: u64) {
-        self.edit_stash_current();
-        self.edit_panel_cache = None;
-        let doc = self.edit.as_ref().and_then(|e| e.project.shots.get(&shot).cloned());
-        match doc {
-            Some(mut v) => {
-                migrate_setup_json(&mut v);
-                match serde_json::from_value::<SetupLoad>(v) {
-                    Ok(s) => self.apply_setup_doc(s),
-                    Err(err) => {
-                        log::error!("edit: shot {shot} does not parse: {err}");
-                        if let Some(e) = self.edit.as_mut() {
-                            e.error = Some(format!("shot {shot} does not parse: {err}"));
-                        }
-                        self.egraph = EditorGraph::default();
-                        self.playback_dirty = true;
-                    }
-                }
-            }
-            None => {
-                log::warn!("edit: clip references missing shot {shot}");
-                self.egraph = EditorGraph::default();
-                self.playback_dirty = true;
-            }
-        }
-        match self.edit_parked.remove(&shot) {
-            Some(c) => {
-                self.undo_stack = c.undo_stack;
-                self.redo_stack = c.redo_stack;
-                self.undo_last = c.undo_last;
-                self.selected = c.selected;
-                self.node_editor.zoom = c.zoom;
-                self.node_editor.pan = c.pan;
-            }
-            None => {
-                self.undo_stack.clear();
-                self.redo_stack.clear();
-                self.undo_last = self.egraph.clone();
-            }
-        }
-        self.edit_blank_range(clip_uid);
-        if let Some(e) = self.edit.as_mut() {
-            log::info!("edit: cut → shot {shot} (clip {clip_uid}) at frame {}", e.playhead);
-            e.current = Some(shot);
-            e.current_clip = Some(clip_uid);
-            e.gap = None;
-            e.last_local = None;
-        }
-    }
-
-    /// A blank clip's frames ARE its shot's script range, so its trim — which
-    /// can change at any time on the timeline — is what the transport plays.
-    fn edit_blank_range(&mut self, clip_uid: u64) {
-        let blank_out = self.edit.as_ref().and_then(|e| {
-            e.project.clips.iter().find(|c| c.uid == clip_uid).filter(|c| c.is_blank()).map(|c| c.out_off as u64)
-        });
-        if let Some(out) = blank_out {
-            let first = self.comp_range.map_or(0, |r| r.0);
-            if self.comp_range != Some((first, out)) {
-                self.comp_range = Some((first, out));
-                self.playback_dirty = true;
-            }
-        }
-    }
-
-    /// The editor shows nothing; the transport counts the gap's frames.
-    fn edit_switch_to_gap(&mut self, start: usize, end: usize) {
-        self.edit_stash_current();
-        self.egraph = EditorGraph::default();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.undo_last = self.egraph.clone();
-        self.selected.clear();
-        self.comp_range = Some((0, end.saturating_sub(start).saturating_sub(1) as u64));
-        self.playback_dirty = true;
-        if let Some(e) = self.edit.as_mut() {
-            log::info!("edit: cut → gap [{start}, {end}) at frame {}", e.playhead);
-            e.current = None;
-            e.current_clip = None;
-            e.gap = Some((start, end));
-            e.last_local = None;
-        }
-    }
-
-    /// Mint the shot a clip plays: `Read(plate) → To Scrub`, node ids in the
-    /// shot's own range. The owner is the BIN clip (the master), so every
-    /// timeline instance of it is driven by this one graph; `clip_uid` is
-    /// looked up in the bin first, falling back to the timeline for a legacy
-    /// clip that has no master.
-    fn edit_mint_shot(&mut self, clip_uid: u64) {
-        let fps = self.fps;
-        let Some(e) = self.edit.as_mut() else { return };
-        let Some(clip) = e
-            .project
-            .bin
-            .iter()
-            .chain(e.project.clips.iter())
-            .find(|c| c.uid == clip_uid)
-        else {
-            return;
-        };
-        let path = edit::EditState::plate_path(clip);
-        let input = engine::color::InputSpace::Explicit(clip.effective_input());
-        // A blank clip's shot is an empty graph whose script range is the
-        // clip: generators run over it, and nothing is read.
-        let blank = clip.is_blank().then_some(clip.out_off as u64);
-        let id = e.project.shots.keys().next_back().map_or(1, |k| k + 1);
-        let mut g = EditorGraph::default();
-        g.working = engine::color::Colorspace::ACESCG;
-        g.next_id = edit::plate_node(id);
-        if blank.is_none() {
-        let read = g.add(
-            NodeKind::Read {
-                source: 0,
-                path,
-                range: None,
-                ram_cache: false,
-                nvme_cache: true,
-                layer: None,
-                input,
-                multi: false,
-                start: None,
-                first: None,
-                last: None,
-                edges: Default::default(),
-                cache_on_play: true,
-                single: Default::default(),
-                eight_bit: false,
-            },
-            egui::pos2(-180.0, 0.0),
-        );
-        debug_assert_eq!(read, edit::plate_node(id));
-        g.view = Some(read);
-        }
-        let (none_p, none_h, none_a, none_g, none_l): (
-            Vec<std::path::PathBuf>,
-            Vec<widgets::HudSlider>,
-            Vec<u64>,
-            Vec<u64>,
-            Vec<PropLayout>,
-        ) = Default::default();
-        let doc = serde_json::to_value(SetupSave {
-            version: 2,
-            fps,
-            pinned_dirs: &none_p,
-            graph: &g,
-            canvas: None,
-            range: blank.map(|out| (0, out)),
-            handles: (0, 0),
-            play_range: None,
-            view_range: None,
-            loop_span: LoopSpan::default(),
-            panel: Some((1, 1)),
-            huds: &none_h,
-            activated: &none_a,
-            pinned_gizmos: &none_g,
-            prop_layouts: &none_l,
-            patch_tiles: Vec::new(),
-            chan_sets: &[],
-        });
-        match doc {
-            Ok(doc) => {
-                e.project.shots.insert(id, doc);
-                // The master owns it; every instance of that master plays it.
-                for c in e.project.bin.iter_mut().filter(|c| c.uid == clip_uid) {
-                    c.shot = Some(id);
-                }
-                let mut instances = 0;
-                for c in e
-                    .project
-                    .clips
-                    .iter_mut()
-                    .filter(|c| c.uid == clip_uid || c.master == Some(clip_uid))
-                {
-                    c.shot = Some(id);
-                    instances += 1;
-                }
-                log::info!("edit: minted shot {id} for clip {clip_uid} ({instances} on the timeline)");
-            }
-            Err(err) => e.error = Some(format!("could not mint shot: {err}")),
-        }
-    }
-
-    /// Import a standalone wobble script as this clip's shot: the artist's
-    /// comp, ids moved into the shot's own range, `To Scrub` ensured. The
-    /// script file is left untouched — from here on the edit owns its copy.
-    fn edit_import_script(&mut self, clip_uid: u64, path: &Path) {
-        let fps = self.fps;
-        let result: anyhow::Result<(u64, serde_json::Value)> = (|| {
-            let Some(e) = self.edit.as_mut() else { anyhow::bail!("not in edit mode") };
-            let Some(clip) = e.project.clips.iter().find(|c| c.uid == clip_uid) else {
-                anyhow::bail!("clip {clip_uid} is gone");
-            };
-            let shot = clip.shot.unwrap_or_else(|| e.project.shots.keys().next_back().map_or(1, |k| k + 1));
-            let mut val: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
-            migrate_setup_json(&mut val);
-            let mut s: SetupLoad = serde_json::from_value(val)?;
-            let off = shot * edit::ID_STRIDE;
-            offset_graph_ids(&mut s.graph, off);
-            let activated: Vec<u64> = s.activated.iter().map(|n| n + off).collect();
-            let pinned: Vec<u64> = s.pinned_gizmos.iter().map(|n| n + off).collect();
-            let tiles: Vec<(u64, [i32; 2], [u8; 2])> =
-                s.patch_tiles.iter().map(|(n, c, sp)| (n + off, *c, *sp)).collect();
-            // Channel sets name nodes by id: shifted with them.
-            let sets: Vec<chanview::ChanSet> = s
-                .chan_sets
-                .iter()
-                .map(|cs| chanview::ChanSet {
-                    name: cs.name.clone(),
-                    chans: cs.chans.iter().map(|(n, ch)| (n + off, *ch)).collect(),
-                })
-                .collect();
-            let (none_p, none_h, none_l): (Vec<std::path::PathBuf>, Vec<widgets::HudSlider>, Vec<PropLayout>) =
-                Default::default();
-            let doc = serde_json::to_value(SetupSave {
-                version: 2,
-                fps,
-                pinned_dirs: &none_p,
-                graph: &s.graph,
-                canvas: s.canvas,
-                range: s.range,
-                handles: s.handles,
-                play_range: s.play_range,
-                view_range: s.view_range,
-                loop_span: s.loop_span,
-                panel: s.panel,
-                huds: &none_h,
-                activated: &activated,
-                pinned_gizmos: &pinned,
-                prop_layouts: &none_l,
-                patch_tiles: tiles,
-                chan_sets: &sets,
-            })?;
-            Ok((shot, doc))
-        })();
-        match result {
-            Ok((shot, doc)) => {
-                let was_current = self.edit.as_ref().is_some_and(|e| e.current == Some(shot));
-                if let Some(e) = self.edit.as_mut() {
-                    e.project.shots.insert(shot, doc);
-                    if let Some(c) = e.project.clips.iter_mut().find(|c| c.uid == clip_uid) {
-                        c.shot = Some(shot);
-                    }
-                }
-                self.edit_parked.remove(&shot);
-                // Footage of the previous document under these ids is stale.
-                let lo = shot * edit::ID_STRIDE;
-                let hi = lo + edit::ID_STRIDE;
-                self.loaded.retain(|id, _| !(lo..hi).contains(id));
-                self.load_errors.retain(|id, _| !(lo..hi).contains(id));
-                self.edit_prewarm();
-                if was_current {
-                    // Re-enter so the editor shows the imported document.
-                    if let Some(e) = self.edit.as_mut() {
-                        e.current = None;
-                    }
-                    let t = self.edit.as_ref().map(|e| e.playhead).unwrap_or(0.0);
-                    self.edit_goto(t, true);
-                }
-                log::info!("edit: imported {} as shot {shot}", path.display());
-            }
-            Err(err) => {
-                if let Some(e) = self.edit.as_mut() {
-                    e.error = Some(format!("import {}: {err:#}", path.display()));
-                }
-            }
-        }
-    }
-
-    /// The clip's plate changed (version bump, input colourspace): rewrite
-    /// its shot's `Read` — in the editor if it is the current shot, in the
-    /// document otherwise — and reload that footage.
-    fn edit_rebind(&mut self, clip_uid: u64) {
-        let Some(e) = self.edit.as_ref() else { return };
-        let Some(clip) = e
-            .project
-            .bin
-            .iter()
-            .chain(e.project.clips.iter())
-            .find(|c| c.uid == clip_uid)
-        else {
-            return;
-        };
-        let Some(shot) = clip.shot else { return };
-        if clip.is_blank() {
-            return;
-        }
-        let path = edit::EditState::plate_path(clip);
-        let input = engine::color::InputSpace::Explicit(clip.effective_input());
-        let is_current = e.current == Some(shot);
-        let playhead = e.playhead;
-        // The plate: the minted Read when there is one, else the lowest Read
-        // in the shot's range (an imported script's first source).
-        let pn = if is_current {
-            let minted = edit::plate_node(shot);
-            if matches!(self.egraph.nodes.get(&minted).map(|n| &n.kind), Some(NodeKind::Read { .. })) {
-                minted
-            } else {
-                self.egraph
-                    .nodes
-                    .iter()
-                    .filter(|(_, n)| matches!(n.kind, NodeKind::Read { .. }))
-                    .map(|(id, _)| *id)
-                    .min()
-                    .unwrap_or(minted)
-            }
-        } else {
-            let doc = e.project.shots.get(&shot);
-            doc.and_then(|d| d.pointer("/graph/nodes")).and_then(|n| n.as_object()).and_then(|nodes| {
-                nodes
-                    .iter()
-                    .filter(|(_, n)| n.pointer("/kind/Read").is_some())
-                    .filter_map(|(id, _)| id.parse::<u64>().ok())
-                    .min()
-            })
-            .unwrap_or(edit::plate_node(shot))
-        };
-        if is_current {
-            if let Some(NodeKind::Read { path: p, input: i, .. }) =
-                self.egraph.nodes.get_mut(&pn).map(|n| &mut n.kind)
-            {
-                *p = path;
-                *i = input;
-            }
-        } else if let Some(e) = self.edit.as_mut() {
-            if let Some(doc) = e.project.shots.get_mut(&shot) {
-                if let Some(read) = doc
-                    .pointer_mut(&format!("/graph/nodes/{pn}/kind/Read"))
-                    .and_then(|r| r.as_object_mut())
-                {
-                    read.insert("path".into(), serde_json::Value::String(path));
-                    if let Ok(v) = serde_json::to_value(input) {
-                        read.insert("input".into(), v);
-                    }
-                }
-            }
-        }
-        self.loaded.remove(&pn);
-        self.load_errors.remove(&pn);
-        if is_current {
-            self.adopt_loads();
-            self.playback_dirty = true;
-            self.edit_goto(playhead, true);
-        }
-    }
-
-    /// Load every shot's footage now, not at its first cut. Ids are
-    /// namespaced per shot, so all of it can sit in `loaded` at once; the
-    /// playback rig only ever picks up the readers of the shot in the editor.
-    fn edit_prewarm(&mut self) {
-        let Some(e) = self.edit.as_ref() else { return };
-        let mut want: Vec<(u64, String)> = Vec::new();
-        for doc in e.project.shots.values() {
-            let Some(nodes) = doc.pointer("/graph/nodes").and_then(|n| n.as_object()) else { continue };
-            for (id, n) in nodes {
-                let Ok(id) = id.parse::<u64>() else { continue };
-                if let Some(path) = n.pointer("/kind/Read/path").and_then(|p| p.as_str()) {
-                    if !path.is_empty() && !self.loaded.contains_key(&id) && !self.load_errors.contains_key(&id) {
-                        want.push((id, path.to_string()));
-                    }
-                }
-            }
-        }
-        for (id, path) in want {
-            self.load_read(id, &path);
-        }
-    }
-
-    fn edit_save(&mut self, path: &Path) {
-        // Write the shot in the editor into the project WITHOUT parking it:
-        // it stays open, with its undo history (parking took both).
-        self.edit_write_current();
-        let Some(e) = self.edit.as_mut() else { return };
-        match e.project.save(path) {
-            Ok(()) => {
-                e.project_path = Some(path.to_path_buf());
-                e.mark_saved();
-                log::info!("edit: saved {}", path.display());
-            }
-            Err(err) => e.error = Some(format!("{err:#}")),
-        }
-    }
-
-    fn edit_open(&mut self, path: &Path) {
-        match edit::Project::load(path) {
-            Ok(p) => {
-                self.edit_parked.clear();
-                self.egraph = EditorGraph::default();
-                self.playback_dirty = true;
-                if let Some(e) = self.edit.as_mut() {
-                    e.project = p;
-                    e.project_path = Some(path.to_path_buf());
-                    // Clips without a shot (older project files, or ones
-                    // written by the standalone app) get one minted now —
-                    // per MASTER, so instances of one bin clip still share.
-                    let mut shotless: Vec<u64> = Vec::new();
-                    for c in e.project.clips.iter().filter(|c| c.shot.is_none()) {
-                        let owner = c
-                            .master
-                            .filter(|m| e.project.bin.iter().any(|b| b.uid == *m))
-                            .unwrap_or(c.uid);
-                        if !shotless.contains(&owner) {
-                            shotless.push(owner);
-                        }
-                    }
-                    e.new_clips.extend(shotless);
-                    e.current = None;
-                    e.current_clip = None;
-                    e.gap = None;
-                    e.selected = None;
-                    e.tl_zoom = None;
-                    e.tl_scroll = 0.0;
-                    e.playhead = 0.0;
-                }
-                let pending = self.edit.as_mut().map(|e| std::mem::take(&mut e.new_clips)).unwrap_or_default();
-                for uid in pending {
-                    self.edit_mint_shot(uid);
-                }
-                // A project written by the standalone app referenced shot
-                // SCRIPTS on disk: those become embedded shots now.
-                let legacy: Vec<(u64, std::path::PathBuf)> = self
-                    .edit
-                    .as_ref()
-                    .map(|e| {
-                        e.project
-                            .clips
-                            .iter()
-                            .filter_map(|c| c.legacy_script.clone().map(|p| (c.uid, p)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for (uid, script) in legacy {
-                    self.edit_import_script(uid, &script);
-                    if let Some(c) = self.edit.as_mut().and_then(|e| e.project.clips.iter_mut().find(|c| c.uid == uid)) {
-                        c.legacy_script = None;
-                    }
-                }
-                self.edit_prewarm();
-                self.edit_goto(0.0, true);
-                if let Some(e) = self.edit.as_mut() {
-                    e.reset_history();
-                }
-                log::info!("edit: opened {}", path.display());
-            }
-            Err(err) => {
-                if let Some(e) = self.edit.as_mut() {
-                    e.error = Some(format!("{err:#}"));
-                }
-            }
-        }
-    }
-
-    /// The bottom of the window in edit mode: the selected clip's strip, the
-    /// timeline, and the current shot's control panel — drawn with wobble's
-    /// own panel widgets, so it is the panel the artist composed, not a
-    /// rendering of it.
-    fn edit_bottom_ui(&mut self, ui: &mut egui::Ui) {
-        let tick = self.timeline_pos;
-        if let Some(e) = self.edit.as_mut() {
-            if e.source.is_some() {
-                e.source_ui(ui, tick, &mut self.playing);
-            } else {
-                e.clip_strip_ui(ui);
-            }
-        }
-        // Disjoint borrows: the timeline owns the edit state, the transport
-        // flag is the app's.
-        if let Some(e) = self.edit.as_mut() {
-            e.timeline_ui(ui, &mut self.playing);
-        }
-    }
-
-    /// The controls pane: the SELECTED clip's shot panel, drawn with
-    /// wobble's own panel widgets. Selection, not playhead — so the panel
-    /// you are working in stays put while the edit plays past it.
-    fn edit_controls_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(e) = self.edit.as_ref() else { return };
-        let sel = e
-            .selected
-            .filter(|s| *s < e.project.clips.len())
-            .map(|s| {
-                let c = &e.project.clips[s];
-                (c.shot, format!("{} {}", c.name, c.version().label))
-            });
-        let current = e.current;
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("shot controls").strong());
-            match &sel {
-                Some((Some(shot), name)) => {
-                    ui.label(egui::RichText::new(name).strong());
-                    if current == Some(*shot) {
-                        ui.label(egui::RichText::new("· under the playhead").weak().small());
-                    } else {
-                        ui.label(egui::RichText::new("· edits land in the shot, shown when the playhead reaches it").weak().small());
-                    }
-                }
-                Some((None, name)) => {
-                    ui.label(egui::RichText::new(format!("{name} · no shot yet")).weak());
-                }
-                None => {
-                    ui.label(egui::RichText::new("· select a clip on the timeline").weak());
-                }
-            }
-        });
-        ui.separator();
-        let Some((Some(shot), _)) = sel else { return };
-        egui::ScrollArea::vertical().id_salt("edit-controls-scroll").auto_shrink([false, false]).show(ui, |ui| {
-            if current == Some(shot) {
-                self.controls_panel_live(ui);
-            } else {
-                self.controls_panel_parked(ui, shot);
-            }
-        });
-    }
-
-    /// The panel of the shot in the editor: live, straight onto `egraph`.
-    fn controls_panel_live(&mut self, ui: &mut egui::Ui) {
-        let specs = tools::params_of(&self.egraph);
-        if specs.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "no controls on this shot — add control nodes in its graph (enter wobble) and arrange them with `panel`",
-                )
-                .weak()
-                .small(),
-            );
-            return;
-        }
-        let body = self.egraph.clone();
-        let (cols, rows) = self.tool_panel_grid();
-        let (tw, th) = self.panel_tiles_now();
-        let mut vals = control_values_of(&body);
-        let before = vals.clone();
-        Self::draw_controls(ui, &body, cols, rows, (tw, th), &mut vals);
-        for (k, v) in vals {
-            if before.get(&k) != Some(&v) {
-                set_control_value_in(&mut self.egraph, &k, v);
-            }
-        }
-    }
-
-    /// The panel of a shot that is NOT in the editor: drawn from a parsed
-    /// copy of its document; every edit goes into the copy and the document.
-    fn controls_panel_parked(&mut self, ui: &mut egui::Ui, shot: u64) {
-        if self.edit_panel_cache.as_ref().map(|(s, _, _)| *s) != Some(shot) {
-            let parsed = self.edit.as_ref().and_then(|e| e.project.shots.get(&shot)).and_then(|doc| {
-                let mut v = doc.clone();
-                migrate_setup_json(&mut v);
-                serde_json::from_value::<SetupLoad>(v).ok().map(|s| (s.graph, s.panel.unwrap_or((1, 1))))
-            });
-            match parsed {
-                Some((g, tiles)) => self.edit_panel_cache = Some((shot, g, tiles)),
-                None => {
-                    ui.label(egui::RichText::new("this shot's document did not parse").color(theme::error()));
-                    return;
-                }
-            }
-        }
-        let Some((_, mut body, tiles)) = self.edit_panel_cache.take() else { return };
-        let specs = tools::params_of(&body);
-        if specs.is_empty() {
-            ui.label(
-                egui::RichText::new("no controls on this shot — add control nodes in its graph and arrange them with `panel`")
-                    .weak()
-                    .small(),
-            );
-            self.edit_panel_cache = Some((shot, body, tiles));
-            return;
-        }
-        let (tw, th) = (tiles.0.max(1), tiles.1.max(1));
-        let (cols, rows) = (tools::cols(tw), tools::rows(th));
-        let mut vals = control_values_of(&body);
-        let before = vals.clone();
-        Self::draw_controls(ui, &body, cols, rows, (tw, th), &mut vals);
-        for (k, v) in vals {
-            if before.get(&k) == Some(&v) {
-                continue;
-            }
-            if let Some((node, lane)) = set_control_value_in(&mut body, &k, v) {
-                if let Some(doc) = self.edit.as_mut().and_then(|e| e.project.shots.get_mut(&shot)) {
-                    if let Some(params) = doc
-                        .pointer_mut(&format!("/graph/nodes/{node}/kind/Custom/params"))
-                        .and_then(|p| p.as_object_mut())
-                    {
-                        params.insert(lane, serde_json::json!(v));
-                    }
-                }
-            }
-        }
-        self.edit_panel_cache = Some((shot, body, tiles));
-    }
-
-    /// wobble's panel widgets over a body, at the body's grid, enabled.
-    fn draw_controls(
-        ui: &mut egui::Ui,
-        body: &EditorGraph,
-        cols: i32,
-        rows: i32,
-        tiles: (usize, usize),
-        vals: &mut std::collections::BTreeMap<String, f32>,
-    ) {
-        let mut ungang = std::collections::BTreeSet::new();
-        let mut anim = std::collections::BTreeMap::new();
-        let dummy = NodeKind::Custom { type_id: String::new(), params: Default::default() };
-        let mut cx = widgets::RowCtx { node: 0, anim: &mut anim, ekind: &dummy, t: 0, hud_live: false, driven: Vec::new() };
-        let size = egui::vec2(tools::CELL_W * tiles.0 as f32, widgets::TILE * tiles.1 as f32);
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-            tool_panel_ui(ui, &mut cx, body, cols, rows, vals, &mut ungang, body.working, 1.0, None);
-        });
-    }
-
-}
-
 #[allow(clippy::too_many_arguments)]
 fn tool_panel_ui(
     ui: &mut egui::Ui,
@@ -3915,7 +2744,39 @@ fn open_url(url: &str) {
     }
 }
 
+/// Where the Scrub editor's binary should be: beside this executable (a
+/// cargo target dir, or the app bundle's `Contents/MacOS`).
+#[cfg(not(target_arch = "wasm32"))]
+fn scrub_exe() -> std::io::Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe.parent().ok_or_else(|| std::io::Error::other("executable has no directory"))?;
+    Ok(dir.join(format!("scrub{}", std::env::consts::EXE_SUFFIX)))
+}
+
 impl Gfx {
+    /// Start Scrub, the timeline editor, as a process of its own: the
+    /// `scrub` binary (`scrub/app`) beside this one, else on PATH. This
+    /// comp stays exactly as it is.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn launch_scrub(&mut self) {
+        self.scrub_error = None;
+        let beside = scrub_exe();
+        let started = match &beside {
+            Ok(p) if p.is_file() => std::process::Command::new(p).spawn(),
+            _ => std::process::Command::new("scrub").spawn(),
+        };
+        if let Err(e) = started {
+            let looked = beside.map(|p| p.display().to_string()).unwrap_or_else(|_| "beside wobble".into());
+            let msg = if e.kind() == std::io::ErrorKind::NotFound {
+                format!("scrub is not installed (looked for {looked} and on PATH)")
+            } else {
+                format!("could not start scrub: {e}")
+            };
+            log::error!("{msg}");
+            self.scrub_error = Some(msg);
+        }
+    }
+
     /// Start a take of the window (or the viewer), or stop the running one.
     fn toggle_recording(&mut self, ctx: &egui::Context) {
         if self.recorder.recording() {
@@ -4055,11 +2916,6 @@ impl Options {
             || self.test_cachemeter
             || self.test_precache
             || self.test_bin
-            || self.edit_browse.is_some()
-            || self.edit_blank
-            || self.edit_undo
-            || self.edit_churn.is_some()
-            || self.edit_source
             || self.test_rendercache
             || self.test_spline
             || self.test_cornerpin
@@ -4300,12 +3156,6 @@ mod options_tests {
 enum PaneKind {
     Nodes,
     Properties,
-    Animation,
-    /// EDIT MODE's "enter wobble": the whole comp editor — node graph over
-    /// the properties/animation pane — in one window, on the shot under
-    /// the playhead. Same instance, same graph; it just lives in its own
-    /// window so the edit can look like an edit.
-    Comp,
 }
 
 impl PaneKind {
@@ -4313,16 +3163,12 @@ impl PaneKind {
         match self {
             PaneKind::Nodes => "wobble — nodes",
             PaneKind::Properties => "wobble — properties",
-            PaneKind::Animation => "wobble — animation",
-            PaneKind::Comp => "wobble — comp",
         }
     }
 
     fn default_size(self) -> (f64, f64) {
-        match self {
-            PaneKind::Comp => (1400.0, 900.0),
-            _ => (900.0, 600.0),
-        }
+        let _ = self;
+        (900.0, 600.0)
     }
 }
 
@@ -4463,15 +3309,6 @@ enum BottomTab {
     Curves,
 }
 
-impl BottomTab {
-    fn pane(self) -> PaneKind {
-        match self {
-            BottomTab::Properties => PaneKind::Properties,
-            BottomTab::Curves => PaneKind::Animation,
-        }
-    }
-}
-
 #[derive(Default)]
 struct Options {
     /// `--first-run`: start as a brand-new install (default prefs, every
@@ -4507,25 +3344,6 @@ struct Options {
     worker: bool,
     /// Self-test: synthesize a click on the first node, verify it selects,
     /// print PASS/FAIL and exit. Exercises the real hit-test path end to end.
-    /// Open in EDIT MODE (a timeline over shots), optionally on a project.
-    edit: bool,
-    edit_project: Option<std::path::PathBuf>,
-    /// Dev: start the edit playing (with `--dump-after`, a hands-off check
-    /// that playback crosses cuts).
-    edit_play: bool,
-    /// Dev: open the SOURCE VIEWER on the first bin clip at startup.
-    edit_source: bool,
-    /// Dev: open the footage browser on this dir in edit mode, bin some
-    /// hits, and check they land in the BIN rather than the graph.
-    edit_browse: Option<std::path::PathBuf>,
-    /// Dev: add a blank clip in edit mode, place it, and check its shot is
-    /// an empty graph over the clip's frames that renders what you add.
-    edit_blank: bool,
-    /// Dev: timeline undo/redo, the unsaved flag and the source pane.
-    edit_undo: bool,
-    /// Dev: every N frames, flip the source viewer on/off — a rig-rebuild
-    /// storm, to shake out lifecycle bugs in the playback rig.
-    edit_churn: Option<u32>,
     test_click: bool,
     /// Self-test: pause/seek forward/backward/rapid, then resume playback —
     /// verifies the seek path recycles staging slots (no wedge, no leak).
@@ -4747,14 +3565,6 @@ fn base_options() -> Options {
         seq_a: None,
         seq_b: None,
         setup: None,
-        edit: false,
-        edit_project: None,
-        edit_play: false,
-        edit_source: false,
-        edit_browse: None,
-        edit_blank: false,
-        edit_undo: false,
-        edit_churn: None,
         no_vsync: false,
         slots: 12,
         ahead: 5,
@@ -4926,37 +3736,6 @@ pub fn run() -> anyhow::Result<()> {
                 let p = std::path::PathBuf::from(args.next().unwrap());
                 opts.dump_after = Some((n, p));
             }
-            // Managed by a scrub timeline: push the document as it changes
-            // (no save step) and accept exposed-parameter edits back.
-            "--edit" => opts.edit = true,
-            "--edit-play" => {
-                opts.edit = true;
-                opts.edit_play = true;
-            }
-            "--edit-source" => {
-                opts.edit = true;
-                opts.edit_source = true;
-            }
-            "--edit-churn" => {
-                opts.edit = true;
-                let n = args.next().ok_or_else(|| anyhow::anyhow!("--edit-churn needs a frame count"))?;
-                opts.edit_churn = Some(n.parse()?);
-            }
-            "--edit-browse" => {
-                opts.edit = true;
-                let d = args.next().ok_or_else(|| {
-                    anyhow::anyhow!("--edit-browse needs a directory")
-                })?;
-                opts.edit_browse = Some(std::path::PathBuf::from(d));
-            }
-            "--edit-undo" => {
-                opts.edit = true;
-                opts.edit_undo = true;
-            }
-            "--edit-blank" => {
-                opts.edit = true;
-                opts.edit_blank = true;
-            }
             "--test-click" => opts.test_click = true,
             "--test-seek" => opts.test_seek = true,
             "--test-play" => opts.test_play = true,
@@ -5104,10 +3883,6 @@ pub fn run() -> anyhow::Result<()> {
     positional.retain(|p| {
         if p.ends_with(".wbl") || p.ends_with(".json") {
             opts.setup = Some(std::path::PathBuf::from(p.clone()));
-            false
-        } else if p.ends_with(".wedit") {
-            opts.edit = true;
-            opts.edit_project = Some(std::path::PathBuf::from(p.clone()));
             false
         } else {
             true
@@ -5689,16 +4464,6 @@ struct Gfx {
     /// the playhead at 0 otherwise shows one held frame and plays nothing
     /// for 42 seconds).
     last_view_span: Option<(u64, u64)>,
-    /// EDIT MODE: a timeline over shots, inside this one application. The
-    /// shot under the playhead is the graph in the editor; the rest are
-    /// documents in the project, each parked with its editing context.
-    edit: Option<edit::EditState>,
-    edit_parked: std::collections::HashMap<u64, ShotCtx>,
-    /// The controls pane follows the SELECTED clip, not the playhead. When
-    /// that clip's shot is not the one in the editor, its document is
-    /// parsed here once and edits are written to both the copy (so the
-    /// widgets track) and the document (so the shot has them when it loads).
-    edit_panel_cache: Option<(u64, EditorGraph, (usize, usize))>,
     /// The SCRIPT's own panel size in whole tiles. A comp that exports to an
     /// edit has a panel of its own, arranged exactly the way a tool's is;
     /// a tool being authored uses the dive's tiles instead.
@@ -5916,13 +4681,6 @@ struct Gfx {
     dock_layout_name: String,
     /// Why the menubar's "scrub" button could not start it.
     scrub_error: Option<String>,
-    /// Where ⌘Z means the edit's timeline rather than the shot's graph:
-    /// the bin and timeline panels as last drawn.
-    edit_history_rects: Vec<egui::Rect>,
-    /// The window was asked to close with an unsaved edit: the prompt is up.
-    edit_close_prompt: bool,
-    /// Quit at the end of this redraw (the prompt said so).
-    quit_now: bool,
     /// A window layout picked in the layouts menu, applied in
     /// `about_to_wait` where windows can be made.
     dock_pending: Option<dockui::dock::Layout<dockui::Pane, dockui::Role>>,
@@ -5966,7 +4724,6 @@ struct Gfx {
     /// last frame (`detached`).
     dock_out: [bool; 3],
     /// Panes living in their own windows; the docked layout skips these.
-    /// (EDIT MODE's comp window only, now: the rest dock.)
     panes: Vec<DetachedPane>,
     /// Detach requests raised by the UI — serviced where the event loop is
     /// reachable (window creation needs `&ActiveEventLoop`).
@@ -6105,7 +4862,6 @@ struct Gfx {
     /// --test-mblur: the tick the gain triangle peaks on.
     mblur_peak: u64,
     curve: state::CurveEditState,
-    edit_browse_dir: Option<std::path::PathBuf>,
     /// How many times the playback rig has been (re)built — a diagnostic the
     /// harp suite gates on: a rig rebuilt during steady playback throws the
     /// player's decoded frames away.
@@ -6254,11 +5010,6 @@ impl ApplicationHandler for App {
             g.window.request_redraw();
         }
         match event {
-            // An unsaved edit asks first (`edit_close_prompt_ui`).
-            WindowEvent::CloseRequested if g.edit.as_ref().is_some_and(|e| e.is_dirty()) => {
-                g.edit_close_prompt = true;
-                g.window.request_redraw();
-            }
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(s) if s.width > 0 && s.height > 0 => {
                 g.config.width = s.width;
@@ -7693,9 +6444,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         comp_range: cfg!(target_arch = "wasm32").then_some(demos::JELLY_RANGE),
         view_range: None,
         last_view_span: None,
-        edit: None,
-        edit_parked: Default::default(),
-        edit_panel_cache: None,
         panel_tiles: (1, 1),
         handles: (0, 0),
         play_range: None,
@@ -7817,13 +6565,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             cachemeter: opts.test_cachemeter.then_some((0, 0)),
             precache: opts.test_precache.then(|| (0, Instant::now())),
             bin: opts.test_bin.then_some((0, 0, 0)),
-            edit_browse: opts.edit_browse.as_ref().map(|_| (0, 0, 0)),
-            edit_blank: opts.edit_blank.then(|| (0, 0, Instant::now())),
-            edit_undo: opts.edit_undo.then(|| (0, 0, Instant::now())),
-            edit_undo_shot: None,
-            source_insert: None,
-            churn: opts.edit_churn.map(|n| (n.max(1), 0, 0)),
-            source_before: Vec::new(),
             thumbs: opts.test_thumbs.then_some((0, 0)),
             dpx: opts.test_dpx.then_some((0, 0, 0)),
             still: opts.test_still.then_some((0, 0, 0)),
@@ -8060,9 +6801,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         },
         dock_layout_name: String::new(),
         scrub_error: None,
-        edit_history_rects: Vec::new(),
-        edit_close_prompt: false,
-        quit_now: false,
         dock_pending: None,
         patch: state::PatchState {
             cell: Default::default(),
@@ -8158,7 +6896,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             before: Vec::new(),
             grab: egui::Pos2::ZERO,
         },
-        edit_browse_dir: opts.edit_browse.clone(),
         rig_builds: 0,
         want_windows: HashMap::new(),
         rig_windows: HashMap::new(),
@@ -8197,24 +6934,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
     if let Some(setup) = &opts.setup {
         if let Err(e) = g.load_setup(setup) {
             eprintln!("failed to load setup {}: {e:#}", setup.display());
-        }
-    }
-    if opts.edit {
-        g.enter_edit_mode(opts.edit_project.clone());
-        if opts.edit_source {
-            if let Some(e) = g.edit.as_mut() {
-                let first = e.project.bin.first().map(|c| c.uid);
-                e.source_request = Some(first);
-            }
-            g.test.source_insert = Some((0, 0));
-        }
-        if opts.edit_play {
-            g.playing = true;
-            // Exercise the comp window too: a second surface rendering the
-            // same graph is the part a dump cannot see but a crash would.
-            if let Some(e) = g.edit.as_mut() {
-                e.enter_wobble = true;
-            }
         }
     }
     // Autosave compares against the comp as launched, so an untouched
@@ -9846,14 +8565,9 @@ impl Gfx {
 
     /// Committing the bin is the end of the errand: one Read per pick, then
     /// the browser closes rather than sitting over the graph it just filled.
-    /// Where a browser batch goes: the BIN when an edit is open, otherwise
-    /// Read nodes in the comp graph.
+    /// Where a browser batch goes: Read nodes in the comp graph.
     fn take_picks(&mut self, picks: Vec<browser::Picked>) {
-        if self.edit.is_some() {
-            self.edit_add_picks(picks);
-        } else {
-            self.commit_picks(picks);
-        }
+        self.commit_picks(picks);
     }
 
     fn commit_picks(&mut self, picks: Vec<browser::Picked>) {
@@ -10165,10 +8879,8 @@ impl Gfx {
         Ok(())
     }
 
-    /// Everything a setup document says about the editor, applied. Shared by
-    /// opening a file and by EDIT MODE swapping the shot under the playhead
-    /// — one deserialiser, so the two can never drift. Does not touch `fps`
-    /// (in an edit, the project's) or the playhead.
+    /// Everything a setup document says about the editor, applied, as
+    /// opening a file does. Does not touch `fps` or the playhead.
     fn apply_setup_doc(&mut self, s: SetupLoad) {
         self.curves.view.sets = s.chan_sets.clone();
         self.curves.view.active = None;
@@ -10209,13 +8921,9 @@ impl Gfx {
         self.patch.cell =
             s.patch_tiles.iter().map(|(n, c, sp)| (*n, self.migrate_cell(*n, *c, *sp))).collect();
         self.selected.clear();
-        // Opening a file starts from nothing. Swapping the shot under an
-        // edit's playhead must NOT: the other shots' footage stays warm
-        // (ids are namespaced per shot — see `edit::ID_STRIDE`).
-        if self.edit.is_none() {
-            self.loaded.clear();
-            self.load_errors.clear();
-        }
+        // Opening a file starts from nothing.
+        self.loaded.clear();
+        self.load_errors.clear();
         self.browser = None;
         self.next_read_slot = repair_reader_slots(&mut self.egraph);
         self.panel_tiles = s.panel.unwrap_or((1, 1));
@@ -10539,14 +9247,7 @@ impl Gfx {
             .chain(self.dive.iter().flat_map(|d| d.graph.nodes.keys()))
             .copied()
             .collect();
-        // In EDIT MODE the other shots' footage stays loaded across a cut:
-        // their node ids live in their own ranges, so nothing here can be
-        // mistaken for a node of the shot in the editor.
-        let cur_shot = self.edit.as_ref().and_then(|e| e.current);
-        let in_edit = self.edit.is_some();
-        self.loaded.retain(|id, _| {
-            live.contains(id) || (in_edit && Some(edit::shot_of_node(*id)) != cur_shot)
-        });
+        self.loaded.retain(|id, _| live.contains(id));
         self.load_errors.retain(|id, _| live.contains(id));
 
         // One entry per READER INSTANCE, not per node: a source reached
@@ -10702,9 +9403,9 @@ impl Gfx {
         // this every one of them stayed in VRAM for the session. Only when
         // the rig IS the whole comp: inside a dive it is enumerated from
         // the body while the view-lock render still samples the parked
-        // comp's plates (`--test-viewlock` went black), and edit mode keeps
-        // other shots' footage. The next rebuild out of either collects.
-        let freed = if self.dive.is_empty() && self.edit.is_none() {
+        // comp's plates (`--test-viewlock` went black). The next rebuild
+        // out of it collects.
+        let freed = if self.dive.is_empty() {
             let live: Vec<usize> = entries.iter().map(|e| e.0).collect();
             self.comp.retain_readers(&live)
         } else {
@@ -13172,11 +11873,6 @@ impl Gfx {
         self.drive_test_cachemeter();
         self.drive_test_precache();
         self.drive_test_bin();
-        self.drive_edit_browse();
-        self.drive_edit_blank();
-        self.drive_edit_undo();
-        self.drive_source_insert();
-        self.drive_churn();
         self.drive_test_thumbs();
         self.drive_test_dpx();
         self.drive_test_still();
@@ -13206,9 +11902,6 @@ impl Gfx {
         // input ports see.
         self.blender_export();
         self.refresh_uv_grids();
-        if self.quit_now {
-            return Ok(true);
-        }
         if let Some((n, path)) = &self.dump_after {
             if self.displayed_total >= *n {
                 let path = path.clone();
@@ -14546,405 +13239,6 @@ impl Gfx {
         Some((sum / n.max(1) as f64) as f32 * w as f32 / w_full.max(1) as f32)
     }
 
-    /// The R-key flow end to end: recursive search finds sequences under
-    /// data/, binning them commits a batch, and the batch becomes one
-    /// loaded Read node each.
-    /// `--edit-churn N`: flip the source viewer every N frames while
-    /// playing. Each flip rebuilds the playback rig; 60 flips without a
-    /// validation error is the bar.
-    fn drive_churn(&mut self) {
-        let Some((period, mut frames, mut flips)) = self.test.churn else { return };
-        frames += 1;
-        if frames % period == 0 {
-            let Some(e) = self.edit.as_mut() else { return };
-            let first = e.project.bin.first().map(|c| c.uid);
-            // On: open the source viewer. Off: APPEND from it — which mints,
-            // prewarms, leaves the source and lands on the new clip, all
-            // while playing. That is the user's crash path.
-            if e.source.is_some() {
-                if let Some(c) = e.project.bin.first_mut() {
-                    let n = c.media().len().max(1);
-                    c.in_off = (flips as usize * 7) % n;
-                    c.out_off = (c.in_off + 12).min(n - 1).max(c.in_off);
-                }
-                e.insert_request = Some(edit::Insert::Append);
-            } else {
-                e.source_request = Some(first);
-            }
-            self.playing = true;
-            flips += 1;
-            log::info!("churn: flip {flips} ({})", if flips % 2 == 1 { "source on" } else { "append" });
-            if flips >= 60 {
-                println!("CHURN PASS: {flips} source flips, no validation error");
-                std::process::exit(0);
-            }
-        }
-        self.test.churn = Some((period, frames, flips));
-    }
-
-    /// `--edit-source`: marks set in the clip player are the range that
-    /// lands on the timeline, and the shot belongs to the BIN clip.
-    fn drive_source_insert(&mut self) {
-        let Some((stage, mut frames)) = self.test.source_insert else { return };
-        frames += 1;
-        if frames > 2400 {
-            println!("SOURCE INSERT FAIL: timeout at stage {stage}");
-            std::process::exit(1);
-        }
-        match stage {
-            0 if self.displayed_total >= 2 => {
-                // With the source live, the picture must sit in the SOURCE
-                // half — the pane the held frame is NOT in. This is the bug
-                // where the pan compensation left it under "EDIT".
-                if let Some(hr) = self.hold_rect {
-                    let img = self.image_rect;
-                    if img.width() <= 1.0 {
-                        println!("SOURCE INSERT FAIL: no live picture laid out (image rect {img:?})");
-                        std::process::exit(1);
-                    }
-                    println!(
-                        "source pane check: live picture centre x={:.0}, held pane spans x={:.0}..{:.0}",
-                        img.center().x,
-                        hr.min.x,
-                        hr.max.x
-                    );
-                    if img.center().x >= hr.min.x {
-                        println!(
-                            "SOURCE INSERT FAIL: live picture centred at x={:.0} is inside the held pane (x≥{:.0}) — it should be in the source half",
-                            img.center().x,
-                            hr.min.x
-                        );
-                        std::process::exit(1);
-                    }
-                }
-                let Some(e) = self.edit.as_mut() else { return };
-                let Some(uid) = e.source else {
-                    println!("SOURCE INSERT FAIL: the source viewer never opened");
-                    std::process::exit(1);
-                };
-                let before: Vec<u64> = e.project.clips.iter().map(|c| c.uid).collect();
-                let Some(c) = e.project.bin.iter_mut().find(|c| c.uid == uid) else { return };
-                // What the I/O buttons do.
-                c.in_off = 5;
-                c.out_off = 14;
-                e.insert_request = Some(edit::Insert::AtPlayhead);
-                self.test.source_before = before;
-                self.test.source_insert = Some((1, frames));
-            }
-            1 => {
-                let Some(e) = self.edit.as_ref() else { return };
-                let before = &self.test.source_before;
-                let Some(c) = e.project.clips.iter().find(|c| !before.contains(&c.uid)) else {
-                    self.test.source_insert = Some((1, frames));
-                    return;
-                };
-                if (c.in_off, c.out_off) != (5, 14) {
-                    println!(
-                        "SOURCE INSERT FAIL: marked 5..14, timeline clip is {}..{} ({} frames)",
-                        c.in_off,
-                        c.out_off,
-                        c.len()
-                    );
-                    std::process::exit(1);
-                }
-                if c.len() != 10 {
-                    println!("SOURCE INSERT FAIL: length {} not 10", c.len());
-                    std::process::exit(1);
-                }
-                let master = c.master;
-                let shot = c.shot;
-                let master_shot = master.and_then(|m| e.shot_of_master(m));
-                if shot.is_none() || shot != master_shot {
-                    println!(
-                        "SOURCE INSERT FAIL: instance shot {shot:?}, bin master's {master_shot:?}"
-                    );
-                    std::process::exit(1);
-                }
-                let len = c.len();
-                // The insert left the source viewer, so its pane closes:
-                // one viewer, on the edit (the source pane is up only while
-                // a bin clip is viewed — `--edit-undo` checks it opening).
-                if self.dual_view || self.hold_rect.is_some() {
-                    println!(
-                        "SOURCE INSERT FAIL: the source pane stayed up after the insert (dual {}, rect {})",
-                        self.dual_view,
-                        self.hold_rect.is_some()
-                    );
-                    std::process::exit(1);
-                }
-                println!(
-                    "SOURCE INSERT PASS: marked 5..14 -> {len} frames on the timeline, shot {} owned by bin clip {:?}; back to one viewer on the edit",
-                    shot.unwrap(),
-                    master.unwrap()
-                );
-                std::process::exit(0);
-            }
-            _ => self.test.source_insert = Some((stage, frames)),
-        }
-    }
-
-    /// `--edit-browse <dir>`: the recursive browser opened from an edit's
-    /// bin puts its picks in the BIN, not in the comp graph.
-    /// `--edit-blank`: the bin's "blank clip", placed on the timeline,
-    /// mints a shot with NO Read whose script range is the clip; a Gradient
-    /// added there is what the comp renders; trimming the clip longer grows
-    /// the range. Waits are wall-clock.
-    fn drive_edit_blank(&mut self) {
-        let Some((stage, frames, at)) = self.test.edit_blank else { return };
-        let fail = |m: String| -> ! {
-            println!("EDIT BLANK FAIL: {m}");
-            std::process::exit(1);
-        };
-        if at.elapsed() > std::time::Duration::from_secs(20) {
-            fail(format!("timeout at stage {stage}"));
-        }
-        let next = |s: &mut Self, st: u8| s.test.edit_blank = Some((st, 0, Instant::now()));
-        let frames = frames + 1;
-        match stage {
-            0 if frames > 30 => {
-                let e = self.edit.as_mut().unwrap();
-                e.add_blank_clip();
-                let uid = e.project.bin.last().unwrap().uid;
-                if !e.project.bin.last().unwrap().is_blank() {
-                    fail("the bin's new clip is not blank".into());
-                }
-                e.place_from_bin(uid, 0);
-                e.seek_request = Some(0.0);
-                next(self, 1);
-                return;
-            }
-            1 => {
-                let e = self.edit.as_ref().unwrap();
-                let Some(clip) = e.project.clips.first() else { fail("nothing placed".into()) };
-                if clip.shot.is_some() && e.current == clip.shot && !self.playback_dirty {
-                    if let Some(err) = &e.error {
-                        fail(format!("edit error: {err}"));
-                    }
-                    if self.egraph.nodes.values().any(|n| matches!(n.kind, NodeKind::Read { .. })) {
-                        fail("a blank clip's shot has a Read".into());
-                    }
-                    let want = Some((0, clip.out_off as u64));
-                    if self.comp_range != want || clip.len() != edit::model::BLANK_DEFAULT_LEN {
-                        fail(format!("script range {:?}, wanted {want:?} ({} frames)", self.comp_range, clip.len()));
-                    }
-                    let mut gp = engine::graph::GradientParams::default();
-                    gp.inherit = true;
-                    let id = self.egraph.add(NodeKind::Gradient(gp), egui::pos2(0.0, 0.0));
-                    self.egraph.view = Some(id);
-                    self.playback_dirty = true;
-                    next(self, 2);
-                    return;
-                }
-            }
-            2 if !self.playback_dirty && at.elapsed() > std::time::Duration::from_millis(600) => {
-                let Some(tex) = self.comp.output_texture() else { fail("no comp output".into()) };
-                let (w, h) = self.comp.output_size().unwrap_or((0, 0));
-                let (a, b) = (self.test_read_texel(tex, w / 8, h / 2), self.test_read_texel(tex, w * 7 / 8, h / 2));
-                if (a[0] - b[0]).abs() < 0.05 && (a[1] - b[1]).abs() < 0.05 && (a[2] - b[2]).abs() < 0.05 {
-                    fail(format!("the gradient did not render: left {a:?} right {b:?}"));
-                }
-                let e = self.edit.as_mut().unwrap();
-                e.project.clips[0].out_off = 149;
-                next(self, 3);
-                println!("edit blank: gradient renders (left {a:?} right {b:?})");
-                return;
-            }
-            3 if !self.playback_dirty && frames > 10 => {
-                if self.comp_range != Some((0, 149)) {
-                    fail(format!("trimmed to 150 frames, script range is {:?}", self.comp_range));
-                }
-                println!("EDIT BLANK PASS: blank clip shot has no Read, plays its 100 frames, renders a Gradient, follows a trim to 150");
-                std::process::exit(0);
-            }
-            _ => {}
-        }
-        if let Some(t) = self.test.edit_blank.as_mut() {
-            t.1 = frames;
-        }
-    }
-
-    /// `--edit-undo`: one viewer until a source is up; a placement and a
-    /// move are one step each and undo/redo walk them; undoing a removal
-    /// brings the clip back WITH its shot; the edit is dirty until saved and
-    /// clean after. Steps go through the same calls the UI makes, and each
-    /// waits for the edit to settle (`track_history` records per frame).
-    fn drive_edit_undo(&mut self) {
-        let Some((stage, frames, at)) = self.test.edit_undo else { return };
-        let fail = |m: String| -> ! {
-            println!("EDIT UNDO FAIL: {m}");
-            std::process::exit(1);
-        };
-        if at.elapsed() > std::time::Duration::from_secs(20) {
-            fail(format!("timeout at stage {stage}"));
-        }
-        let frames = frames + 1;
-        // Every stage gives the host a few frames to mint, seek and record.
-        if frames < 8 || self.playback_dirty {
-            self.test.edit_undo = Some((stage, frames, at));
-            return;
-        }
-        let mut next = stage + 1;
-        let e = self.edit.as_mut().unwrap();
-        match stage {
-            0 => {
-                if self.dual_view {
-                    fail("an edit opened with the source pane up".into());
-                }
-                if e.is_dirty() || !e.history.is_empty() {
-                    fail("a fresh edit is dirty or has history".into());
-                }
-                e.add_blank_clip();
-                e.add_blank_clip();
-            }
-            1 => {
-                let (a, b) = (e.project.bin[0].uid, e.project.bin[1].uid);
-                e.place_from_bin(a, 0);
-                e.place_from_bin(b, 200);
-            }
-            2 => {
-                if e.project.clips.len() != 2 || e.project.clips.iter().any(|c| c.shot.is_none()) {
-                    fail(format!("placed {} clips, shots {:?}", e.project.clips.len(), e.project.clips.iter().map(|c| c.shot).collect::<Vec<_>>()));
-                }
-                e.project.clips[1].start = 300;
-            }
-            3 => {
-                if !e.is_dirty() {
-                    fail("edits made, but not dirty".into());
-                }
-                let steps = e.history.len();
-                e.undo();
-                if e.project.clips[1].start != 200 {
-                    fail(format!("undo of a move left the clip at {} ({steps} steps)", e.project.clips[1].start));
-                }
-                e.redo();
-                if e.project.clips[1].start != 300 {
-                    fail("redo did not put the move back".into());
-                }
-            }
-            4 => {
-                let shot = e.project.clips[1].shot;
-                let master = e.project.clips[1].master.unwrap();
-                e.remove_bin(master);
-                if e.project.clips.len() != 1 || shot.is_some_and(|s| e.project.shots.contains_key(&s)) {
-                    fail("removing a bin clip left its clip or shot".into());
-                }
-                self.test.edit_undo_shot = shot;
-            }
-            5 => {
-                e.undo();
-                let shot = self.test.edit_undo_shot;
-                if e.project.clips.len() != 2 || shot.is_none_or(|s| !e.project.shots.contains_key(&s)) {
-                    fail(format!("undo of a removal: {} clips, shot {shot:?} present {}", e.project.clips.len(),
-                        shot.is_some_and(|s| e.project.shots.contains_key(&s))));
-                }
-            }
-            6 => {
-                let uid = e.project.bin[0].uid;
-                e.source_request = Some(Some(uid));
-            }
-            7 => {
-                if !self.dual_view {
-                    fail("viewing a source did not open the source pane".into());
-                }
-                e.source_request = Some(None);
-            }
-            8 => {
-                if self.dual_view {
-                    fail("leaving the source left the source pane up".into());
-                }
-                let f = std::env::temp_dir().join(format!("wobble_edit_undo_{}.wedit", std::process::id()));
-                e.save_request = Some(f);
-            }
-            9 => {
-                if e.is_dirty() {
-                    fail(format!("dirty after a save (shots_dirty {})", e.shots_dirty));
-                }
-                if let Some(p) = &e.project_path {
-                    std::fs::remove_file(p).ok();
-                }
-                println!("EDIT UNDO PASS: one viewer until a source is up; move undone + redone; a removal undone with its shot; clean after save");
-                std::process::exit(0);
-            }
-            _ => next = stage,
-        }
-        self.test.edit_undo = Some((next, 0, Instant::now()));
-    }
-
-    fn drive_edit_browse(&mut self) {
-        let Some((stage, mut frames, before)) = self.test.edit_browse else { return };
-        frames += 1;
-        if frames > 2400 {
-            println!("EDIT BROWSE FAIL: timeout at stage {stage}");
-            std::process::exit(1);
-        }
-        match stage {
-            // Ask the way "add sequences…" does with no sequence
-            // manipulator installed (marked missing up front, so a machine
-            // that HAS it is not made to launch it); `edit_sync` opens the
-            // browser on the next frame — the real path, not a shortcut.
-            0 if self.displayed_total >= 2 => {
-                let bin_before = self.edit.as_ref().map(|e| e.project.bin.len()).unwrap_or(0);
-                if let Some(e) = self.edit.as_mut() {
-                    e.seq_manip_missing = true;
-                    e.launch_seq_manip();
-                }
-                self.test.edit_browse = Some((1, frames, bin_before));
-            }
-            1 => {
-                if self.browser.is_none() {
-                    println!("EDIT BROWSE FAIL: the bin's browse request opened no browser");
-                    std::process::exit(1);
-                }
-                let Some(dir) = self.edit_browse_dir.clone() else { return };
-                if let Some(b) = &mut self.browser {
-                    *b = browser::SeqBrowser::new(None, dir, self.decoder.clone());
-                    b.test_search(4);
-                }
-                self.test.edit_browse = Some((2, frames, before));
-            }
-            2 => {
-                let ready = self
-                    .browser
-                    .as_ref()
-                    .map(|b| b.test_search_status())
-                    .is_some_and(|(hits, _, running)| !running && hits >= 1);
-                if ready {
-                    let hits = self.browser.as_ref().unwrap().test_search_status().0;
-                    let act = self.browser.as_mut().unwrap().test_bin_hits(2.min(hits));
-                    let browser::BrowserAction::PickMany(picks) = act else {
-                        println!("EDIT BROWSE FAIL: no batch from the bin");
-                        std::process::exit(1);
-                    };
-                    let n_picks = picks.len();
-                    let nodes_before = self.egraph.nodes.len();
-                    self.take_picks(picks);
-                    let bin_now = self.edit.as_ref().map(|e| e.project.bin.len()).unwrap_or(0);
-                    let names: Vec<String> = self
-                        .edit
-                        .as_ref()
-                        .map(|e| e.project.bin.iter().map(|c| c.name.clone()).collect())
-                        .unwrap_or_default();
-                    if bin_now != before + n_picks {
-                        println!(
-                            "EDIT BROWSE FAIL: binned {n_picks} picks, bin went {before} -> {bin_now}"
-                        );
-                        std::process::exit(1);
-                    }
-                    if self.egraph.nodes.len() != nodes_before {
-                        println!("EDIT BROWSE FAIL: picks spawned Read nodes in the shot's graph");
-                        std::process::exit(1);
-                    }
-                    println!(
-                        "EDIT BROWSE PASS: {hits} hits found recursively, {n_picks} binned -> {bin_now} clips {names:?}"
-                    );
-                    std::process::exit(0);
-                }
-                self.test.edit_browse = Some((2, frames, before));
-            }
-            _ => self.test.edit_browse = Some((stage, frames, before)),
-        }
-    }
-
     /// Write what a suite currently has on screen to `$WOBBLE_DUMP_DIR`, so
     /// a pixel assertion can be EYEBALLED as well as counted. Off unless the
     /// variable is set; failures are reported, never fatal to the suite.
@@ -15206,8 +13500,6 @@ impl Gfx {
         let ctx = root.ctx().clone();
         // Script calls first, so everything below draws what they did.
         self.api_drain();
-        self.edit_sync(&ctx);
-        self.edit_close_prompt_ui(&ctx);
         self.sync_view_lock();
         // The viewer's 3D eye, for every engine graph built this pass.
         self.view3d_publish();
@@ -15690,10 +13982,7 @@ impl Gfx {
             let (redo_k, undo_k) = ctx.input_mut(|i| {
                 (keymap::consume(i, Act::Redo), keymap::consume(i, Act::Undo))
             });
-            let timeline = (redo_k || undo_k) && self.edit_history_here(&ctx);
-            if timeline {
-                self.edit_history(redo_k);
-            } else if redo_k {
+            if redo_k {
                 self.redo();
             } else if undo_k {
                 self.undo();
@@ -15721,10 +14010,6 @@ impl Gfx {
             }
             self.redo_stack.clear();
             self.undo_last = self.egraph.clone();
-            // Only a shot's graph is part of the edit (not a source view's).
-            if let Some(e) = self.edit.as_mut().filter(|e| e.current.is_some()) {
-                e.shots_dirty = true;
-            }
         }
         let fullscreen = self.viewer_mode != ViewerMode::Normal;
 
@@ -15735,9 +14020,7 @@ impl Gfx {
         // animation (and vice versa) rather than drawing it twice.
         // (The properties, the graph and the viewer are dock tabs now:
         // `dock_ui`, below the menubar and the timeline.)
-        if self.edit.is_none() {
-            self.bottom_rect = egui::Rect::NOTHING;
-        }
+        self.bottom_rect = egui::Rect::NOTHING;
 
         if !fullscreen {
         egui::Panel::top(egui::Id::new("menubar")).show(root, |ui| {
@@ -15839,8 +14122,7 @@ impl Gfx {
                 ui.separator();
                 self.layouts_menu(ui);
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.edit.is_none()
-                    && ui
+                if ui
                         .button("scrub ↗")
                         .on_hover_text("open scrub, the timeline editor, in a window of its own (this comp stays open)")
                         .clicked()
@@ -15919,33 +14201,7 @@ impl Gfx {
 
 
 
-        if self.edit.is_some() {
-            // EDIT MODE: the timeline over shots replaces the per-shot strip,
-            // and the bin sits left of the graph.
-            // Added first, so it is the lowest: the controls pane — ALWAYS
-            // present at its own height, scrolling inside, so the layout
-            // never jumps as the playhead crosses shots with and without
-            // controls.
-            egui::Panel::bottom(egui::Id::new("edit-controls"))
-                .resizable(true)
-                .default_size(widgets::TILE + 46.0)
-                .show(root, |ui| self.edit_controls_ui(ui));
-            let bottom = egui::Panel::bottom(egui::Id::new("edit-bottom"))
-                .resizable(true)
-                .default_size(210.0)
-                .show(root, |ui| self.edit_bottom_ui(ui));
-            let bin = egui::Panel::left(egui::Id::new("edit-bin"))
-                .resizable(true)
-                .default_size(230.0)
-                .show(root, |ui| {
-                    if let Some(e) = self.edit.as_mut() {
-                        e.bin_ui(ui);
-                    }
-                });
-            self.edit_history_rects = vec![bottom.response.rect, bin.response.rect];
-        }
-        // (Out of EDIT MODE the timeline is a dock tab:
-        // `dockui::Pane::Timeline`.)
+        // (The timeline is a dock tab: `dockui::Pane::Timeline`.)
 
         } // !fullscreen
 
@@ -16041,21 +14297,8 @@ impl Gfx {
 
         // The rest of the window is the dock: the graph, the viewer, the
         // properties and the animation as tabs, one of them alone when Q
-        // or W asks (`viewer_mode`). In EDIT MODE the main window is the
-        // edit, the image in the middle of it.
-        if self.edit.is_none() {
-            self.dock_ui(root);
-        } else {
-            egui::CentralPanel::default()
-                .frame(egui::Frame::NONE)
-                .show(root, |ui| {
-                    self.viewer_bar_ui(ui);
-                    let r = ui.available_rect_before_wrap();
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| {
-                        self.viewer_ui(ui)
-                    });
-                });
-        }
+        // or W asks (`viewer_mode`).
+        self.dock_ui(root);
 
         // Shader code window. Its buffers are keyed by node, so they are
         // pruned here too — a deleted node must not keep its text alive.
@@ -16415,9 +14658,8 @@ impl Gfx {
         if !fullscreen {
             modelui::setup_prompt(&ctx, &mut self.models_needed, &mut self.model_downloads);
         }
-        // Alpha (report.rs): crash-recovery autosave — not in edit mode,
-        // whose document is the project rather than this shot.
-        if self.autosave.due() && self.edit.is_none() {
+        // Alpha (report.rs): crash-recovery autosave.
+        if self.autosave.due() {
             if let Ok(j) = serde_json::to_string(&self.setup_save()) {
                 let kinds: Vec<&'static str> = self.egraph.nodes.values().map(|n| n.kind.name()).collect();
                 self.autosave.store(j, self.current_setup.as_deref(), kinds.into_iter());
@@ -16866,15 +15108,10 @@ impl Gfx {
                             }
                             self.load_read_files(node, display, frames, missing);
                         }
-                        // Opened with R: a bare pick still makes a node —
-                        // or, with an edit open, a bin clip.
+                        // Opened with R: a bare pick still makes a node.
                         None => {
                             let p = browser::Picked { display, frames, missing };
-                            if self.edit.is_some() {
-                                self.edit_add_picks(vec![p]);
-                            } else {
-                                self.spawn_reads(vec![p]);
-                            }
+                            self.spawn_reads(vec![p]);
                         }
                     }
                 }
@@ -16945,32 +15182,14 @@ impl Gfx {
     /// The viewer area: pan/zoom navigation + transform gizmos, drawn over
     /// the blitted comp (which lands exactly on `self.image_rect`).
     /// Which pane renders live. In a comp that is whichever the number keys
-    /// last aimed at; in an EDIT it is the source viewer when one is open,
-    /// and the timeline otherwise — the standard NLE arrangement, source
-    /// left and edit right.
+    /// last aimed at.
     fn live_pane(&self) -> u8 {
-        match &self.edit {
-            Some(e) => u8::from(e.source.is_none()),
-            None => self.egraph.view_pane.min(1),
-        }
+        self.egraph.view_pane.min(1)
     }
 
-    /// What a dual-view pane is showing, for its corner caption. In an edit
-    /// the panes are SOURCE and the timeline; in a comp they are the two
+    /// What a dual-view pane is showing, for its corner caption: the two
     /// viewer slots.
     fn pane_label(&self, pane: u8) -> String {
-        if let Some(e) = &self.edit {
-            return match pane {
-                0 => match e.source.and_then(|uid| e.project.bin.iter().find(|c| c.uid == uid)) {
-                    Some(c) => format!("SOURCE  {} {}", c.name, c.version().label),
-                    None => "SOURCE  (double-click a bin clip)".into(),
-                },
-                _ => match e.current_clip.and_then(|uid| e.project.clips.iter().find(|c| c.uid == uid)) {
-                    Some(c) => format!("EDIT  {} {}", c.name, c.version().label),
-                    None => "EDIT".into(),
-                },
-            };
-        }
         if pane == 0 {
             if let Some(name) = self.view_lock_label() {
                 return format!("1  🔒 {name}");
@@ -16996,7 +15215,7 @@ impl Gfx {
     /// slot, at that node's own format. Idle when nothing it shows changed.
     /// `new_frame`: plates were uploaded to the main compositor this frame.
     fn encode_other_pane(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64, new_frame: bool) {
-        if !self.dual_view || self.edit.is_some() {
+        if !self.dual_view {
             self.other_pane = None;
             return;
         }
@@ -17078,8 +15297,8 @@ impl Gfx {
         let mut readers_new = false;
         if let Some(pb) = &self.playback {
             // Same rule as `rebuild_playback`: the rig is the whole comp
-            // only outside a dive and edit mode.
-            if self.dive.is_empty() && self.edit.is_none() {
+            // only outside a dive.
+            if self.dive.is_empty() {
                 o.comp.retain_readers(&pb.slots);
             }
             for &slot in &pb.slots {
@@ -17501,7 +15720,7 @@ impl Gfx {
                 self.dual_view = !self.dual_view;
                 self.blit.invalidate();
                 // First time on: say what it costs, once.
-                if self.dual_view && self.edit.is_none() && self.prefs.dual_warned != Some(true) {
+                if self.dual_view && self.prefs.dual_warned != Some(true) {
                     self.dual_notice = true;
                 }
             }
@@ -17731,14 +15950,12 @@ impl Gfx {
             self.hold_rect = Some(theirs.shrink(2.0));
             // Click the held pane to make it the live one (what 1 / 3 do
             // from the graph), so the second viewer is reachable by hand.
-            if self.edit.is_none() {
-                let hold = ui
-                    .interact(theirs, ui.id().with("hold-pane"), egui::Sense::click())
-                    .on_hover_text("click to make this viewer live · 3/4 over a node aims the right one, 1/2 the left");
-                if hold.clicked() {
-                    self.egraph.view_pane = 1 - live_pane.min(1);
-                    self.blit.invalidate();
-                }
+            let hold = ui
+                .interact(theirs, ui.id().with("hold-pane"), egui::Sense::click())
+                .on_hover_text("click to make this viewer live · 3/4 over a node aims the right one, 1/2 the left");
+            if hold.clicked() {
+                self.egraph.view_pane = 1 - live_pane.min(1);
+                self.blit.invalidate();
             }
             let p = ui.painter_at(full);
             p.line_segment(
@@ -19844,8 +18061,6 @@ impl Gfx {
         match kind {
             PaneKind::Nodes => self.dock_out[0],
             PaneKind::Properties => self.dock_out[1],
-            PaneKind::Animation => self.dock_out[2],
-            PaneKind::Comp => self.panes.iter().any(|p| p.kind == kind),
         }
     }
 
@@ -20006,62 +18221,6 @@ impl Gfx {
         self.docks = Some(docks);
     }
 
-    /// The "pop this pane out" button, shown wherever the pane is docked.
-    fn detach_button(&mut self, ui: &mut egui::Ui, kind: PaneKind) {
-        if ui
-            .small_button("\u{29c9}")
-            .on_hover_text("open in its own window")
-            .clicked()
-        {
-            match (dockui::Pane::of(kind), &mut self.docks) {
-                (Some(p), Some(d)) => d.asks.push(dockui::dock::Ask::Detach(p)),
-                _ => self.detach_requests.push(kind),
-            }
-        }
-    }
-
-    /// The properties/animation pane with its tab strip — docked under the
-    /// main window's viewer, or under the graph in the comp window.
-    fn bottom_pane_body(&mut self, ui: &mut egui::Ui, tab: BottomTab, dockable: bool) {
-        ui.horizontal(|ui| {
-            for (t, label) in [
-                (BottomTab::Properties, "properties"),
-                (BottomTab::Curves, "animation"),
-            ] {
-                if dockable && self.detached(t.pane()) {
-                    continue; // it has its own window
-                }
-                if ui.selectable_label(tab == t, label).clicked() {
-                    self.bottom = t;
-                }
-            }
-            if dockable {
-                self.detach_button(ui, tab.pane());
-            }
-            ui.separator();
-            match tab {
-                BottomTab::Properties => {
-                    self.prop_layout_bar(ui);
-                    self.props_keys_strip(ui);
-                }
-                BottomTab::Curves => {
-                    ui.weak(if self.dope_view {
-                        "key timing for the selected nodes"
-                    } else {
-                        "keyframe curves for the selected nodes"
-                    });
-                }
-            }
-        });
-        ui.separator();
-        match tab {
-            BottomTab::Properties => self.properties_ui(ui, false),
-            BottomTab::Curves => {
-                self.animation_ui(ui);
-            }
-        }
-    }
-
     /// The animation tab: curve editor or dope sheet, like Blender's Graph
     /// Editor / Dope Sheet pair — ctrl+Tab over the pane flips between them.
     fn animation_ui(&mut self, ui: &mut egui::Ui) {
@@ -20099,36 +18258,6 @@ impl Gfx {
     /// main window or floating in its own.
     fn pane_ui(&mut self, ui: &mut egui::Ui, kind: PaneKind) {
         match kind {
-            PaneKind::Comp => {
-                let tab = self.bottom;
-                egui::Panel::bottom(egui::Id::new("comp-bottom"))
-                    .resizable(true)
-                    .default_size(if tab == BottomTab::Curves {
-                        260.0
-                    } else {
-                        self.strip_default_h()
-                    })
-                    .show(ui, |ui| self.bottom_pane_body(ui, tab, false));
-                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let name = self
-                            .edit
-                            .as_ref()
-                            .and_then(|e| {
-                                e.current_clip.and_then(|uid| {
-                                    e.project.clips.iter().find(|c| c.uid == uid).map(|c| {
-                                        format!("{} {}", c.name, c.version().label)
-                                    })
-                                })
-                            })
-                            .unwrap_or_else(|| "— gap —".into());
-                        ui.strong(name);
-                        ui.weak("· the shot under the playhead");
-                        self.dive_bar_ui(ui);
-                    });
-                    self.pane_ui(ui, PaneKind::Nodes);
-                });
-            }
             PaneKind::Nodes => {
                 // Docked, the graph's bar rides the panel's own strip (see
                 // the "graph" panel); popped out, it heads the window.
@@ -20280,9 +18409,6 @@ impl Gfx {
                 });
                 ui.separator();
                 self.properties_ui(ui, true);
-            }
-            PaneKind::Animation => {
-                self.animation_ui(ui);
             }
         }
     }
@@ -23265,16 +21391,6 @@ impl Gfx {
         self.prefs.prop_zoom = Some(z);
         // Written out once the gesture settles, not once per wheel tick.
         self.prop.zoom_dirty = true;
-    }
-
-    /// The properties pane's height on load: exactly a Grade panel at
-    /// default settings (wheels, no zones) — the rack's tallest everyday
-    /// panel, shown whole with nothing to spare. Measured, not derived:
-    /// pane chrome (tab row + bar) 35, panel frame + title row 33, the
-    /// Grade's header row 26, then the wheel column, the one part that
-    /// scales with the zoom. Re-measure if any of those rows change.
-    fn strip_default_h(&self) -> f32 {
-        94.0 + wheels::COL_H * self.prop.zoom
     }
 
     /// The properties pie: `props.pie` held over the rack opens it on the row
@@ -26449,57 +24565,6 @@ mod edit_tests {
         assert!(has_viewer_hud(&NodeKind::Spline(Default::default())));
         assert!(!has_viewer_hud(&NodeKind::Grade(Default::default())), "no handles to show");
         assert!(!has_viewer_hud(&NodeKind::Paint(Default::default())), "brush follows selection, not pins");
-    }
-
-    /// Importing a script moves EVERY id it stores — nodes, wires, view,
-    /// patch cables — by the same offset, so the graph is the same graph
-    /// under new names.
-    #[test]
-    fn offset_moves_every_id_together() {
-        use crate::editor::{PDst, PSrc, PatchLink};
-        let mut g = EditorGraph::default();
-        let r = g.add(
-            NodeKind::Read {
-                source: 0,
-                path: "x".into(),
-                range: None,
-                ram_cache: false,
-                nvme_cache: true,
-                layer: None,
-                input: Default::default(),
-                multi: false,
-                start: None,
-                first: None,
-                last: None,
-                edges: Default::default(), cache_on_play: true,
-                single: Default::default(), eight_bit: false,
-            },
-            egui::pos2(0.0, 0.0),
-        );
-        let gr = g.add(NodeKind::Grade(Default::default()), egui::pos2(0.0, 100.0));
-        let sl = g.add(
-            NodeKind::Custom { type_id: "ui.slider".into(), params: Default::default() },
-            egui::pos2(-100.0, 100.0),
-        );
-        g.edges.push((gr, 0, r));
-        g.view = Some(gr);
-        g.patch.links.push(PatchLink {
-            from: PSrc::Chan(sl, crate::anim::Channel::Custom(crate::anim::intern("value"))),
-            to: PDst::Chan(gr, crate::anim::Channel::GainR),
-        });
-        let off = 3 * edit::ID_STRIDE;
-        offset_graph_ids(&mut g, off);
-        assert!(g.nodes.contains_key(&(r + off)) && g.nodes.contains_key(&(gr + off)));
-        assert_eq!(g.edges, vec![(gr + off, 0, r + off)]);
-        assert_eq!(g.view, Some(gr + off));
-        assert_eq!(g.next_id, sl + 1 + off);
-        match (&g.patch.links[0].from, &g.patch.links[0].to) {
-            (PSrc::Chan(a, _), PDst::Chan(b, _)) => {
-                assert_eq!((*a, *b), (sl + off, gr + off), "the cable follows its nodes");
-            }
-            other => panic!("cable ends changed kind: {other:?}"),
-        }
-        assert!(g.nodes.keys().all(|id| edit::shot_of_node(*id) == 3), "all in shot 3's range");
     }
 }
 
