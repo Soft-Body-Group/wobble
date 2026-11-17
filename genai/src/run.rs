@@ -729,12 +729,13 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
             let r = request_clip(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph, clip.map(Clip::shape))?;
             let video = match clip {
                 // Billed on the clip sent: its length, its size.
-                Some(c) => Some(VideoCall { seconds: c.seconds(), w: c.w, h: c.h, default_res: true }),
+                Some(c) => Some(VideoCall { seconds: c.seconds(), w: c.w, h: c.h, default_res: true, rate: 1.0 }),
                 None => video_opts(m, opts).map(|(secs, res)| {
                     let (w, h) = video_size(m, opts, inputs.comp);
-                    VideoCall { seconds: secs as f64, w, h, default_res: res == 720 }
+                    VideoCall { seconds: secs as f64, w, h, default_res: res == 720, rate: 1.0 }
                 }),
             };
+            let video = video.map(|v| quote_settings(m, &r, v));
             Ok((m.endpoint.to_string(), r, plan.mp[i], video, clip.is_some()))
         })
         .collect::<Result<_>>()?;
@@ -750,6 +751,44 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
         })
         .collect();
     svc.quote(http, &items)
+}
+
+/// A video call as the request's own settings make it (the model panel's
+/// resolution, draft, duration: `Dialect::params`, merged into `req`): the
+/// quote must be for what is asked, not for the defaults.
+fn quote_settings(m: &RemoteModel, req: &Value, mut v: VideoCall) -> VideoCall {
+    let draft = req.get("draft").and_then(|d| d.as_bool()).unwrap_or(false);
+    let res = match req.get("resolution").and_then(|r| r.as_str()) {
+        _ if draft => Some(480.0),
+        Some("480p") => Some(480.0),
+        Some("720p") => Some(720.0),
+        Some("1080p") => Some(1080.0),
+        Some("4k") => Some(2160.0),
+        _ => None,
+    };
+    if let Some(res) = res {
+        // The frame at that height class, at the call's own aspect.
+        let k = res / (v.w.min(v.h).max(1) as f64);
+        v.w = (v.w as f64 * k).round() as u32;
+        v.h = (v.h as f64 * k).round() as u32;
+    }
+    match m.dialect {
+        Dialect::Wan27Edit => {
+            // Listed at 720p; 1080p is $0.15 against $0.10.
+            v.rate = if res == Some(1080.0) { 1.5 } else { 1.0 };
+            v.default_res = true;
+            if let Some(d) = req.get("duration").and_then(|d| d.as_f64()).filter(|d| *d > 0.0) {
+                v.seconds = v.seconds.min(d);
+            }
+        }
+        Dialect::SeedanceEdit => {
+            // Tokens count the clip sent AND the clip made, at 0.6 of the
+            // price with a video input.
+            v.seconds *= 2.0 * 0.6;
+        }
+        _ => {}
+    }
+    v
 }
 
 /// [`quote`] for every variant of a batch: one quote, the items of each
@@ -1544,5 +1583,24 @@ mod tests {
         assert!(plan(&k, &ins, &dir).unwrap_err().contains("720 px"));
         ins.clips.insert(0, clip(72, 1280, 720));
         assert!(plan(&k, &ins, &dir).is_ok());
+    }
+
+    #[test]
+    fn a_quote_follows_the_model_s_own_settings() {
+        let wan = m("fal/wan-2.7-video-edit");
+        let v = VideoCall { seconds: 5.0, w: 1280, h: 720, default_res: true, rate: 1.0 };
+        let hd = quote_settings(wan, &json!({"resolution": "1080p"}), v);
+        assert_eq!((hd.w, hd.h, hd.rate), (1920, 1080, 1.5));
+        assert!((service::price_of(0.1, "second", None, Some(hd)).usd - 0.75).abs() < 1e-9);
+        let cut = quote_settings(wan, &json!({"resolution": "720p", "duration": 3}), v);
+        assert_eq!((cut.seconds, cut.rate), (3.0, 1.0));
+        // Seedance: 4k is nine times 720p's pixels, a draft is 480p, and an
+        // edit bills the clip in and the clip out at 0.6.
+        let sd = m("fal/seedance-2.5-reference");
+        assert_eq!(quote_settings(sd, &json!({"resolution": "4k"}), v).tokens(), v.tokens() * 9.0);
+        let d = quote_settings(sd, &json!({"resolution": "4k", "draft": true}), v);
+        assert_eq!((d.w, d.h), (853, 480));
+        let e = quote_settings(m("fal/seedance-2.5-video-edit"), &json!({}), v);
+        assert!((e.seconds - 6.0).abs() < 1e-9);
     }
 }

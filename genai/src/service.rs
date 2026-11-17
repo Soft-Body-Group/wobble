@@ -71,6 +71,9 @@ pub struct VideoCall {
     /// price is quoted for that; another resolution is billed at another
     /// rate the pricing API does not list, so the quote turns "≈".
     pub default_res: bool,
+    /// What a per-second price is multiplied by for this call's settings
+    /// (Wan 2.7 at 1080p bills half as much again as its listed 720p).
+    pub rate: f64,
 }
 
 impl VideoCall {
@@ -217,7 +220,7 @@ pub fn price_of(unit_price: f64, unit: &str, megapixels: Option<f64>, video: Opt
     }
     match (u, megapixels, video) {
         ("second" | "sec" | "video_second", _, Some(v)) => Price {
-            usd: unit_price * v.seconds,
+            usd: unit_price * v.seconds * v.rate,
             exact: v.default_res,
             note: format!("{} s", v.seconds),
         },
@@ -265,7 +268,7 @@ mod tests {
 
     #[test]
     fn video_is_priced_per_second_or_by_tokens_and_never_silently() {
-        let v = VideoCall { seconds: 5.0, w: 1280, h: 720, default_res: true };
+        let v = VideoCall { seconds: 5.0, w: 1280, h: 720, default_res: true, rate: 1.0 };
         let p = price_of(0.2419, "seconds", None, Some(v));
         assert!((p.usd - 1.2095).abs() < 1e-9 && p.exact, "{p:?}");
         // Another resolution bills at a rate the API does not list.
