@@ -248,6 +248,22 @@ impl Dialect {
         }
     }
 
+    /// OPTIONAL ports this model has after its task's own: a reference
+    /// picture for Wan 2.7's edit; for Seedance's reference endpoint, more
+    /// reference pictures — `refs` already wired plus one free, so there
+    /// is always somewhere to land the next (`Opts::refs`, at most 8 more).
+    pub fn extra_ports(self, refs: usize) -> &'static [&'static str] {
+        const MORE: [&str; 8] = [
+            "reference 2", "reference 3", "reference 4", "reference 5",
+            "reference 6", "reference 7", "reference 8", "reference 9",
+        ];
+        match self {
+            Dialect::Wan27Edit => &["reference"],
+            Dialect::Seedance { reference: true, .. } => &MORE[..(refs + 1).min(MORE.len())],
+            _ => &[],
+        }
+    }
+
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {

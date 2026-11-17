@@ -1645,8 +1645,11 @@ impl Gfx {
     /// in `genai.captured` (one frame) or `genai.clip_frames` (a clip)
     /// instead of a file (`BakeSink::Capture`).
     fn start_capture(&mut self, node: u64, input: u64, port: usize, tick: i64, frames: u64) -> Result<(), String> {
-        let key = self.subtree_key_of(input).ok_or("the input is not renderable yet")?;
-        let (w, h) = self.comp.output_size().ok_or("nothing is rendering yet")?;
+        // At the input's OWN size, not the viewer's: a plate cropped or
+        // reformatted on the way in is sent that size.
+        self.comp.output_size().ok_or("nothing is rendering yet")?;
+        let (w, h) = self.bake_format(input).ok_or("nothing is rendering yet")?;
+        let key = self.subtree_key_at(input, (w, h)).ok_or("the input is not renderable yet")?;
         let tick = tick.max(0) as u64;
         let pb = self.playback.as_mut().ok_or("load a sequence first")?;
         self.playing = false;
@@ -1990,6 +1993,9 @@ impl Gfx {
         let p = self.egraph.node(node).and_then(|n| params(&n.kind))?;
         let mut pl = p.pipeline.clone();
         pl.normalize();
+        // An optional reference whose node input has nothing wired is not
+        // asked for.
+        pl.drop_unfed_optional(&self.genai_wired(&self.egraph, node));
         Some(pl)
     }
 
@@ -2076,6 +2082,25 @@ impl Gfx {
     /// take did not run, or one changed since, shows the take. Called once
     /// a redraw; does nothing outside a GenAI dive.
     pub(crate) fn genai_dive_show(&mut self) {
+        if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
+            return;
+        }
+        // A model with a growing list of reference ports (Seedance's
+        // reference) always shows one free: `refs` follows the wires.
+        let wires: Vec<(u64, usize)> = self.egraph.edges.iter().map(|e| (e.0, e.1)).collect();
+        for (id, n) in self.egraph.nodes.iter_mut() {
+            let NodeKind::GenAiStep(Op::Generate { model, opts, .. }) = &mut n.kind else { continue };
+            let Some(m) = catalog::get(model) else { continue };
+            if m.dialect.extra_ports(1).len() < 2 {
+                continue;
+            }
+            let base = genai::pipeline::task_ports(m.task).len();
+            let top = wires.iter().filter(|w| w.0 == *id).map(|w| w.1 + 1).max().unwrap_or(0);
+            let refs = top.saturating_sub(base).min(7);
+            if opts.refs != refs {
+                opts.refs = refs;
+            }
+        }
         let Some(d) = self.dive.last().filter(|d| d.kind == crate::DiveKind::GenAi) else { return };
         let Some(owner) = d.from else { return };
         let Some(take) = d.graph.node(owner).and_then(|n| params(&n.kind)).and_then(|p| p.pipeline.picked()).cloned()

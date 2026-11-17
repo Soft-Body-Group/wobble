@@ -7599,6 +7599,11 @@ impl Gfx {
         // (`subtree_bake_key`); every other sink's the canvas as it is.
         let now = match bake.sink {
             BakeSink::Cache | BakeSink::Write { .. } => self.subtree_bake_key(bake.node),
+            // A capture is made at its INPUT's own size (a crop inside a
+            // GenAI pipeline is sent cropped), whatever the viewer shows:
+            // keyed on that size, so the output growing to hold it and the
+            // next redraw shrinking it back do not read as an edit.
+            BakeSink::Capture { .. } => self.subtree_key_at(bake.input, (bake.info.width, bake.info.height)),
             _ => self.subtree_key_of(bake.input),
         };
         // That key no longer moves with the proxy switch, so a Bake checks

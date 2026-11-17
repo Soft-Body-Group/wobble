@@ -462,15 +462,22 @@ pub fn request_clip(
             "generate_audio": false,
             "seed": seed,
         }),
-        (_, Dialect::Wan27Edit) => json!({
-            "prompt": prompt(),
-            "video_url": img(1)?,
-            "resolution": "720p",
-            // The input's own length, so the take lines up with the plate.
-            "duration": 0,
-            "audio_setting": "origin",
-            "seed": seed,
-        }),
+        (_, Dialect::Wan27Edit) => {
+            let mut v = json!({
+                "prompt": prompt(),
+                "video_url": img(1)?,
+                "resolution": "720p",
+                // The input's own length, so the take lines up with the plate.
+                "duration": 0,
+                "audio_setting": "origin",
+                "seed": seed,
+            });
+            // The optional reference picture (port 2).
+            if let Some(Some(r)) = images.get(2) {
+                v["reference_image_url"] = json!(r);
+            }
+            v
+        }
         (_, Dialect::WanVace) => json!({
             "prompt": prompt(),
             "video_url": img(1)?,
@@ -550,7 +557,11 @@ pub fn request_clip(
             json!({
                 "prompt": prompt(),
                 "task": "reference",
-                "image_urls": [img(1)?],
+                // @Image1, then every further reference wired, in port
+                // order: @Image2, @Image3…
+                "image_urls": std::iter::once(img(1)?)
+                    .chain(images.iter().skip(2).flatten().cloned().map(Value::String))
+                    .collect::<Vec<_>>(),
                 "duration": secs.to_string(),
                 "resolution": format!("{res}p"),
                 "aspect_ratio": "auto",

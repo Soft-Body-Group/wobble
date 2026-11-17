@@ -189,6 +189,16 @@ pub struct Opts {
     /// Video height class: 480, 720, 1080 (image-to-video only).
     #[serde(default = "default_res")]
     pub res: u32,
+    /// How many of the model's EXTRA reference ports are in use
+    /// (`Dialect::extra_ports`): the host keeps it at the highest one
+    /// wired, so one more is always free. Not part of any key: the wires
+    /// are.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub refs: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 fn default_seconds() -> u32 {
@@ -217,6 +227,7 @@ impl Default for Opts {
             extra: String::new(),
             seconds: default_seconds(),
             res: default_res(),
+            refs: 0,
         }
     }
 }
@@ -239,8 +250,12 @@ impl Op {
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
             }
-            Op::Generate { model, .. } => match catalog::get(model) {
-                Some(m) => task_ports(m.task),
+            Op::Generate { model, opts, .. } => match catalog::get(model) {
+                Some(m) => {
+                    let mut v = task_ports(m.task);
+                    v.extend(m.dialect.extra_ports(opts.refs).iter().map(|n| (Pipe::Image, *n)));
+                    v
+                }
                 // An id this build does not know keeps no ports, so its
                 // wires are dropped on load rather than guessed at; the
                 // panel says what it was.
@@ -286,6 +301,17 @@ impl Op {
                 want == pipe || (matches!(self, Op::Output) && matches!(pipe, Pipe::Video | Pipe::Scene))
             }
             None => false,
+        }
+    }
+
+    /// May port `port` be left unwired? Comfy's and a Template's all may
+    /// (a workflow uses the ones it has placeholders for), and a model's
+    /// extra reference ports.
+    pub fn optional(&self, port: usize) -> bool {
+        match self {
+            Op::Comfy { .. } | Op::Template { .. } => true,
+            Op::Generate { model, .. } => catalog::get(model).is_some_and(|m| port >= task_ports(m.task).len()),
+            _ => false,
         }
     }
 
@@ -523,7 +549,9 @@ impl Pipeline {
         // through); the rest are what the model's ports name.
         let mut p = Pipeline::bare(vec![InKind::Image]);
         let gen = p.push(Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
-        let ports = task_ports(m.task);
+        // The task's ports, and a single optional reference (Wan's): a
+        // growing list of them (Seedance's) is a pipeline's to wire.
+        let ports: Vec<_> = p.steps[gen].op.ports().into_iter().filter(|(_, n)| !n.starts_with("reference ")).collect();
         let n = ports.len().max(1) as f32;
         let mut images = 0;
         for (port, (pipe, name)) in ports.into_iter().enumerate() {
@@ -967,9 +995,7 @@ impl Pipeline {
         for (k, (_, name)) in ports.iter().enumerate() {
             match step.inputs.get(k).copied().flatten() {
                 Some(src) => self.visit(src, state, order)?,
-                // Comfy's ports are all optional: a workflow uses the ones
-                // it has placeholders for.
-                None if matches!(step.op, Op::Comfy { .. } | Op::Template { .. }) => {}
+                None if step.op.optional(k) => {}
                 None => {
                     return Err(format!("{} needs its {name} input wired", step.op.label()))
                 }
@@ -988,6 +1014,21 @@ impl Pipeline {
             Op::Comfy { commercial, .. } => *commercial,
             _ => true,
         })
+    }
+
+    /// Let go of every wire from an Input whose node input has nothing
+    /// wired (`wired[k]` false) into an OPTIONAL port: an optional
+    /// reference nobody supplied is not asked for. The run's copy only.
+    pub fn drop_unfed_optional(&mut self, wired: &[bool]) {
+        for i in 0..self.steps.len() {
+            for k in 0..self.steps[i].inputs.len() {
+                let Some(j) = self.steps[i].inputs[k] else { continue };
+                let unfed = matches!(self.steps[j].op, Op::Input { input, .. } if !wired.get(input).copied().unwrap_or(false));
+                if unfed && self.steps[i].op.optional(k) {
+                    self.steps[i].inputs[k] = None;
+                }
+            }
+        }
     }
 
     /// The node inputs a run reads — the Input steps on the way to Output,
@@ -1037,6 +1078,15 @@ impl Pipeline {
     /// result's own size is the node's format: stretched back over the
     /// input's format, an upscale would be a blur with a bill attached.
     pub fn resizes(&self) -> bool {
+        // A Crop or a Reformat inside changes the size of what is sent,
+        // and so of what comes back: stretched over the node's input
+        // format, the crop would be undone.
+        let cut = self.output().and_then(|o| self.plan(o).ok()).is_some_and(|order| {
+            order.iter().any(|&i| matches!(&self.steps[i].op, Op::Comp { kind, .. } if kind == "Crop" || kind == "Reformat"))
+        });
+        if cut {
+            return true;
+        }
         self.output()
             .and_then(|o| self.steps[o].inputs.first().copied().flatten())
             .is_some_and(|i| {
@@ -1110,8 +1160,8 @@ mod tests {
             let out = p.output().unwrap();
             let plan = p.plan(out).unwrap_or_else(|e| panic!("{}: {e}", m.id));
             let g = p.model_step().unwrap();
-            assert!(p.steps[g].inputs.iter().all(|i| i.is_some()), "{}", m.id);
-            let ports = task_ports(m.task);
+            assert!(p.steps[g].inputs.iter().enumerate().all(|(k, i)| i.is_some() || p.steps[g].op.optional(k)), "{}", m.id);
+            let ports: Vec<_> = p.steps[g].op.ports().into_iter().filter(|(_, n)| !n.starts_with("reference ")).collect();
             // Every step is on the way out, but the first image when the
             // model reads no picture (it is still the node's input).
             let idle = usize::from(!ports.iter().any(|&(k, _)| k != Pipe::Text));
