@@ -63,8 +63,37 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
+                // "new": over an untouched comp it starts over at once; over
+                // an edit it asks first, and discarding leaves a fresh,
+                // file-less comp that counts as saved.
+                if self.comp_unsaved() {
+                    println!("SETUP TEST FAIL: a just-opened comp reads as unsaved");
+                    std::process::exit(1);
+                }
+                if let Some(n) = self.egraph.nodes.values_mut().next() {
+                    n.pos.x += 40.0;
+                }
+                self.new_setup_action();
+                if !self.new_setup_ask || self.current_setup.is_none() {
+                    println!("SETUP TEST FAIL: new over an edit did not ask first");
+                    std::process::exit(1);
+                }
+                self.new_setup();
+                let fresh = EditorGraph::default_graph("", "", None).nodes.len();
+                if self.new_setup_ask
+                    || self.current_setup.is_some()
+                    || self.egraph.nodes.len() != fresh
+                    || self.comp_unsaved()
+                {
+                    println!(
+                        "SETUP TEST FAIL: new left {} nodes (want {fresh}), file {:?}",
+                        self.egraph.nodes.len(),
+                        self.current_setup
+                    );
+                    std::process::exit(1);
+                }
                 println!(
-                    "SETUP TEST PASS: {nodes} nodes, {loads} sequences reloaded, fps restored, history jump re-adopted them"
+                    "SETUP TEST PASS: {nodes} nodes, {loads} sequences reloaded, fps restored, history jump re-adopted them, new asks over edits"
                 );
                 std::process::exit(0);
             }

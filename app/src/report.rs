@@ -1800,6 +1800,12 @@ impl Autosave {
         self.forget();
     }
 
+    /// Whether `json` is the comp as it was last saved or opened. No
+    /// baseline (a recovered comp) is never "as saved".
+    pub fn matches(&self, json: &str) -> bool {
+        self.baseline == Some(fnv(json))
+    }
+
     /// The comp in memory is NOT what is on disk (a recovered comp).
     pub fn unbaseline(&mut self) {
         self.baseline = None;

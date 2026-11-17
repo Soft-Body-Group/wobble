@@ -4428,6 +4428,8 @@ struct Gfx {
     setup_error: Option<String>,
     /// The in-app open / save browser for `.wbl` setups, while it is up.
     setup_browser: Option<setupbrowser::SetupBrowser>,
+    /// "new" was asked for over unsaved changes: the discard prompt is up.
+    new_setup_ask: bool,
     /// The track import window (`trackimport`), for one node at a time.
     track_import: Option<trackimport::Win>,
     hud: state::HudState,
@@ -6402,6 +6404,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         current_setup: None,
         setup_error: None,
         setup_browser: None,
+        new_setup_ask: false,
         track_import: None,
         hud: state::HudState {
             pos: HashMap::new(),
@@ -9029,6 +9032,112 @@ impl Gfx {
         self.panel_tiles = s.panel.unwrap_or((1, 1));
         self.adopt_loads();
         self.playback_dirty = true;
+    }
+
+    /// The comp differs from what was last saved or opened.
+    fn comp_unsaved(&self) -> bool {
+        serde_json::to_string(&self.setup_save()).map_or(true, |j| !self.autosave.matches(&j))
+    }
+
+    /// "new": a fresh comp, asking first when that would throw away edits.
+    fn new_setup_action(&mut self) {
+        if self.comp_unsaved() {
+            self.new_setup_ask = true;
+        } else {
+            self.new_setup();
+        }
+    }
+
+    /// Start over on the comp a plain launch opens on, with no file behind
+    /// it. Undo steps back to the old comp, as it does after an open.
+    fn new_setup(&mut self) {
+        self.new_setup_ask = false;
+        while !self.dive.is_empty() {
+            if self.dive_out().is_err() {
+                self.dive.clear();
+            }
+        }
+        let mut graph = EditorGraph::default_graph("", "", None);
+        for n in graph.nodes.values_mut() {
+            n.tv = editor::new_read_tv(&n.kind);
+        }
+        self.apply_setup_doc(SetupLoad {
+            version: 4,
+            fps: self.fps,
+            pinned_dirs: Vec::new(),
+            graph,
+            canvas: None,
+            range: None,
+            handles: (0, 0),
+            play_range: None,
+            view_range: None,
+            loop_span: LoopSpan::InOut,
+            panel: None,
+            huds: Vec::new(),
+            activated: Vec::new(),
+            pinned_gizmos: Vec::new(),
+            prop_layouts: Vec::new(),
+            patch_tiles: Vec::new(),
+            chan_sets: Vec::new(),
+        });
+        self.timeline_pos = 0;
+        self.current_setup = None;
+        self.setup_error = None;
+        self.models_needed = modelui::needed_by(self.egraph.nodes.values().map(|n| &n.kind));
+        if let Ok(j) = serde_json::to_string(&self.setup_save()) {
+            self.autosave.baseline(&j);
+        }
+        log::info!("new setup");
+    }
+
+    /// The prompt "new" puts up over unsaved changes.
+    fn new_setup_ask_ui(&mut self, ctx: &egui::Context) {
+        if !self.new_setup_ask {
+            return;
+        }
+        enum A { Wait, Save, Discard, Cancel }
+        let mut act = A::Wait;
+        let name = self
+            .current_setup
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or("this comp".to_string(), |n| n.to_string_lossy().into_owned());
+        let can_save = self.current_setup.is_some();
+        egui::Window::new("start a new comp?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(format!("{name} has unsaved changes."));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if can_save && ui.button("save, then new").clicked() {
+                        act = A::Save;
+                    }
+                    if ui.button("discard changes").clicked() {
+                        act = A::Discard;
+                    }
+                    if ui.button("cancel").clicked() {
+                        act = A::Cancel;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            act = A::Cancel;
+        }
+        match act {
+            A::Wait => {}
+            A::Cancel => self.new_setup_ask = false,
+            A::Discard => self.new_setup(),
+            A::Save => {
+                self.save_setup_action(false);
+                match &self.setup_error {
+                    // A failed save keeps the comp, and says why in the bar.
+                    Some(_) => self.new_setup_ask = false,
+                    None => self.new_setup(),
+                }
+            }
+        }
     }
 
     fn open_setup_dialog(&mut self) {
@@ -13808,11 +13917,12 @@ impl Gfx {
         // SPECIFIC chord is consumed FIRST: `consume_key` ignores extra
         // shift, so asking for save before save-as eats ⌘⇧S as a plain
         // save — which is exactly what the old order here did.
-        let (save_as, save, open_key) = ctx.input_mut(|i| {
+        let (save_as, save, open_key, new_key) = ctx.input_mut(|i| {
             (
                 keymap::consume(i, keymap::Act::SaveAs),
                 keymap::consume(i, keymap::Act::Save),
                 keymap::consume(i, keymap::Act::Open),
+                keymap::consume(i, keymap::Act::New),
             )
         });
         // While the setup browser is up its own keys rule.
@@ -13824,6 +13934,9 @@ impl Gfx {
             }
             if open_key {
                 self.open_setup_dialog();
+            }
+            if new_key {
+                self.new_setup_action();
             }
         }
 
@@ -14245,6 +14358,9 @@ impl Gfx {
                         ));
                 }
                 ui.separator();
+                if ui.button("new").on_hover_text("start a new comp (⌘N)").clicked() {
+                    self.new_setup_action();
+                }
                 if ui.button("open").on_hover_text("⌘O").clicked() {
                     self.open_setup_dialog();
                 }
@@ -14700,7 +14816,7 @@ impl Gfx {
                                 ("shift (graph)".into(), "wire the courting pair (reach is in the settings menu)"),
                                 (format!("{} / {}", key_of(Act::GraphView1), key_of(Act::GraphView2)), "graph: view hovered node in slot A / B"),
                                 (format!("{} / {}", key_of(Act::Undo), key_of(Act::Redo)), "undo / redo (graph + params)"),
-                                (format!("{} / {} / {}", key_of(Act::Open), key_of(Act::Save), key_of(Act::SaveAs)), "open / save / save as"),
+                                (format!("{} / {} / {} / {}", key_of(Act::New), key_of(Act::Open), key_of(Act::Save), key_of(Act::SaveAs)), "new / open / save / save as"),
                                 (format!("{} / {}", key_of(Act::GraphSwapUp), key_of(Act::GraphSwapDown)), "graph: swap node up / down the chain"),
                                 ("drag".into(), "graph: move node / marquee; viewer: select"),
                                 ("middle-drag / alt-drag".into(), "pan — Blender's hands, every canvas (\u{2318}-drag too)"),
@@ -15241,6 +15357,7 @@ impl Gfx {
             self.hud.ui_open = open;
         }
         self.setup_browser_ui(&ctx);
+        self.new_setup_ask_ui(&ctx);
         self.track_import_ui(&ctx);
         if !fullscreen {
             self.prefs_window(&ctx);
