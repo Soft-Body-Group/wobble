@@ -110,6 +110,10 @@ pub enum Op {
         node: serde_json::Value,
         #[serde(default)]
         clip: bool,
+        /// How many inputs the node has (a Blend's two and a matte, a
+        /// generator's none). All optional, as they are in the comp.
+        #[serde(default = "one")]
+        inputs: usize,
     },
     /// LEGACY (read from old files, converted by `Pipeline::normalize`
     /// into an `Input`, never run): the host node's image input.
@@ -233,6 +237,32 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+fn one() -> usize {
+    1
+}
+
+/// Names for a comp node's ports (the dive draws the node's own).
+const COMP_PORTS: [&str; 16] = [
+    "input 1", "input 2", "input 3", "input 4", "input 5", "input 6", "input 7", "input 8", "input 9", "input 10",
+    "input 11", "input 12", "input 13", "input 14", "input 15", "input 16",
+];
+
+/// A `&'static str` for a comp node's type name: `Op::name` hands out
+/// statics, and the set of names is the app's node kinds, small and fixed.
+fn intern(name: &str) -> &'static str {
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().unwrap();
+    match names.iter().find(|n| **n == name) {
+        Some(n) => n,
+        None => {
+            let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+            names.push(n);
+            n
+        }
+    }
+}
+
 fn default_seconds() -> u32 {
     5
 }
@@ -277,7 +307,8 @@ impl Op {
             | Op::Second
             | Op::ClipIn { .. }
             | Op::MatteClip => vec![],
-            Op::Output | Op::Comp { .. } => vec![(Pipe::Image, "image")],
+            Op::Output => vec![(Pipe::Image, "image")],
+            Op::Comp { inputs, .. } => COMP_PORTS.iter().take(*inputs).map(|n| (Pipe::Image, *n)).collect(),
             Op::Template { .. } => vec![(Pipe::Text, "a"), (Pipe::Text, "b")],
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
@@ -325,8 +356,8 @@ impl Op {
     pub fn accepts(&self, port: usize, pipe: Pipe) -> bool {
         // A Comp reads the host's render of what is above it, still or
         // clip alike (whether IT is a clip is its own flag).
-        if matches!(self, Op::Comp { .. }) {
-            return port == 0 && matches!(pipe, Pipe::Image | Pipe::Video);
+        if let Op::Comp { inputs, .. } = self {
+            return port < (*inputs).min(COMP_PORTS.len()) && matches!(pipe, Pipe::Image | Pipe::Video);
         }
         match self.ports().get(port) {
             Some(&(want, _)) => {
@@ -341,7 +372,7 @@ impl Op {
     /// extra reference ports.
     pub fn optional(&self, port: usize) -> bool {
         match self {
-            Op::Comfy { .. } | Op::Template { .. } => true,
+            Op::Comfy { .. } | Op::Template { .. } | Op::Comp { .. } => true,
             Op::Generate { model, .. } => catalog::get(model).is_some_and(|m| port >= task_ports(m.task).len()),
             _ => false,
         }
@@ -362,13 +393,7 @@ impl Op {
             Op::Input { matte: false, clip: true, .. } => "Image Clip In",
             Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
             Op::Shape { .. } => "Spline",
-            Op::Comp { kind, .. } => match kind.as_str() {
-                "Transform" => "Transform",
-                "Reformat" => "Reformat",
-                "Crop" => "Crop",
-                "Freeze" => "Freeze",
-                _ => "Comp Node",
-            },
+            Op::Comp { kind, .. } => intern(kind),
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
@@ -1015,8 +1040,8 @@ impl Pipeline {
             }
         }
         if let Op::Comp { .. } = &step.op {
-            let src = step.inputs.first().copied().flatten().and_then(|j| self.steps.get(j));
-            if src.is_some_and(|s| !matches!(s.op, Op::Input { .. } | Op::Shape { .. } | Op::Comp { .. })) {
+            let mut srcs = step.inputs.iter().flatten().filter_map(|j| self.steps.get(*j));
+            if srcs.any(|s| !matches!(s.op, Op::Input { .. } | Op::Shape { .. } | Op::Comp { .. })) {
                 return Err(format!(
                     "{} works on the node's inputs (or a Spline, or another such node): a model's result cannot feed it yet",
                     step.op.name()

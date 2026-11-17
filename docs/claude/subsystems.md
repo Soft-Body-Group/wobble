@@ -1564,16 +1564,19 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `shape_clips`. A step's "mask" port is `PortKind::Mask` and a matte
   Input gives Mask; `from_editor` walks through any converter the editor
   bridged in.
-- **Comp nodes inside** (`Op::Comp { kind, node, clip }`,
-  `genaiui::COMP_NODES`: Transform, Reformat, Crop, Freeze): the Shape
-  mechanism with one input port. A Comp may follow only what the host
+- **Comp nodes inside** (`Op::Comp { kind, node, clip, inputs }`): ANY
+  comp node `genaiui::comp_ok` allows (its doc lists what cannot: own
+  files/jobs keyed by node id, GenAI/text, multi-output, 3D, nodes with a
+  graph inside, links by id), offered in the dive by
+  `editor::entry_offered`. The Shape mechanism with the node's own input
+  ports, all optional. A Comp may follow only what the host
   can render (an Input, a Shape, another Comp; `Pipeline::plan` refuses a
   model's result). `genaiui::stand_in` builds the whole chain in the comp
   (an Input stands for whatever is wired into that input of the node) and
   the terminal stand-in is captured; `step_is_matte` decides coverage vs
   picture. An Input read ONLY through Comps is not captured on its own
-  (`Pipeline::reads` / `input_is_read`). Adding a kind = `COMP_NODES`,
-  `comp_name`, and `Op::name`'s match.
+  (`Pipeline::reads` / `input_is_read`). Known gap: a generator inside
+  (Gradient, Grid) takes the SCRIPT format, not the pipeline node's.
 - **A model step runs from its OWN node inside** (`Action::PrepareStep`,
   `Run::to_step`): the run's copy has Output re-pointed at that step
   (`genai_runnable_to`), so plan, capture, quote and cache are the

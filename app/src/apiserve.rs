@@ -321,7 +321,7 @@ fn find_entry(want: &str, (n, g, s, p, a, r): (bool, bool, bool, bool, bool, boo
         e.label.to_ascii_lowercase() == lower || (e.make)(0).name().to_ascii_lowercase() == lower
     };
     let all = editor::node_catalog();
-    let own = all.iter().position(|e| editor::offered_in(e.cat, n, g, s, p, a, r) && hit(e));
+    let own = all.iter().position(|e| editor::entry_offered(e, n, g, s, p, a, r) && hit(e));
     let any = all.iter().position(hit);
     own.or(any).map(|i| all.into_iter().nth(i).expect("indexed"))
 }
@@ -343,7 +343,7 @@ its nodes directly (app_info.dive says which), and view_set its Output to see th
 fn subgraph_types(cats: (bool, bool, bool, bool, bool, bool)) -> Vec<Value> {
     editor::node_catalog()
         .into_iter()
-        .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
+        .filter(|e| editor::entry_offered(e, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
         .map(|e| {
             let kind = (e.make)(0);
             let inputs: Vec<&str> = match &kind {
@@ -1444,7 +1444,7 @@ impl Gfx {
         let dived = cats != (false, false, false, false, false, false);
         let mut types: Vec<Value> = editor::node_catalog()
             .into_iter()
-            .filter(|e| editor::offered_in(e.cat, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
+            .filter(|e| editor::entry_offered(e, cats.0, cats.1, cats.2, cats.3, cats.4, cats.5))
             .map(|e| {
                 let kind = (e.make)(0);
                 json!({

@@ -199,6 +199,7 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
                     kind: comp_name(k).unwrap_or("Transform").into(),
                     node: serde_json::to_value(n).unwrap_or_default(),
                     clip: false,
+                    inputs: k.input_count().min(16),
                 },
             };
             genai::Step { at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()], op }
@@ -215,7 +216,7 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
         let mut changed = false;
         for &(to, port, from) in &edges {
             let wants = match &steps[to].op {
-                Op::Comp { clip, .. } => *clip && port == 0,
+                Op::Comp { clip, .. } => *clip,
                 op => matches!(op.ports().get(port), Some((genai::Pipe::Video, _))),
             };
             if let (true, Op::Shape { clip, .. } | Op::Comp { clip, .. }) = (wants, &mut steps[from].op) {
@@ -242,19 +243,81 @@ pub(crate) fn is_step(kind: &NodeKind) -> bool {
     matches!(kind, NodeKind::GenAiStep(_) | NodeKind::Spline(_)) || comp_name(kind).is_some()
 }
 
-/// The comp nodes a pipeline may hold between its inputs and its models
-/// (`Op::Comp`), by type name. One list: the add menu in there, the round
-/// trip and the stand-ins all ask it.
-pub const COMP_NODES: [&str; 4] = ["Transform", "Reformat", "Crop", "Freeze"];
+/// May this comp node sit inside a pipeline, between its inputs and its
+/// models (`Op::Comp`)? Everything may, except the kinds that cannot work
+/// as the stand-ins a run renders them through:
+///
+/// - **a file or a job of its own**, kept by the app under the node's id
+///   (a Load, a Bake, a Render, a Blender, the trackers and solvers, the
+///   neural nodes that render on a click, a Paint's strokes): a stand-in
+///   has another id and would have none of it;
+/// - **a GenAI node** (models are steps in here) and text;
+/// - **more than one output**, or a 3D scene (lowered whole-graph);
+/// - **a graph of its own inside** (Noise, 2dini, SDF, Particles, a
+///   subwob): a dive within this dive has no picture to show yet;
+/// - **a link to another node by id** (Uncrop's Crop, a loop's ends).
+pub(crate) fn comp_ok(kind: &NodeKind) -> bool {
+    use NodeKind as K;
+    if kind.reader_slot().is_some() || kind.output_count() != 1 || !kind.models().is_empty() {
+        return false;
+    }
+    !matches!(
+        kind,
+        K::Read { .. }
+            | K::GraphBake { .. }
+            | K::Write(_)
+            | K::Blender(_)
+            | K::CorridorKey(_)
+            | K::Sammie(_)
+            | K::Paint(_)
+            | K::Cryptomatte(_)
+            | K::ChannelSelect(_)
+            | K::Stabilize(_)
+            | K::CamTrack(_)
+            | K::Tracker(_)
+            | K::PlanarTrack(_)
+            | K::Flow(_)
+            | K::Rifetime(_)
+            | K::FrameFix(_)
+            | K::Upscale(_)
+            | K::HdrCnn(_)
+            | K::SeedVr(_)
+            | K::Depth(_)
+            | K::LtxHdr(_)
+            | K::GenAi(_)
+            | K::GenAiStep(_)
+            | K::Prompt(_)
+            | K::Camera3D(_)
+            | K::Card3D(_)
+            | K::Scene3D(_)
+            | K::Render3D(_)
+            | K::Env(_)
+            | K::Splat(_)
+            | K::Starfield(_)
+            | K::Breakout(_)
+            | K::Recombine(_)
+            | K::Extract(_)
+            | K::Noise(_)
+            | K::Geo(_)
+            | K::Sdf(_)
+            | K::Particles(_)
+            | K::Custom { .. }
+            | K::Field(_)
+            | K::GeoNode(_)
+            | K::SdfNode(_)
+            | K::ParticleNode(_)
+            | K::RotoNode(_)
+            | K::Uncrop(_)
+            | K::LoopIn
+            | K::LoopOut(_)
+            | K::Dot { .. }
+            // A Spline is a step too, but its own kind (`Op::Shape`).
+            | K::Spline(_)
+    )
+}
 
 pub(crate) fn comp_name(kind: &NodeKind) -> Option<&'static str> {
-    match kind {
-        NodeKind::Transform(_) => Some("Transform"),
-        NodeKind::Reformat(_) => Some("Reformat"),
-        NodeKind::SoftCrop(_) => Some("Crop"),
-        NodeKind::Freeze(_) => Some("Freeze"),
-        _ => None,
-    }
+    comp_ok(kind).then(|| kind.name())
 }
 
 /// The comp node an `Op::Comp` carries; a Transform that does nothing when
@@ -269,19 +332,23 @@ pub(crate) fn comp_node(node: &serde_json::Value) -> crate::editor::ENode {
 /// Does step `i` carry a matte (a Spline, a matte input, or comp nodes
 /// below one)? Its capture takes coverage, not a picture.
 pub(crate) fn step_is_matte(steps: &[genai::Step], i: usize) -> bool {
-    let mut i = i;
-    for _ in 0..64 {
+    fn go(steps: &[genai::Step], i: usize, depth: usize) -> bool {
         match steps.get(i).map(|s| &s.op) {
-            Some(Op::Shape { .. }) => return true,
-            Some(Op::Input { matte, .. }) => return *matte,
-            Some(Op::Comp { .. }) => match steps[i].inputs.first().copied().flatten() {
-                Some(j) => i = j,
-                None => return false,
-            },
-            _ => return false,
+            Some(Op::Shape { .. }) => true,
+            Some(Op::Input { matte, .. }) => *matte,
+            Some(Op::Comp { node, .. }) if depth < 64 => {
+                let kind = comp_node(node).kind;
+                // A matte by kind (a key, a matte op), or a node that
+                // carries whatever pipe it is given, below a matte.
+                kind.output_kind() == engine::graph::PortKind::Mask
+                    || (kind.input_count() > 0
+                        && kind.follows_pipe(0)
+                        && steps[i].inputs.first().copied().flatten().is_some_and(|j| go(steps, j, depth + 1)))
+            }
+            _ => false,
         }
     }
-    false
+    go(steps, i, 0)
 }
 
 /// Put the comp nodes step `i` needs into `comp` (the graph the pipeline
@@ -315,9 +382,10 @@ pub(crate) fn stand_in(
             n.pos = park;
             if !comp.nodes.contains_key(&id) {
                 comp.nodes.insert(id, n);
-                let src = steps[i].inputs.first().copied().flatten().and_then(|j| stand_in(comp, owner, steps, j, fmt));
-                if let Some(src) = src {
-                    comp.edges.push((id, 0, src));
+                for (port, src) in steps[i].inputs.clone().into_iter().enumerate() {
+                    if let Some(src) = src.and_then(|j| stand_in(comp, owner, steps, j, fmt)) {
+                        comp.edges.push((id, port, src));
+                    }
                 }
             }
             Some(id)

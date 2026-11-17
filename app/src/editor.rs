@@ -271,6 +271,28 @@ pub fn offered_in(
     }
 }
 
+/// Is this menu entry on offer in the graph being edited? Its category's
+/// world (`offered_in`) — and, inside a GenAI Pipeline, every comp node
+/// that can sit between its inputs and its models
+/// (`genaiui::comp_ok`, plus a Spline to draw a matte with).
+pub fn entry_offered(
+    e: &NodeEntry,
+    in_noise: bool,
+    in_geo: bool,
+    in_sdf: bool,
+    in_particles: bool,
+    in_genai: bool,
+    in_roto: bool,
+) -> bool {
+    if offered_in(e.cat, in_noise, in_geo, in_sdf, in_particles, in_genai, in_roto) {
+        return true;
+    }
+    in_genai && offered_in(e.cat, false, false, false, false, false, false) && {
+        let k = (e.make)(0);
+        matches!(k, NodeKind::Spline(_)) || crate::genaiui::comp_ok(&k)
+    }
+}
+
 /// A fresh particle-graph node of the kind named, from the engine's
 /// catalog.
 fn particle_of(name: &str) -> NodeKind {
@@ -1168,16 +1190,6 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         let make = move |_| NodeKind::GenAiStep(op.clone());
         NodeEntry { cat: GenAiStep, label, reader: false, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
     }));
-    // A matte drawn in there: a real Spline (`genai::Op::Shape`).
-    v.push(e(GenAiStep, "Spline", false, |_| NodeKind::Spline(SplineParams::default())));
-    // And the comp nodes that may sit between its inputs and its models
-    // (`genai::Op::Comp`): the same nodes the comp's own menu makes.
-    let comp: Vec<NodeEntry> = crate::genaiui::COMP_NODES
-        .iter()
-        .filter_map(|l| v.iter().find(|e| e.label == *l && !matches!(e.cat, GeoModify | Sdf)))
-        .map(|e| NodeEntry { cat: GenAiStep, label: e.label, reader: e.reader, make: e.make.clone(), status: e.status })
-        .collect();
-    v.extend(comp);
     v
 }
 
@@ -8128,7 +8140,7 @@ impl NodeEditor {
                     let min_status = graph.node_status_min;
                     let catalog: Vec<NodeEntry> = node_catalog()
                         .into_iter()
-                        .filter(|e| offered_in(e.cat, in_noise, in_geo, in_sdf, in_particles, in_genai, in_roto))
+                        .filter(|e| entry_offered(e, in_noise, in_geo, in_sdf, in_particles, in_genai, in_roto))
                         .filter(|e| min_status.admits(e.status))
                         .collect();
                     for cat in NodeCat::ALL {
@@ -10719,7 +10731,7 @@ impl NodeEditor {
                                 .into_iter()
                                 .chain(search_aliases())
                                 .filter(|e| {
-                                    offered_in(e.cat, self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai, self.in_roto)
+                                    entry_offered(e, self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai, self.in_roto)
                                 })
                                 .filter(|e| min_status.admits(e.status))
                                 .map(|e| {
