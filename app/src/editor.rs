@@ -1170,6 +1170,14 @@ pub fn node_catalog() -> Vec<NodeEntry> {
     }));
     // A matte drawn in there: a real Spline (`genai::Op::Shape`).
     v.push(e(GenAiStep, "Spline", false, |_| NodeKind::Spline(SplineParams::default())));
+    // And the comp nodes that may sit between its inputs and its models
+    // (`genai::Op::Comp`): the same nodes the comp's own menu makes.
+    let comp: Vec<NodeEntry> = crate::genaiui::COMP_NODES
+        .iter()
+        .filter_map(|l| v.iter().find(|e| e.label == *l && !matches!(e.cat, GeoModify | Sdf)))
+        .map(|e| NodeEntry { cat: GenAiStep, label: e.label, reader: e.reader, make: e.make.clone(), status: e.status })
+        .collect();
+    v.extend(comp);
     v
 }
 
@@ -13735,6 +13743,9 @@ mod catalog_tests {
             }
         }
         beta.sort_unstable();
+        // Transform is offered twice: in the comp, and inside a GenAI
+        // Pipeline (the same node, `genaiui::COMP_NODES`).
+        beta.dedup();
         assert_eq!(beta, ["CornerPin", "Transform"]);
         // Plugins, tools and controls are alpha too.
         let custom = NodeKind::Custom { type_id: "x".into(), params: Default::default() };

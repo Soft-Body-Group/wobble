@@ -216,12 +216,22 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 let what = if *matte { "matte" } else { "image" };
                 let tag = input_tag(*matte, *nth, *clip);
                 if *clip {
+                    if !p.input_is_read(i) {
+                        keys[i] = h(&["input-through", &tag]);
+                        continue;
+                    }
                     let c = inputs.clips.get(input).ok_or(format!(
                         "the pipeline reads the node's {what} input {} as a clip, and none was captured",
                         input + 1
                     ))?;
                     (h(&[&tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
                 } else {
+                    if !p.input_is_read(i) {
+                        // Read only through Comp nodes, whose own render
+                        // carries its pixels: nothing of its own to key.
+                        keys[i] = h(&["input-through", &tag]);
+                        continue;
+                    }
                     let r = inputs.pics.get(input).ok_or(format!(
                         "the pipeline reads the node's {what} input {}, and nothing is wired into it",
                         input + 1
@@ -230,7 +240,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 }
             }
             // Keyed on the pixels the host rendered, like an Input.
-            Op::Shape { clip, .. } => {
+            Op::Shape { clip, .. } | Op::Comp { clip, .. } => {
                 if *clip {
                     let c = inputs.shape_clips.get(&i).ok_or("a Spline inside the pipeline was not rendered as a clip")?;
                     (h(&["shape-clip", &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
@@ -940,6 +950,8 @@ fn execute(
         let key = &plan.keys[i];
         let v = match &p.steps[i].op {
             Op::Prompt { text } => Val::Text(text.clone()),
+            // Read only through Comp nodes: their render carries it.
+            Op::Input { .. } if !p.input_is_read(i) => Val::Text(String::new()),
             Op::Input { input, clip, .. } => {
                 let (bytes, file) = if *clip {
                     let c = inputs.clips.get(input).ok_or_else(|| anyhow!("missing input clip"))?;
@@ -954,7 +966,7 @@ fn execute(
                 };
                 Val::Image(path)
             }
-            Op::Shape { clip, .. } => {
+            Op::Shape { clip, .. } | Op::Comp { clip, .. } => {
                 let (bytes, file) = if *clip {
                     let c = inputs.shape_clips.get(&i).ok_or_else(|| anyhow!("missing shape clip"))?;
                     (&c.bytes, "input.mp4")

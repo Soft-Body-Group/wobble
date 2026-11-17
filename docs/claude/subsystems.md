@@ -1564,6 +1564,16 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `shape_clips`. A step's "mask" port is `PortKind::Mask` and a matte
   Input gives Mask; `from_editor` walks through any converter the editor
   bridged in.
+- **Comp nodes inside** (`Op::Comp { kind, node, clip }`,
+  `genaiui::COMP_NODES`: Transform, Reformat, Crop, Freeze): the Shape
+  mechanism with one input port. A Comp may follow only what the host
+  can render (an Input, a Shape, another Comp; `Pipeline::plan` refuses a
+  model's result). `genaiui::stand_in` builds the whole chain in the comp
+  (an Input stands for whatever is wired into that input of the node) and
+  the terminal stand-in is captured; `step_is_matte` decides coverage vs
+  picture. An Input read ONLY through Comps is not captured on its own
+  (`Pipeline::reads` / `input_is_read`). Adding a kind = `COMP_NODES`,
+  `comp_name`, and `Op::name`'s match.
 - **Clips** (an `Op::Input` with `clip` on, `Task::VideoEdit` /
   `VideoInpaint`): that input over `Pipeline::clip_seconds` (all clip
   Inputs share one length, `set_clip_seconds`) from the playhead, on the

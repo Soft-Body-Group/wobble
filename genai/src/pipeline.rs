@@ -98,6 +98,19 @@ pub enum Op {
         #[serde(default)]
         clip: bool,
     },
+    /// A comp node that WORKS ON a picture inside the pipeline (a
+    /// Transform, Reformat, Crop, Freeze), carried whole like a `Shape`.
+    /// Its one port takes what the host can render: an Input, a Shape or
+    /// another Comp (never a model's result, which only exists mid-run).
+    /// The host renders it when the run starts, through stand-ins of the
+    /// whole chain above it. `kind` is the node's type name, for the
+    /// label; `clip` is set by the host from what it feeds.
+    Comp {
+        kind: String,
+        node: serde_json::Value,
+        #[serde(default)]
+        clip: bool,
+    },
     /// LEGACY (read from old files, converted by `Pipeline::normalize`
     /// into an `Input`, never run): the host node's image input.
     Reference,
@@ -221,7 +234,7 @@ impl Op {
             | Op::Second
             | Op::ClipIn { .. }
             | Op::MatteClip => vec![],
-            Op::Output => vec![(Pipe::Image, "image")],
+            Op::Output | Op::Comp { .. } => vec![(Pipe::Image, "image")],
             Op::Template { .. } => vec![(Pipe::Text, "a"), (Pipe::Text, "b")],
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
@@ -245,7 +258,9 @@ impl Op {
             }
             Op::Output => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
-            Op::Input { clip: true, .. } | Op::Shape { clip: true, .. } => Some(Pipe::Video),
+            Op::Input { clip: true, .. } | Op::Shape { clip: true, .. } | Op::Comp { clip: true, .. } => {
+                Some(Pipe::Video)
+            }
             Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_3d()) => {
                 Some(Pipe::Scene)
             }
@@ -261,6 +276,11 @@ impl Op {
     /// May a step whose output is `pipe` feed input `port`? The same pipe,
     /// or a video into Output (the node's picture may be a movie).
     pub fn accepts(&self, port: usize, pipe: Pipe) -> bool {
+        // A Comp reads the host's render of what is above it, still or
+        // clip alike (whether IT is a clip is its own flag).
+        if matches!(self, Op::Comp { .. }) {
+            return port == 0 && matches!(pipe, Pipe::Image | Pipe::Video);
+        }
         match self.ports().get(port) {
             Some(&(want, _)) => {
                 want == pipe || (matches!(self, Op::Output) && matches!(pipe, Pipe::Video | Pipe::Scene))
@@ -284,6 +304,13 @@ impl Op {
             Op::Input { matte: false, clip: true, .. } => "Image Clip In",
             Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
             Op::Shape { .. } => "Spline",
+            Op::Comp { kind, .. } => match kind.as_str() {
+                "Transform" => "Transform",
+                "Reformat" => "Reformat",
+                "Crop" => "Crop",
+                "Freeze" => "Freeze",
+                _ => "Comp Node",
+            },
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
@@ -321,6 +348,7 @@ impl Op {
             }
             Op::Shape { clip: false, .. } => "spline".into(),
             Op::Shape { clip: true, .. } => "spline clip".into(),
+            Op::Comp { kind, .. } => kind.to_lowercase(),
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
@@ -926,6 +954,15 @@ impl Pipeline {
                 return Err(format!("this build does not know the model \"{model}\""));
             }
         }
+        if let Op::Comp { .. } = &step.op {
+            let src = step.inputs.first().copied().flatten().and_then(|j| self.steps.get(j));
+            if src.is_some_and(|s| !matches!(s.op, Op::Input { .. } | Op::Shape { .. } | Op::Comp { .. })) {
+                return Err(format!(
+                    "{} works on the node's inputs (or a Spline, or another such node): a model's result cannot feed it yet",
+                    step.op.name()
+                ));
+            }
+        }
         let ports = step.op.ports();
         for (k, (_, name)) in ports.iter().enumerate() {
             match step.inputs.get(k).copied().flatten() {
@@ -958,13 +995,23 @@ impl Pipeline {
     /// captured, and its input need not be wired.
     pub fn reads(&self) -> Vec<(usize, bool)> {
         let Some(Ok(order)) = self.output().map(|o| self.plan(o)) else { return vec![] };
+        // An Input read only by Comp nodes is rendered as part of THEIR
+        // capture (the host renders the chain), never on its own.
+        let direct = |i: usize| {
+            order.iter().any(|&j| !matches!(self.steps[j].op, Op::Comp { .. }) && self.steps[j].inputs.contains(&Some(i)))
+        };
         order
-            .into_iter()
-            .filter_map(|i| match self.steps[i].op {
-                Op::Input { input, clip, .. } => Some((input, clip)),
+            .iter()
+            .filter_map(|&i| match self.steps[i].op {
+                Op::Input { input, clip, .. } if direct(i) => Some((input, clip)),
                 _ => None,
             })
             .collect()
+    }
+    /// Is Input step `i` captured on its own by a run (see `reads`)?
+    pub fn input_is_read(&self, i: usize) -> bool {
+        matches!(self.steps.get(i).map(|s| &s.op), Some(Op::Input { input, .. })
+            if self.reads().iter().any(|r| r.0 == *input))
     }
     /// The mattes drawn inside that a run reads — the Shape steps on the
     /// way to Output, as (step, clip) — in plan order.
@@ -973,7 +1020,7 @@ impl Pipeline {
         order
             .into_iter()
             .filter_map(|i| match self.steps[i].op {
-                Op::Shape { clip, .. } => Some((i, clip)),
+                Op::Shape { clip, .. } | Op::Comp { clip, .. } => Some((i, clip)),
                 _ => None,
             })
             .collect()

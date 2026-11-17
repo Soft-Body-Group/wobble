@@ -145,8 +145,11 @@ pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
         // A Shape is the comp node it carries (a Spline, keys and all), so
         // its own panel and viewer gizmo edit it in here.
         let node = match &s.op {
-            Op::Shape { node, .. } => {
-                let mut n = shape_node(node);
+            Op::Shape { node, .. } | Op::Comp { node, .. } => {
+                let mut n = match &s.op {
+                    Op::Comp { .. } => comp_node(node),
+                    _ => shape_node(node),
+                };
                 n.pos = pos;
                 n
             }
@@ -190,7 +193,13 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
             let op = match &n.kind {
                 NodeKind::GenAiStep(op) => op.clone(),
                 // A matte drawn in here, carried whole.
-                _ => Op::Shape { node: serde_json::to_value(n).unwrap_or_default(), clip: false },
+                NodeKind::Spline(_) => Op::Shape { node: serde_json::to_value(n).unwrap_or_default(), clip: false },
+                // A comp node working on a picture, the same.
+                k => Op::Comp {
+                    kind: comp_name(k).unwrap_or("Transform").into(),
+                    node: serde_json::to_value(n).unwrap_or_default(),
+                    clip: false,
+                },
             };
             genai::Step { at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()], op }
         })
@@ -200,11 +209,22 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
         .iter()
         .filter_map(|&(dst, port, src)| Some((index(dst)?, port, source(src)?)))
         .collect();
-    // A Shape wired into a video port is rendered as a clip.
-    for &(to, port, from) in &edges {
-        let video = matches!(steps[to].op.ports().get(port), Some((genai::Pipe::Video, _)));
-        if let (true, Op::Shape { clip, .. }) = (video, &mut steps[from].op) {
-            *clip = true;
+    // A Shape or a comp node wired into a video port is rendered as a
+    // clip, and so is everything of the kind above it.
+    loop {
+        let mut changed = false;
+        for &(to, port, from) in &edges {
+            let wants = match &steps[to].op {
+                Op::Comp { clip, .. } => *clip && port == 0,
+                op => matches!(op.ports().get(port), Some((genai::Pipe::Video, _))),
+            };
+            if let (true, Op::Shape { clip, .. } | Op::Comp { clip, .. }) = (wants, &mut steps[from].op) {
+                changed |= !*clip;
+                *clip = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
     for (to, port, from) in edges {
@@ -219,7 +239,91 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
 /// Is this dive node a pipeline step? A step proper, or a comp node the
 /// pipeline carries as a `Shape` (a Spline).
 pub(crate) fn is_step(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::GenAiStep(_) | NodeKind::Spline(_))
+    matches!(kind, NodeKind::GenAiStep(_) | NodeKind::Spline(_)) || comp_name(kind).is_some()
+}
+
+/// The comp nodes a pipeline may hold between its inputs and its models
+/// (`Op::Comp`), by type name. One list: the add menu in there, the round
+/// trip and the stand-ins all ask it.
+pub const COMP_NODES: [&str; 4] = ["Transform", "Reformat", "Crop", "Freeze"];
+
+pub(crate) fn comp_name(kind: &NodeKind) -> Option<&'static str> {
+    match kind {
+        NodeKind::Transform(_) => Some("Transform"),
+        NodeKind::Reformat(_) => Some("Reformat"),
+        NodeKind::SoftCrop(_) => Some("Crop"),
+        NodeKind::Freeze(_) => Some("Freeze"),
+        _ => None,
+    }
+}
+
+/// The comp node an `Op::Comp` carries; a Transform that does nothing when
+/// the JSON is not one this build reads.
+pub(crate) fn comp_node(node: &serde_json::Value) -> crate::editor::ENode {
+    serde_json::from_value::<crate::editor::ENode>(node.clone())
+        .ok()
+        .filter(|n| comp_name(&n.kind).is_some())
+        .unwrap_or_else(|| crate::editor::ENode::new(NodeKind::Transform(Default::default()), egui::Pos2::ZERO))
+}
+
+/// Does step `i` carry a matte (a Spline, a matte input, or comp nodes
+/// below one)? Its capture takes coverage, not a picture.
+pub(crate) fn step_is_matte(steps: &[genai::Step], i: usize) -> bool {
+    let mut i = i;
+    for _ in 0..64 {
+        match steps.get(i).map(|s| &s.op) {
+            Some(Op::Shape { .. }) => return true,
+            Some(Op::Input { matte, .. }) => return *matte,
+            Some(Op::Comp { .. }) => match steps[i].inputs.first().copied().flatten() {
+                Some(j) => i = j,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Put the comp nodes step `i` needs into `comp` (the graph the pipeline
+/// node `owner` lives in) as STAND-INS, wired as the steps are: a Shape, a
+/// Comp and every such step above it, an Input standing for whatever is
+/// wired into that input of `owner`. Returns the node to render for step
+/// `i`. Ids are `SHAPE_IDS + step`, so they are found and removed by id.
+pub(crate) fn stand_in(
+    comp: &mut crate::editor::EditorGraph,
+    owner: u64,
+    steps: &[genai::Step],
+    i: usize,
+    fmt: Option<(u32, u32)>,
+) -> Option<u64> {
+    let id = SHAPE_IDS + i as u64;
+    // Far off the canvas for the moment it exists.
+    let park = egui::pos2(1.0e7, 1.0e7 + i as f32 * 100.0);
+    match &steps.get(i)?.op {
+        Op::Input { input, .. } => comp.input_of(owner, *input),
+        Op::Shape { node, .. } => {
+            let mut n = shape_node(node);
+            if let NodeKind::Spline(sp) = &mut n.kind {
+                sp.format = sp.format.or(fmt);
+            }
+            n.pos = park;
+            comp.nodes.insert(id, n);
+            Some(id)
+        }
+        Op::Comp { node, .. } => {
+            let mut n = comp_node(node);
+            n.pos = park;
+            if !comp.nodes.contains_key(&id) {
+                comp.nodes.insert(id, n);
+                let src = steps[i].inputs.first().copied().flatten().and_then(|j| stand_in(comp, owner, steps, j, fmt));
+                if let Some(src) = src {
+                    comp.edges.push((id, 0, src));
+                }
+            }
+            Some(id)
+        }
+        _ => None,
+    }
 }
 
 /// The comp node a `Shape` step carries; an empty Spline when the JSON is
@@ -718,6 +822,9 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
         }
         Op::Shape { .. } => {
             ui.label(small("a matte drawn inside the pipeline: open it (Enter) to edit the Spline"));
+        }
+        Op::Comp { .. } => {
+            ui.label(small("a comp node inside the pipeline: open it (Enter) to edit it"));
         }
         Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
             ui.colored_label(theme::warn(), small("a step from an older build: step out and back in to update it"));
@@ -1409,7 +1516,8 @@ impl Gfx {
         }
         // Mattes drawn inside: rendered from a stand-in node, by step.
         for (step, clip) in pl.shapes() {
-            todo.push((step & 0xff) | SHAPE | MATTE | if clip { CLIP } else { 0 });
+            let matte = if step_is_matte(&pl.steps, step) { MATTE } else { 0 };
+            todo.push((step & 0xff) | SHAPE | matte | if clip { CLIP } else { 0 });
         }
         if !todo.is_empty() {
             if let Some(up) = self.genai_unrun_upstream(node) {
@@ -1488,17 +1596,17 @@ impl Gfx {
     /// so its few frames in the graph are not an undo step. Returns its
     /// id; `genai_drop_stand_ins` takes it out again.
     fn shape_stand_in(&mut self, node: u64, pl: &Pipeline, step: usize) -> Option<u64> {
-        let Op::Shape { node: json, .. } = &pl.steps.get(step)?.op else { return None };
-        let mut n = shape_node(json);
-        let fmt = self.node_resolution_full(node, &mut std::collections::HashSet::new());
-        if let NodeKind::Spline(sp) = &mut n.kind {
-            sp.format = sp.format.or(fmt);
+        if !matches!(pl.steps.get(step)?.op, Op::Shape { .. } | Op::Comp { .. }) {
+            return None;
         }
-        // Far off the canvas for the moment it exists.
-        n.pos = egui::pos2(1.0e7, 1.0e7);
-        let id = SHAPE_IDS + step as u64;
-        self.egraph.nodes.insert(id, n.clone());
-        self.undo_last.nodes.insert(id, n);
+        let fmt = self.node_resolution_full(node, &mut std::collections::HashSet::new());
+        let id = stand_in(&mut self.egraph, node, &pl.steps, step, fmt)?;
+        for (k, n) in self.egraph.nodes.range(SHAPE_IDS..) {
+            self.undo_last.nodes.insert(*k, n.clone());
+        }
+        let edges: Vec<_> = self.egraph.edges.iter().filter(|e| e.0 >= SHAPE_IDS).copied().collect();
+        self.undo_last.edges.retain(|e| e.0 < SHAPE_IDS);
+        self.undo_last.edges.extend(edges);
         Some(id)
     }
 
@@ -1506,7 +1614,9 @@ impl Gfx {
     pub(crate) fn genai_drop_stand_ins(&mut self) {
         if self.egraph.nodes.keys().next_back().is_some_and(|id| *id >= SHAPE_IDS) {
             self.egraph.nodes.retain(|id, _| *id < SHAPE_IDS);
+            self.egraph.edges.retain(|e| e.0 < SHAPE_IDS);
             self.undo_last.nodes.retain(|id, _| *id < SHAPE_IDS);
+            self.undo_last.edges.retain(|e| e.0 < SHAPE_IDS);
         }
     }
 

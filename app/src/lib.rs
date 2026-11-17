@@ -20328,17 +20328,18 @@ impl Gfx {
             let owner = d.from?;
             let mut g = d.graph.clone();
             let viewed = self.egraph.active_view().and_then(|v| self.egraph.node(v));
-            // A Spline drawn in here: its matte, from a stand-in node in
-            // the comp at the pipeline node's format (so it lines up).
-            if let Some(n) = viewed.filter(|n| matches!(n.kind, NodeKind::Spline(_))) {
-                let mut n = n.clone();
-                if let NodeKind::Spline(sp) = &mut n.kind {
-                    sp.format = sp.format.or(self.jobs.genai.dive_fmt);
+            // A Spline drawn in here, or a comp node (a Transform, a
+            // Crop…): what it makes, from stand-ins of it and the chain
+            // above it put in the comp, at the pipeline node's format.
+            if viewed.is_some_and(|n| !matches!(n.kind, NodeKind::GenAiStep(_)) && genaiui::is_step(&n.kind)) {
+                let ids: Vec<u64> =
+                    self.egraph.nodes.iter().filter(|(_, n)| genaiui::is_step(&n.kind)).map(|(id, _)| *id).collect();
+                let at = self.egraph.active_view().and_then(|v| ids.iter().position(|&x| x == v));
+                let steps = genaiui::from_editor(&self.egraph);
+                if let Some(id) = at.and_then(|i| genaiui::stand_in(&mut g, owner, &steps, i, self.jobs.genai.dive_fmt)) {
+                    g.view = Some(id);
+                    return Some(g);
                 }
-                let id = genaiui::SHAPE_IDS + 0xfff;
-                g.nodes.insert(id, n);
-                g.view = Some(id);
-                return Some(g);
             }
             let port = viewed.and_then(|n| match &n.kind {
                 NodeKind::GenAiStep(genai::pipeline::Op::Input { input, .. }) => Some(*input),
