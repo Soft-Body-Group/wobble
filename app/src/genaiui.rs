@@ -210,6 +210,14 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
         .iter()
         .filter_map(|&(dst, port, src)| Some((index(dst)?, port, source(src)?)))
         .collect();
+    // An Input wired into a video port is a clip (see `genai_dive_show`).
+    for &(to, port, from) in &edges {
+        let video = !matches!(steps[to].op, Op::Comp { .. })
+            && matches!(steps[to].op.ports().get(port), Some((genai::Pipe::Video, _)));
+        if let (true, Op::Input { clip, .. }) = (video, &mut steps[from].op) {
+            *clip = true;
+        }
+    }
     // A Shape or a comp node wired into a video port is rendered as a
     // clip, and so is everything of the kind above it.
     loop {
@@ -2345,6 +2353,27 @@ impl Gfx {
     pub(crate) fn genai_dive_show(&mut self) {
         if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
             return;
+        }
+        // An Input wired into a model's VIDEO port is read as a clip: it
+        // switches itself, rather than the wire being quietly dropped
+        // for being a still ("needs its video input wired", with the
+        // wire right there). Never switched back: the checkbox does that.
+        let clips: Vec<u64> = self
+            .egraph
+            .edges
+            .iter()
+            .filter(|(dst, port, _)| {
+                matches!(self.egraph.node(*dst).map(|n| &n.kind),
+                    Some(NodeKind::GenAiStep(op)) if matches!(op.ports().get(*port), Some((genai::Pipe::Video, _))))
+            })
+            .map(|e| e.2)
+            .collect();
+        for id in clips {
+            if let Some(NodeKind::GenAiStep(Op::Input { clip, .. })) = self.egraph.node_mut(id).map(|n| &mut n.kind) {
+                if !*clip {
+                    *clip = true;
+                }
+            }
         }
         // A model with a growing list of reference ports (Seedance's
         // reference) always shows one free: `refs` follows the wires.
