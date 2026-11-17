@@ -68,6 +68,9 @@ pub enum Task {
     /// prompt + image + a SECOND picture (the node's fourth input) -> the
     /// image edited with the second to draw on: its colour, style, content.
     EditRef,
+    /// prompt (which object) + image -> that object in 3D, as a Gaussian
+    /// splat (`.ply`). Not a picture: the take becomes a Splat node.
+    ImageTo3D,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -149,6 +152,9 @@ pub enum Dialect {
     /// with a fixed instruction ahead of the typed prompt: what makes a
     /// general edit model a ready-made node.
     GeminiRef { instruction: &'static str },
+    /// SAM 3D Objects: `image_url`, `prompt` (the object to lift, found by
+    /// SAM 3), `seed`; the splat is `gaussian_splat`.
+    Sam3d,
 }
 
 /// What the Colour Transfer node asks for.
@@ -215,6 +221,7 @@ impl Dialect {
                 | Dialect::BriaExpand
                 | Dialect::BriaBackground
                 | Dialect::GeminiRef { .. }
+                | Dialect::Sam3d
         )
     }
 
@@ -249,6 +256,7 @@ impl Dialect {
             (Dialect::Moge, _) => Some("normal_map"),
             (Dialect::Preprocessor, Task::Normals) => Some("normal_map"),
             (Dialect::Preprocessor, Task::Depth) => Some("depth_map"),
+            (Dialect::Sam3d, _) => Some("gaussian_splat"),
             _ => None,
         }
     }
@@ -526,6 +534,18 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: true,
         licence: "Google via fal API terms (commercial use through the API)",
         about: "edit a picture with a second one to draw on: its style, an object in it, its light; the prompt says how",
+    },
+    RemoteModel {
+        id: "fal/sam-3d-objects",
+        label: "SAM 3D Objects",
+        short: "sam 3d",
+        service: Service::Fal,
+        endpoint: "fal-ai/sam-3/3d-objects",
+        dialect: Dialect::Sam3d,
+        task: Task::ImageTo3D,
+        commercial: true,
+        licence: "Meta SAM License via fal (commercial use allowed, with use restrictions)",
+        about: "an object in the picture, named by the prompt (\"chair\"), as a 3D Gaussian splat: lands as a Splat node you can put a Camera on",
     },
     RemoteModel {
         id: "fal/birefnet-v2",
@@ -884,6 +904,7 @@ impl Task {
             Task::VideoUpscale => "video upscale",
             Task::Outpaint => "outpaint",
             Task::EditRef => "edit with a second picture",
+            Task::ImageTo3D => "image to 3D",
         }
     }
 
@@ -895,6 +916,12 @@ impl Task {
     /// Does this task READ a clip (the node's input over a range)?
     pub fn takes_clip(self) -> bool {
         matches!(self, Task::VideoEdit | Task::VideoInpaint)
+    }
+
+    /// Does this task return a 3D capture (a splat file) rather than a
+    /// picture? Its take is shown by a Splat node, not by the GenAI node.
+    pub fn is_3d(self) -> bool {
+        matches!(self, Task::ImageTo3D)
     }
 
     /// Does this task make its input BIGGER? The node then takes the
@@ -910,7 +937,7 @@ impl Task {
         matches!(self, Task::Depth | Task::Normals)
     }
 
-    pub const ALL: [Task; 15] = [
+    pub const ALL: [Task; 16] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -926,6 +953,7 @@ impl Task {
         Task::VideoUpscale,
         Task::Outpaint,
         Task::EditRef,
+        Task::ImageTo3D,
     ];
 }
 
@@ -954,6 +982,15 @@ mod tests {
         // An endpoint is a path on the service; the base URL is the app's.
         for m in CATALOG {
             assert!(!m.endpoint.contains("://") && !m.endpoint.starts_with('/'), "{}", m.id);
+        }
+    }
+
+    /// A 3D take becomes a Splat node, and a Splat node carries no licence
+    /// tag: a research-only 3D model would lose its warning on the way.
+    #[test]
+    fn no_3d_model_is_research_only() {
+        for m in CATALOG.iter().filter(|m| m.task.is_3d()) {
+            assert!(m.commercial, "{}: give Splat a licence tag first", m.id);
         }
     }
 

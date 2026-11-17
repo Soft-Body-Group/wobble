@@ -3594,6 +3594,15 @@ final grade. *Nano Banana Pro edit, two pictures* is the general form: the
 prompt says what to take from the second picture. Inside a GenAI Pipeline
 the fourth input is the **Second Input** step.
 
+**Image to 3D.** *SAM 3D Objects* lifts one object out of the picture, the
+one the prompt names ("chair", "blue car"), as a 3D Gaussian splat. A splat
+is not a picture, so the take lands as a **Splat** node beside the GenAI
+node (same undo step): wire a Camera into it and it renders like any
+capture. The GenAI node itself keeps passing its input through; its history
+shows the take as `3D`, and **load** makes another Splat node of it. There
+is no video-to-3D model: fal lists none that answers today (a clip's camera
+is CameraTrack's job, and its depth the Depth node's).
+
 **Upscalers make the node bigger.** A node whose picture comes out of an
 upscaler (Real-ESRGAN, Topaz Upscale / High Fidelity / Recovery / Redefine,
 Clarity, SeedVR2, Recraft Crisp, and Topaz or SeedVR2 on a clip) takes the

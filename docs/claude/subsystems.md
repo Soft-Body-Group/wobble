@@ -1409,6 +1409,14 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `Task::Outpaint` resizes like an upscaler; Bria Expand's canvas is
   computed from the picture's real size at run time (`run::expand_canvas`;
   the request builder only has the comp's, which is what a quote uses).
+- **A 3D take is a FILE the node cannot draw.** `Task::is_3d()` models
+  output `Pipe::Scene` (only Output accepts it) and their take is
+  `result.ply` (`Take::is_splat`, named by the task: the download has no
+  useful content type). `genai_show` never loads one; on landing
+  `genai_take_to_splat` adds a `NodeKind::Splat` of the path beside the
+  node, once per capture. LICENCE: a Splat node carries no licence tag, so
+  only catalog rows with `commercial: true` may be `is_3d()` until Splat
+  can carry one (rule 10; `no_3d_model_is_research_only` holds the line).
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

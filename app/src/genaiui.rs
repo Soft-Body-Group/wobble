@@ -1442,6 +1442,12 @@ impl Gfx {
                 }
             }
             self.genai_show(node);
+            // A 3D take is nothing this node can draw: it lands as a Splat
+            // node beside it, in the same undo step.
+            let k = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.take);
+            if let Some(k) = k {
+                self.genai_take_to_splat(node, k);
+            }
             // The relay balance moved.
             if matches!(self.jobs.genai.cfg.route, Route::Relay) {
                 self.jobs.genai.account = Account::Unknown;
@@ -1533,6 +1539,8 @@ impl Gfx {
         // A video take in a build that cannot decode one is not loaded: the
         // panel says why, and the node passes its input through.
         let want = want.filter(|p| !genai::pipeline::is_video_file(&p.to_string_lossy()) || video_ok());
+        // A 3D take is a Splat node's to show (`hist::genai_take_to_splat`).
+        let want = want.filter(|p| !genai::pipeline::is_splat_file(&p.to_string_lossy()));
         match want {
             Some(path) if path.exists() => {
                 let s = path.to_string_lossy().into_owned();

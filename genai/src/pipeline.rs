@@ -32,6 +32,8 @@ pub enum Pipe {
     /// video ports take one: an image port fed a movie would be a request
     /// the provider rejects after the steps above it were billed.
     Video,
+    /// A 3D capture (a Gaussian splat file). Only Output takes one.
+    Scene,
 }
 
 /// One step of a pipeline.
@@ -193,6 +195,9 @@ impl Op {
             Op::Prompt { .. } | Op::PromptIn => Some(Pipe::Text),
             Op::Output => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
+            Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_3d()) => {
+                Some(Pipe::Scene)
+            }
             Op::Generate { model, .. }
                 if catalog::get(model).is_some_and(|m| m.task.is_video()) =>
             {
@@ -207,7 +212,7 @@ impl Op {
     pub fn accepts(&self, port: usize, pipe: Pipe) -> bool {
         match self.ports().get(port) {
             Some(&(want, _)) => {
-                want == pipe || (matches!(self, Op::Output) && pipe == Pipe::Video)
+                want == pipe || (matches!(self, Op::Output) && matches!(pipe, Pipe::Video | Pipe::Scene))
             }
             None => false,
         }
@@ -281,7 +286,7 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
             vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
         }
         Task::VideoUpscale => vec![(Pipe::Video, "video")],
-        Task::Outpaint => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
+        Task::Outpaint | Task::ImageTo3D => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
         Task::EditRef => {
             vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "reference")]
         }
@@ -329,6 +334,12 @@ impl Take {
     pub fn is_video(&self) -> bool {
         is_video_file(&self.file)
     }
+
+    /// A 3D capture rather than a picture: a Splat node shows it, the
+    /// GenAI node that made it passes its input through.
+    pub fn is_splat(&self) -> bool {
+        is_splat_file(&self.file)
+    }
 }
 
 /// The reference cap for a pipeline with an image upscaler in it: enough
@@ -338,6 +349,12 @@ pub const UPSCALE_REF_MP: f32 = 4.2;
 
 /// The extensions a video step's result can come back as.
 pub const VIDEO_EXTS: &[&str] = &["mp4", "mov", "webm"];
+
+/// A Gaussian splat capture, by its name.
+pub fn is_splat_file(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.ends_with(".ply") || n.ends_with(".spz")
+}
 
 pub fn is_video_file(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -815,6 +832,21 @@ mod tests {
             Op::Generate { opts, .. } => assert_eq!(opts, Opts::default()),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn a_3d_step_feeds_output_and_nothing_else() {
+        let mut p = Pipeline::for_model("fal/sam-3d-objects").unwrap();
+        let g = p.model_step().unwrap();
+        assert_eq!(p.steps[g].op.output(), Some(Pipe::Scene));
+        assert!(p.plan(p.output().unwrap()).is_ok(), "wired into Output by for_model");
+        let up = p.push(Op::Generate { model: "fal/esrgan".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        assert!(!p.connect(g, up, 0), "a splat is not a picture");
+        let t = Take {
+            key: "k".into(), file: "result.ply".into(), tick: 0, commercial: true,
+            usd: None, label: String::new(), when: 0, data: false,
+        };
+        assert!(t.is_splat() && !t.is_video());
     }
 
     #[test]

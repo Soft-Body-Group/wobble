@@ -249,6 +249,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     // video price is billed on.
                     Task::VideoEdit | Task::VideoInpaint => in_mp(1).unwrap_or(0.0),
                     Task::VideoUpscale => in_mp(0).unwrap_or(0.0) * (opts.scale as f64).powi(2),
+                    // A splat has no megapixels.
+                    Task::ImageTo3D => 0.0,
                 };
                 (h(&parts), out_mp)
             }
@@ -404,6 +406,9 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::Sam3d) => json!({
+            "image_url": img(1)?, "prompt": prompt(), "seed": seed,
+        }),
         (_, Dialect::BriaExpand) => {
             // The comp's size stands in for the picture's until the run
             // knows it (`expand_canvas`): a quote sends no pixels.
@@ -517,7 +522,9 @@ pub fn request_clip(
         // names.
         (Task::Depth | Task::Normals | Task::Albedo, _) => json!({ "image_url": img(0)?, "seed": seed }),
         // A future outpaint or two-picture edit in FLUX's field names.
-        (Task::Outpaint, _) => json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed }),
+        (Task::Outpaint | Task::ImageTo3D, _) => {
+            json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed })
+        }
         (Task::EditRef, _) => json!({
             "prompt": prompt(), "image_urls": [img(1)?, img(2)?], "seed": seed,
         }),
@@ -873,7 +880,10 @@ fn execute(
                     };
                     let _ = tx.send(Event::Step(i, StepState::Fetching));
                     let (bytes, ct) = web.download(&url)?;
-                    let file = format!("result.{}", image::ext_for(ct.as_deref(), &url));
+                    // A splat comes back as an octet stream, often from a
+                    // URL with no extension: the task names the file.
+                    let ext = if m.task.is_3d() { "ply" } else { image::ext_for(ct.as_deref(), &url) };
+                    let file = format!("result.{ext}");
                     let usd = ran.charged_usd.or(max);
                     if let Some(u) = usd {
                         *charged.get_or_insert(0.0) += u;
@@ -1084,6 +1094,17 @@ mod tests {
         let i = request(m("fal/gpt-image-2-inpaint"), &o, 7, (2048, 1080), Some("p"), &[None, img, mask]).unwrap();
         assert_eq!(i["image_urls"], json!(["data:x"]));
         assert_eq!(i["mask_url"], "data:m");
+    }
+
+    #[test]
+    fn sam_3d_names_its_object_and_hands_back_a_splat() {
+        let two = [None, Some("data:a".to_string())];
+        let sam = m("fal/sam-3d-objects");
+        let r = request(sam, &Opts::default(), 7, (1000, 500), Some("chair"), &two).unwrap();
+        assert_eq!((r["prompt"].as_str(), r["image_url"].as_str(), r["seed"].as_u64()), (Some("chair"), Some("data:a"), Some(7)));
+        let out = json!({"gaussian_splat": {"url": "https://x/scene"}, "model_glb": {"url": "https://x/m.glb"}});
+        let got = service::output_image_at(&out, sam.dialect.output_key(sam.task));
+        assert_eq!(got, Some(("https://x/scene".to_string(), false)));
     }
 
     #[test]

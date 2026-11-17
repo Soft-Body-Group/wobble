@@ -106,7 +106,10 @@ fn thumb(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
     {
         let (path, ctx) = (path.to_path_buf(), ctx.clone());
         std::thread::spawn(move || {
-            let ok = (!genai::pipeline::is_video_file(&path.to_string_lossy()) || video_ok()) && path.exists();
+            let name = path.to_string_lossy();
+            let ok = (!genai::pipeline::is_video_file(&name) || video_ok())
+                && !genai::pipeline::is_splat_file(&name)
+                && path.exists();
             let img = if ok { decode(&path) } else { None };
             thumbs().lock().unwrap().done.push((path, img));
             ctx.request_repaint();
@@ -192,13 +195,13 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
             let on_disk = !v.take_missing;
             let r = ui
                 .add_enabled(on_disk, egui::Button::new(small("load")).small())
-                .on_hover_text("make a Load node of this take beside the node");
+                .on_hover_text("make a Load node of this take beside the node (a Splat node, for a 3D take)");
             crate::widgets::note_rect(ui, button_id(node, "load"), r.rect);
             if r.clicked() {
                 act = Some(Action::TakeToLoad { take: picked, wire: false });
             }
             let r = ui
-                .add_enabled(on_disk, egui::Button::new(small("feed")).small())
+                .add_enabled(on_disk && !pl.takes[picked].is_splat(), egui::Button::new(small("feed")).small())
                 .on_hover_text("use this take as the node's image input: the next run's reference");
             crate::widgets::note_rect(ui, button_id(node, "feed"), r.rect);
             if r.clicked() {
@@ -236,7 +239,7 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
                                 pt.text(
                                     rect.center(),
                                     egui::Align2::CENTER_CENTER,
-                                    format!("{}", k + 1),
+                                    if t.is_splat() { "3D".to_string() } else { format!("{}", k + 1) },
                                     egui::FontId::proportional(10.0),
                                     ui.visuals().weak_text_color(),
                                 );
@@ -278,6 +281,9 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
         if v.take_missing {
             ui.colored_label(theme::warn(), small("this take's file is not on this machine; running again bills again"));
         }
+        if pl.picked().is_some_and(|t| t.is_splat()) {
+            ui.weak(small("a 3D take: the Splat node made from it shows it; this node passes its input through"));
+        }
         if pl.picked().is_some_and(|t| t.is_video()) && !video_ok() {
             // Loud, never a silent black: the node passes its input through.
             ui.colored_label(theme::error(), small(NO_VIDEO));
@@ -301,6 +307,9 @@ impl crate::Gfx {
             self.render_status = Some("that take's file is not on this machine".into());
             return;
         }
+        if genai::pipeline::is_splat_file(&path.to_string_lossy()) {
+            return self.genai_splat_node(node, &path);
+        }
         let s = path.to_string_lossy().into_owned();
         let slot = self.next_read_slot;
         self.next_read_slot += 1;
@@ -313,6 +322,36 @@ impl crate::Gfx {
         if wire {
             self.egraph.connect(node, 0, id);
         }
+        self.playback_dirty = true;
+    }
+}
+
+impl crate::Gfx {
+    /// A 3D take that just landed (or was picked again by a cached re-run)
+    /// becomes a Splat node beside `node`. Once: a capture some Splat node
+    /// already shows is left alone. Nothing happens for a picture.
+    pub(crate) fn genai_take_to_splat(&mut self, node: u64, k: usize) {
+        let Some(path) = self.egraph.node(node).and_then(|n| {
+            let t = super::params(&n.kind)?.pipeline.takes.get(k)?;
+            t.is_splat().then(|| t.path(&config::results_dir()))
+        }) else {
+            return;
+        };
+        let s = path.to_string_lossy();
+        let shown = self.egraph.nodes.values().any(|n| {
+            matches!(&n.kind, engine::graph::NodeKind::Splat(p) if p.path == s)
+        });
+        if !shown && path.exists() {
+            self.genai_splat_node(node, &path);
+        }
+    }
+
+    /// A Splat node of the capture at `path`, to the right of `node`.
+    fn genai_splat_node(&mut self, node: u64, path: &Path) {
+        let Some(pos) = self.egraph.node(node).map(|n| n.pos) else { return };
+        let p = engine::graph::SplatParams { path: path.to_string_lossy().into_owned(), ..Default::default() };
+        let id = self.egraph.add(engine::graph::NodeKind::Splat(p), pos + egui::vec2(190.0, 0.0));
+        self.selected = vec![id];
         self.playback_dirty = true;
     }
 }
