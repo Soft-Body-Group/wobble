@@ -3603,6 +3603,16 @@ shows the take as `3D`, and **load** makes another Splat node of it. There
 is no video-to-3D model: fal lists none that answers today (a clip's camera
 is CameraTrack's job, and its depth the Depth node's).
 
+**Templates.** A GenAI Pipeline's panel has a **templates…** menu: whole
+pipelines, ready-made (Clean plate, Restyle the plate, New background
+upscaled, Outpaint the plate, Match a look, Relight, Concept to clip,
+Remove from the clip, and more). Picking one replaces the steps, keeps the
+takes and runs nothing. Each is also in the add menu under its own name.
+**save as** keeps the pipeline as it stands as a template of your own: a
+small JSON file in `~/.wobble/genai-templates`. To share one, send the
+file; dropped into that folder on another machine it is on the shelf. A
+template names models, never keys or URLs.
+
 **Upscalers make the node bigger.** A node whose picture comes out of an
 upscaler (Real-ESRGAN, Topaz Upscale / High Fidelity / Recovery / Redefine,
 Clarity, SeedVR2, Recraft Crisp, and Topaz or SeedVR2 on a clip) takes the

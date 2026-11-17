@@ -409,6 +409,8 @@ pub enum Key {
 
 #[path = "genaihist.rs"]
 pub(crate) mod hist;
+#[path = "genaitmpl.rs"]
+pub(crate) mod tmpl;
 
 // ------------------------------------------------------------ panel
 
@@ -436,6 +438,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Ac
             model_column(&mut cols[0], node, p, v);
         } else {
             pipeline_column(&mut cols[0], p, v);
+            tmpl::menu(&mut cols[0], node, p);
         }
         if let Some(a) = run_column(&mut cols[1], node, p, v) {
             act = Some(a);

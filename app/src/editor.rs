@@ -1147,6 +1147,16 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         let make = move |s| NodeKind::GenAi(engine::graph::GenAiParams::for_model(s, id));
         NodeEntry { cat: Ai, label: m.label, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
     }));
+    // Ready-made GenAI pipelines (`genai::templates`): a GenAI Pipeline
+    // node, already wired.
+    v.extend(crate::genaiui::tmpl::offered_templates().map(|t| {
+        let make = move |s| {
+            let mut p = engine::graph::GenAiParams::new(s);
+            p.pipeline = t.pipeline();
+            NodeKind::GenAi(p)
+        };
+        NodeEntry { cat: Ai, label: t.name, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
+    }));
     // Inside a Roto's dive: a shape is a Spline, a combine a MatteCombine,
     // and an Axis groups and moves them.
     v.push(e(Roto, "Shape", false, |_| NodeKind::Spline(SplineParams::default())));

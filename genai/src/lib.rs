@@ -34,5 +34,6 @@ pub mod pipeline;
 pub mod relay;
 pub mod run;
 pub mod service;
+pub mod templates;
 
 pub use pipeline::{Op, Opts, Pipe, Pipeline, Step, Take};

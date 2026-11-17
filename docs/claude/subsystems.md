@@ -1417,6 +1417,14 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   node, once per capture. LICENCE: a Splat node carries no licence tag, so
   only catalog rows with `commercial: true` may be `is_3d()` until Splat
   can carry one (rule 10; `no_3d_model_is_research_only` holds the line).
+- **Templates are STEPS, nothing else** (`genai::templates`,
+  `app/src/genaitmpl.rs`). Built-ins are code (`BUILTIN`, held by a test to
+  "plans, every port fed, every model known"); the user's are JSON files in
+  `~/.wobble/genai-templates` (`$WOBBLE_GENAI_TEMPLATES`), which is also
+  how one is shared. Applying one replaces `pipeline.steps` and keeps the
+  takes. Each built-in this build can run is also an add-menu entry making
+  a wired GenAI Pipeline node; a template NAME is therefore a node label,
+  and `editor::catalog_tests` will tell you when one steals a search.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).
