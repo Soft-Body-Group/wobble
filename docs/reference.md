@@ -1422,7 +1422,7 @@ fullscreens the image with the node graph on top (there is no quit key — close
 show/hide the properties bar, `Y` curve editor, `A` alpha, Esc back to the
 panelled layout. In the graph, hold `` ` `` for the **node-ops pie** (group,
 unify size, tidy, swap inputs, bypass, frame, region…, ungroup — release
-over one), ⌥` for the global source pie, ⌘` for the region's. `R` or Home frames the canvas under the cursor (graph, viewer, curves), as in Blender.
+over one), ⌥` for the global source pie, ⌘` for the region's. `F` or Home frames the canvas under the cursor (graph, viewer; `R` in the curve editor); in the graph held `R` + drag rotates the selection's layout, as in Blender.
 
 ## Recording a clip
 

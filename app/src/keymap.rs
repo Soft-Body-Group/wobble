@@ -243,6 +243,7 @@ pub enum Act {
     GraphRegionMenu,
     GraphBypass,
     GraphFrame,
+    GraphRotate,
     GraphUnifySize,
     GraphPinPanels,
     GraphPinGizmos,
@@ -823,11 +824,20 @@ pub const DEFS: &[Def] = &[
     def_also(
         Act::GraphFrame,
         "graph.frame",
-        "tap: frame the selection (everything when empty) · hold + drag: rotate its layout",
+        "frame the selection (everything when empty)",
+        Scope::Graph,
+        Binding::plain(Key::F),
+        Exact,
+        Key::Home,
+    ),
+    // Blender's rotate: held + drag orbits the selection's layout.
+    def(
+        Act::GraphRotate,
+        "graph.rotate",
+        "hold + drag: rotate the selection's layout",
         Scope::Graph,
         Binding::plain(Key::R),
         Exact,
-        Key::Home,
     ),
     def(
         Act::GraphUnifySize,
@@ -897,7 +907,7 @@ pub const DEFS: &[Def] = &[
         Binding::plain(Key::T),
         Exact,
     ),
-    // R for range; plain R frames the graph.
+    // R for range; plain R held rotates the selection.
     def(
         Act::GraphRanges,
         "graph.ranges",
@@ -2689,6 +2699,22 @@ mod tests {
         assert_eq!(out.get("graph.tidy").map(String::as_str), Some("cmd+T"));
         install(&BTreeMap::new());
         assert!(overrides().is_empty());
+    }
+
+    /// F frames in the graph as in the viewer, and nothing else in the
+    /// graph (or app-wide) claims plain F; R stays Blender's held rotate.
+    #[test]
+    fn graph_frames_on_f_and_rotates_on_r() {
+        assert_eq!(def_of(Act::GraphFrame).default, Binding::plain(Key::F));
+        assert_eq!(def_of(Act::FrameView).default, Binding::plain(Key::F));
+        assert_eq!(def_of(Act::GraphRotate).default, Binding::plain(Key::R));
+        for d in DEFS {
+            if d.act != Act::GraphFrame
+                && matches!(d.scope, Scope::Graph | Scope::App)
+            {
+                assert_ne!(d.default, Binding::plain(Key::F), "{} clashes with graph frame", d.id);
+            }
+        }
     }
 
     /// Every default binding must be drawable on the keys window's board —

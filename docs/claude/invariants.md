@@ -716,11 +716,12 @@
   every op there gates on `over`; `--test-subwob` caught subwob never
   firing), ⌥` global sources, ⌘` region sources.
 - **A single-letter hotkey belongs to the pane under the cursor.** The
-  graph's editing keys (Delete, `E`, `D`, `U`, `R`) fire only while the graph
+  graph's editing keys (Delete, `E`, `D`, `U`, `F`) fire only while the graph
   is hovered, and `rgbslider::grabbing()` suspends the app's whole hotkey
   block during a slider drag — otherwise the colour axes, which are held
   letters, would also frame the viewer and bypass nodes. Framing lives on
-  `R` (it moved off `F`, which the tint axis needs, then off `M`).
+  `F` in the graph and viewer (the tint axis's held `F` is safe behind
+  `grabbing()`); graph `R` is held + drag rotate, Blender's.
 - **Hotkeys are remappable: a new one is a `keymap::DEFS` row, never a raw
   `key_pressed`.** `app/src/keymap.rs` declares every remappable action
   (id, label, pane scope, default, match rule); sites read live through

@@ -3204,10 +3204,9 @@ pub struct NodeEditor {
     /// STOLEN before egui sees it — egui's focus traversal would otherwise
     /// grab Tab, focus a random button, and permanently kill the hotkeys).
     pub tab_open_request: bool,
-    /// An S / R press over the graph that has not been spent on a
-    /// scale / rotate drag: its RELEASE is the tap (swap inputs / frame).
+    /// An S press over the graph that has not been spent on a scale drag:
+    /// its RELEASE is the tap (swap inputs).
     s_armed: bool,
-    r_armed: bool,
     /// How close two sockets must come before they court, in graph units at
     /// node size 1. The app sets it from prefs — one hand wants the wire to
     /// jump across the canvas, another wants to park two nodes side by side
@@ -3578,7 +3577,6 @@ impl Default for NodeEditor {
             in_roto: false,
             hover_chan: None,
             s_armed: false,
-            r_armed: false,
             magnet_reach: MAGNET_REACH,
             show_keys: true,
             show_legend: true,
@@ -5843,7 +5841,7 @@ impl NodeEditor {
             let s_drag = held(crate::keymap::Act::GraphSwapInputs);
             // A harp does not rotate: its bars are horizontal by definition.
             let r_drag = !s_drag
-                && held(crate::keymap::Act::GraphFrame)
+                && held(crate::keymap::Act::GraphRotate)
                 && !handle_ids.iter().any(|id| {
                     graph
                         .node(*id)
@@ -5918,7 +5916,6 @@ impl NodeEditor {
                 let start_dist = (view.to_graph(p) - center).length().max(30.0 / self.zoom);
                 Some(DragKind::SelScale { center, start_dist, orig, spacing })
             } else if let (true, Some(p)) = (r_drag, origin) {
-                self.r_armed = false;
                 let center = xf_center;
                 let orig = handle_ids
                     .iter()
@@ -7281,15 +7278,12 @@ impl NodeEditor {
                     }
                 }
             }
-            // R: frame the selection (all nodes when nothing is selected).
-            // Over the viewer, R fits the image instead. A TAP, on release:
-            // held + drag, R rotates the selection's layout.
-            if over && ui.input(|i| keymap::pressed(i, Act::GraphFrame)) {
-                self.r_armed = true;
-            }
-            let r_tap = ui.input(|i| keymap::released(i, Act::GraphFrame))
-                && std::mem::take(&mut self.r_armed);
-            if over && (pick == Some(Act::GraphFrame) || r_tap) {
+            // F: frame the selection (all nodes when nothing is selected),
+            // like the viewer's F. Held R + drag rotates the layout instead.
+            if over
+                && (pick == Some(Act::GraphFrame)
+                    || ui.input(|i| keymap::pressed(i, Act::GraphFrame)))
+            {
                 let ids: Vec<u64> = if selection.is_empty() {
                     graph.nodes.keys().copied().collect()
                 } else {
@@ -8539,7 +8533,8 @@ impl NodeEditor {
                 ),
                 item(km::Act::GraphAlign, "hold + swipe: align"),
                 item(km::Act::GraphSwapInputs, "tap: swap inputs · hold + drag: scale spacing"),
-                item(km::Act::GraphFrame, "tap: frame · hold + drag: rotate"),
+                item(km::Act::GraphFrame, "frame"),
+                item(km::Act::GraphRotate, "hold + drag: rotate"),
                 item(km::Act::GraphDot, "hold + click a wire: dot (drag for tension)"),
             ];
             let strip = crate::hudkeys::TopStrip::new(&painter, rect, &items);
