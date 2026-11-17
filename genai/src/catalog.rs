@@ -62,6 +62,12 @@ pub enum Task {
     /// a clip (the node's input over a range, or a video step's result)
     /// -> the same clip, bigger. A video take.
     VideoUpscale,
+    /// prompt + image -> the image on a BIGGER canvas, the new border
+    /// painted in. The picture stays in the middle.
+    Outpaint,
+    /// prompt + image + a SECOND picture (the node's fourth input) -> the
+    /// image edited with the second to draw on: its colour, style, content.
+    EditRef,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -132,6 +138,39 @@ pub enum Dialect {
     TopazVideo { model: &'static str },
     /// SeedVR2 on a clip: `video_url`, `upscale_factor`, `seed`.
     SeedVrVideo,
+    /// Bria Expand: `image_url`, `canvas_size`, `original_image_size`,
+    /// `original_image_location` (the picture centred on the canvas),
+    /// `prompt`, `seed`.
+    BriaExpand,
+    /// Bria background replace: `image_url`, `prompt`, `seed`; prompt
+    /// refinement off (a rewrite would change the request behind the key).
+    BriaBackground,
+    /// A Gemini edit over TWO pictures (`image_urls: [image, second]`),
+    /// with a fixed instruction ahead of the typed prompt: what makes a
+    /// general edit model a ready-made node.
+    GeminiRef { instruction: &'static str },
+}
+
+/// What the Colour Transfer node asks for.
+pub const COLOUR_TRANSFER: &str = "Recolour the first image so its colour palette, contrast and \
+grade match the second image. Keep the first image's content, composition, framing and every \
+detail exactly as they are; change only colour and tone. Take nothing else from the second image.";
+
+impl Dialect {
+    /// The prompt a request carries: the dialect's fixed instruction, then
+    /// what was typed.
+    pub fn instruct(self, typed: &str) -> String {
+        match self {
+            Dialect::GeminiRef { instruction } if !instruction.is_empty() => {
+                if typed.trim().is_empty() {
+                    instruction.to_string()
+                } else {
+                    format!("{instruction} {}", typed.trim())
+                }
+            }
+            _ => typed.to_string(),
+        }
+    }
 }
 
 impl Dialect {
@@ -140,6 +179,8 @@ impl Dialect {
     pub fn scale_range(self) -> Option<(f32, f32)> {
         match self {
             Dialect::Recraft => None,
+            // How many times the canvas grows; 5000 px a side is Bria's top.
+            Dialect::BriaExpand => Some((1.1, 3.0)),
             _ => Some((1.0, 4.0)),
         }
     }
@@ -171,6 +212,9 @@ impl Dialect {
                 | Dialect::Clarity
                 | Dialect::SeedVr
                 | Dialect::SeedVrVideo
+                | Dialect::BriaExpand
+                | Dialect::BriaBackground
+                | Dialect::GeminiRef { .. }
         )
     }
 
@@ -434,6 +478,54 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: true,
         licence: "Recraft via fal API terms (commercial use through the API)",
         about: "a clean enlargement with sharper edges and no repainting; the size is the model's choice",
+    },
+    RemoteModel {
+        id: "fal/bria-expand",
+        label: "Outpaint",
+        short: "outpaint",
+        service: Service::Fal,
+        endpoint: "fal-ai/bria/expand",
+        dialect: Dialect::BriaExpand,
+        task: Task::Outpaint,
+        commercial: true,
+        licence: "Bria via fal API terms (trained on licensed data; commercial use through the API)",
+        about: "grow the canvas around the picture and paint what was outside the frame; the prompt may say what",
+    },
+    RemoteModel {
+        id: "fal/bria-background-replace",
+        label: "Background Replace",
+        short: "new background",
+        service: Service::Fal,
+        endpoint: "fal-ai/bria/background/replace",
+        dialect: Dialect::BriaBackground,
+        task: Task::Edit,
+        commercial: true,
+        licence: "Bria via fal API terms (trained on licensed data; commercial use through the API)",
+        about: "keep the subject, replace everything behind it with what the prompt describes",
+    },
+    RemoteModel {
+        id: "fal/colour-transfer",
+        label: "Colour Transfer",
+        short: "colour transfer",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-2/edit",
+        dialect: Dialect::GeminiRef { instruction: COLOUR_TRANSFER },
+        task: Task::EditRef,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "give the picture the palette and grade of a second picture; a repaint at up to 2 MP, so for look development, not a final grade",
+    },
+    RemoteModel {
+        id: "fal/nano-banana-pro-edit-ref",
+        label: "Nano Banana Pro edit, two pictures",
+        short: "banana edit 2",
+        service: Service::Fal,
+        endpoint: "fal-ai/nano-banana-pro/edit",
+        dialect: Dialect::GeminiRef { instruction: "" },
+        task: Task::EditRef,
+        commercial: true,
+        licence: "Google via fal API terms (commercial use through the API)",
+        about: "edit a picture with a second one to draw on: its style, an object in it, its light; the prompt says how",
     },
     RemoteModel {
         id: "fal/birefnet-v2",
@@ -790,6 +882,8 @@ impl Task {
             Task::VideoEdit => "video edit",
             Task::VideoInpaint => "video inpaint",
             Task::VideoUpscale => "video upscale",
+            Task::Outpaint => "outpaint",
+            Task::EditRef => "edit with a second picture",
         }
     }
 
@@ -807,7 +901,7 @@ impl Task {
     /// result's own size as its format, instead of stretching the result
     /// back over its input's.
     pub fn resizes(self) -> bool {
-        matches!(self, Task::Upscale | Task::VideoUpscale)
+        matches!(self, Task::Upscale | Task::VideoUpscale | Task::Outpaint)
     }
 
     /// Does this task hand back MEASUREMENTS rather than a picture? A data
@@ -816,7 +910,7 @@ impl Task {
         matches!(self, Task::Depth | Task::Normals)
     }
 
-    pub const ALL: [Task; 13] = [
+    pub const ALL: [Task; 15] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -830,6 +924,8 @@ impl Task {
         Task::VideoEdit,
         Task::VideoInpaint,
         Task::VideoUpscale,
+        Task::Outpaint,
+        Task::EditRef,
     ];
 }
 

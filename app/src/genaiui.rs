@@ -51,6 +51,9 @@ pub const CLIP_SHORT: u32 = 720;
 pub const CLIP: usize = 10;
 pub const MATTE_CLIP: usize = 11;
 
+/// The node input (and capture port) of the second picture.
+pub const SECOND: usize = 3;
+
 /// The node input a capture port renders.
 fn input_of_port(port: usize) -> usize {
     if port >= CLIP {
@@ -170,7 +173,7 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
 /// The step nodes the dive's add menu offers: the node's inputs, one node
 /// per model (no model menu, the same rule as the comp), ComfyUI, Output.
 pub fn step_entries() -> Vec<(&'static str, Op)> {
-    let mut v = vec![Op::Prompt { text: String::new() }, Op::PromptIn, Op::Reference, Op::Matte];
+    let mut v = vec![Op::Prompt { text: String::new() }, Op::PromptIn, Op::Reference, Op::Matte, Op::Second];
     if clip_ok() {
         v.extend([Op::ClipIn { seconds: 5.0 }, Op::MatteClip]);
     }
@@ -541,6 +544,10 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                 ui.colored_label(theme::warn(), small("nothing is wired into the matte input"));
             }
         }
+        Op::Second => {
+            ui.label(small("the node's second picture input at the playhead: a look to match, a style, an object"));
+            ui.weak(small(format!("sent as sRGB at up to {REF_MP} MP, like the image")));
+        }
         Op::ClipIn { seconds } => {
             ui.label(small("the node's image input over a range from the playhead, sent as an mp4"));
             ui.horizontal(|ui| {
@@ -637,6 +644,13 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                             if !video_ok() {
                                 ui.colored_label(theme::error(), small(NO_VIDEO));
                             }
+                        }
+                        Task::Outpaint => {
+                            if let Some((lo, hi)) = m.dialect.scale_range() {
+                                opts.scale = opts.scale.clamp(lo, hi);
+                                crate::widgets::plain_slider(ui, "canvas x", &mut opts.scale, lo, hi, false);
+                            }
+                            ui.weak(small("the picture stays in the middle; the node takes the new canvas as its format"));
                         }
                         Task::Upscale | Task::VideoUpscale => match m.dialect.scale_range() {
                             Some((lo, hi)) => {
@@ -1106,6 +1120,7 @@ impl Gfx {
         for (port, wants, what) in [
             (0, pl.wants_reference(), "image"),
             (1, pl.wants_matte(), "matte"),
+            (SECOND, pl.wants_second(), "second picture"),
             (CLIP, pl.wants_clip(), "image"),
             (MATTE_CLIP, pl.wants_matte_clip(), "matte"),
         ] {
@@ -1228,7 +1243,7 @@ impl Gfx {
             r.phase = Phase::Failed("the input did not render".into());
             return;
         };
-        let png = if port == 0 {
+        let png = if port == 0 || port == SECOND {
             to_rec709(&mut px, working);
             // An upscaler's reference goes up whole (to a point): shrunk,
             // it would hand back the plate it started with.
@@ -1243,10 +1258,10 @@ impl Gfx {
         };
         match png {
             Ok(png) => {
-                if port == 0 {
-                    inputs.reference = Some(png);
-                } else {
-                    inputs.matte = Some(png);
+                match port {
+                    0 => inputs.reference = Some(png),
+                    SECOND => inputs.second = Some(png),
+                    _ => inputs.matte = Some(png),
                 }
                 todo.remove(0);
                 self.genai_capture_next();

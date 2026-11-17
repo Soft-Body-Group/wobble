@@ -63,6 +63,9 @@ pub enum Op {
     /// The host node's MATTE input at the playhead — white where a fill or
     /// an edit should land.
     Matte,
+    /// The host node's SECOND picture input at the playhead: a reference
+    /// for colour, style or content, beside the image being worked on.
+    Second,
     /// The host node's image input over a frame RANGE from the playhead,
     /// encoded as an mp4 when the run starts: what a video-to-video model
     /// reads. Leaves the comp as display-referred sRGB, like `Reference`.
@@ -163,9 +166,13 @@ impl Op {
     /// Input ports, in order, with a short name for each.
     pub fn ports(&self) -> Vec<(Pipe, &'static str)> {
         match self {
-            Op::Prompt { .. } | Op::PromptIn | Op::Reference | Op::Matte | Op::ClipIn { .. } | Op::MatteClip => {
-                vec![]
-            }
+            Op::Prompt { .. }
+            | Op::PromptIn
+            | Op::Reference
+            | Op::Matte
+            | Op::Second
+            | Op::ClipIn { .. }
+            | Op::MatteClip => vec![],
             Op::Output => vec![(Pipe::Image, "image")],
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
@@ -219,6 +226,7 @@ impl Op {
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
+            Op::Second => "Second Input",
             Op::ClipIn { .. } => "Input Clip",
             Op::MatteClip => "Matte Clip",
             Op::Generate { model, .. } => catalog::get(model).map(|m| m.label).unwrap_or("Unknown Model"),
@@ -243,6 +251,7 @@ impl Op {
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
+            Op::Second => "input 2".into(),
             Op::ClipIn { seconds } => format!("clip {seconds:.1}s"),
             Op::MatteClip => "matte clip".into(),
             Op::Generate { model, .. } => match catalog::get(model) {
@@ -272,6 +281,10 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
             vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
         }
         Task::VideoUpscale => vec![(Pipe::Video, "video")],
+        Task::Outpaint => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
+        Task::EditRef => {
+            vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "reference")]
+        }
     }
 }
 
@@ -378,6 +391,7 @@ impl Pipeline {
                 (Pipe::Video, "mask") => Op::MatteClip,
                 (Pipe::Video, _) => Op::ClipIn { seconds: default_clip_seconds() },
                 (_, "mask") => Op::Matte,
+                (_, "reference") => Op::Second,
                 _ => Op::Reference,
             };
             let x = -0.6 + 1.2 * (port as f32 + 0.5) / n;
@@ -586,6 +600,10 @@ impl Pipeline {
     pub fn wants_matte(&self) -> bool {
         self.steps.iter().any(|s| matches!(s.op, Op::Matte))
     }
+    /// Its second picture input?
+    pub fn wants_second(&self) -> bool {
+        self.steps.iter().any(|s| matches!(s.op, Op::Second))
+    }
     pub fn wants_prompt(&self) -> bool {
         self.steps.iter().any(|s| matches!(s.op, Op::PromptIn))
     }
@@ -663,7 +681,8 @@ mod tests {
             assert_eq!(p.wants_matte(), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "mask"), "{}", m.id);
             assert_eq!(p.wants_matte_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n == "mask"), "{}", m.id);
             assert_eq!(p.wants_clip(), ports.iter().any(|&(k, n)| k == Pipe::Video && n != "mask"), "{}", m.id);
-            assert_eq!(p.wants_reference(), ports.iter().any(|&(k, n)| k == Pipe::Image && n != "mask"), "{}", m.id);
+            assert_eq!(p.wants_reference(), ports.iter().any(|&(k, n)| k == Pipe::Image && n == "image"), "{}", m.id);
+            assert_eq!(p.wants_second(), ports.iter().any(|&(_, n)| n == "reference"), "{}", m.id);
         }
         assert!(Pipeline::for_model("no/such-model").is_none());
     }

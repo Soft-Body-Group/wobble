@@ -209,7 +209,7 @@ pub fn price_of(unit_price: f64, unit: &str, megapixels: Option<f64>, video: Opt
             exact: v.default_res,
             note: format!("{} s", v.seconds),
         },
-        ("image" | "request" | "call" | "video", _, _) => {
+        ("image" | "request" | "call" | "video" | "generation", _, _) => {
             Price { usd: unit_price, exact: true, note: format!("per {u}") }
         }
         ("megapixel", Some(mp), _) => {
@@ -267,6 +267,12 @@ mod tests {
         // A unit nobody taught us is shown as an estimate, never dropped.
         let p = price_of(0.5, "compute_unit", None, Some(v));
         assert!(!p.exact && p.usd > 0.0);
+    }
+
+    #[test]
+    fn bria_s_generations_are_a_price_per_call() {
+        let p = price_of(0.04, "generations", Some(8.0), None);
+        assert!(p.exact && (p.usd - 0.04).abs() < 1e-9, "{p:?}");
     }
 
     #[test]

@@ -59,9 +59,10 @@ impl Default for GenAiParams {
 impl GenAiParams {
     pub const NAME: &'static str = "GenAI";
     /// The image the pipeline's Reference step reads, the matte its Matte
-    /// step reads, and the text its `prompt in` step reads (off a Prompt
-    /// node, on the text pipe).
-    pub const INPUTS: usize = 3;
+    /// step reads, the text its `prompt in` step reads (off a Prompt
+    /// node, on the text pipe), and the second picture its `Second` step
+    /// reads (a reference for colour, style or content).
+    pub const INPUTS: usize = 4;
     /// One slot: the node's format, which the take is stretched over.
     pub const VEC4_SLOTS: usize = 1;
 
@@ -117,7 +118,8 @@ impl GenAiParams {
         match input {
             0 => "image (the reference, or the clip)",
             1 => "matte (where to fill, a frame or a clip)",
-            _ => "prompt (a String node's text)",
+            2 => "prompt (a String node's text)",
+            _ => "second picture (a reference: colour, style, content)",
         }
     }
 

@@ -1399,6 +1399,16 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   its video port may be fed by a video step, not only the captured clip.
   `genai/tests/live.rs` (ignored, free) asks fal's pricing API about every
   catalog endpoint; run it after adding rows.
+- **The node has a FOURTH input, the second picture** (`genaiui::SECOND`
+  = 3, after the prompt's 2): `Op::Second` reads it, captured and sent
+  like the image (`Inputs::second`), keyed on its bytes. A catalog port
+  named `"reference"` gets an `Op::Second` in `Pipeline::for_model`
+  (`Task::EditRef`). A ready-made node over a general model is a DIALECT
+  with a fixed instruction (`Dialect::GeminiRef { instruction }`,
+  `Dialect::instruct`), not a new field on every catalog row.
+  `Task::Outpaint` resizes like an upscaler; Bria Expand's canvas is
+  computed from the picture's real size at run time (`run::expand_canvas`;
+  the request builder only has the comp's, which is what a quote uses).
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

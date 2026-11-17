@@ -3583,6 +3583,17 @@ leaves the comp as sRGB at up to 2 MP and values above 1.0 clip; the result
 comes in through the sRGB input transform, on straight colour so a cutout's
 soft edge survives.
 
+**Ready-made edits.** **Outpaint** grows the canvas around the picture
+(`canvas x`, up to 3) and paints the new border; the picture keeps its size
+in the middle and the node takes the new canvas as its format. **Background
+Replace** keeps the subject and paints a new background from the prompt.
+**Colour Transfer** gives the picture the palette and grade of a second
+one, wired into the node's fourth input, **second picture**; it is a
+repaint at up to 2 MP in 8 bits, so it is for finding a look, not for a
+final grade. *Nano Banana Pro edit, two pictures* is the general form: the
+prompt says what to take from the second picture. Inside a GenAI Pipeline
+the fourth input is the **Second Input** step.
+
 **Upscalers make the node bigger.** A node whose picture comes out of an
 upscaler (Real-ESRGAN, Topaz Upscale / High Fidelity / Recovery / Redefine,
 Clarity, SeedVR2, Recraft Crisp, and Topaz or SeedVR2 on a clip) takes the

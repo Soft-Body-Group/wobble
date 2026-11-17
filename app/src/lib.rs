@@ -20167,6 +20167,7 @@ impl Gfx {
             let port = self.egraph.active_view().and_then(|v| match self.egraph.node(v).map(|n| &n.kind) {
                 Some(NodeKind::GenAiStep(genai::pipeline::Op::Reference | genai::pipeline::Op::ClipIn { .. })) => Some(0),
                 Some(NodeKind::GenAiStep(genai::pipeline::Op::Matte | genai::pipeline::Op::MatteClip)) => Some(1),
+                Some(NodeKind::GenAiStep(genai::pipeline::Op::Second)) => Some(crate::genaiui::SECOND),
                 _ => None,
             });
             g.view = Some(port.and_then(|p| g.input_of(owner, p)).unwrap_or(owner));

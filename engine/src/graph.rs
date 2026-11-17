@@ -6856,7 +6856,9 @@ impl NodeKind {
                 0 => s("the reference picture sent with the request, captured at the \
                         playhead"),
                 1 => s("where to fill: white is generated anew, black kept"),
-                _ => s("the prompt, off a String node"),
+                2 => s("the prompt, off a String node"),
+                _ => s("a second picture for a model that takes one: the look to \
+                        match, the style or the object to draw on"),
             },
             NodeKind::Card3D(_) => s("the picture on the card"),
             NodeKind::Splat(_) => s("the Camera to look through (a CameraTrack's, a file's, Blender's); \

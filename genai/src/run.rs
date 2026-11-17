@@ -83,6 +83,8 @@ pub struct ClipShape {
 pub struct Inputs {
     pub reference: Option<Png>,
     pub matte: Option<Png>,
+    /// The host's second picture input, for a `Second` step.
+    pub second: Option<Png>,
     /// The image input over the run's range, for a `ClipIn` step.
     pub clip: Option<Clip>,
     /// The matte input over the same range, for a `MatteClip` step.
@@ -197,6 +199,12 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 )?;
                 (h(&["matte", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
             }
+            Op::Second => {
+                let r = inputs.second.as_ref().ok_or(
+                    "the pipeline reads the node's second picture, and nothing is wired into it",
+                )?;
+                (h(&["second", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
+            }
             Op::ClipIn { .. } | Op::MatteClip => {
                 let (c, what, tag) = if matches!(step.op, Op::ClipIn { .. }) {
                     (inputs.clip.as_ref(), "input", "clip")
@@ -231,7 +239,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     Task::Upscale => in_mp(0).unwrap_or(comp_mp) * (opts.scale as f64).powi(2),
                     Task::Cutout | Task::Depth | Task::Normals | Task::Albedo => in_mp(0).unwrap_or(comp_mp),
                     Task::Relight => in_mp(1).unwrap_or(comp_mp),
-                    Task::Edit | Task::Inpaint => in_mp(1).unwrap_or(comp_mp),
+                    Task::Edit | Task::Inpaint | Task::EditRef => in_mp(1).unwrap_or(comp_mp),
+                    Task::Outpaint => in_mp(1).unwrap_or(comp_mp) * (opts.scale as f64).powi(2),
                     Task::ImageToVideo => {
                         let (w, h) = video_size(m, opts, inputs.comp);
                         w as f64 * h as f64 / 1e6
@@ -353,7 +362,7 @@ pub fn request_clip(
             .ok_or_else(|| anyhow!("{} needs an image", m.label))
     };
     let style = Dialect::lighting_style(prompt.unwrap_or(""));
-    let prompt = || json!(prompt.unwrap_or(""));
+    let prompt = || json!(m.dialect.instruct(prompt.unwrap_or("")));
     let mut v = match (m.task, m.dialect) {
         // Geometry and relighting: their own field names, no size.
         (_, Dialect::Moge) => json!({
@@ -395,6 +404,24 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::BriaExpand) => {
+            // The comp's size stands in for the picture's until the run
+            // knows it (`expand_canvas`): a quote sends no pixels.
+            let mut v = json!({ "image_url": img(1)?, "prompt": prompt(), "seed": seed });
+            expand_canvas(&mut v, comp, opts.scale);
+            v
+        }
+        (_, Dialect::BriaBackground) => json!({
+            "image_url": img(1)?, "prompt": prompt(), "seed": seed,
+            "refine_prompt": false, "num_images": 1,
+        }),
+        (_, Dialect::GeminiRef { .. }) => json!({
+            "prompt": prompt(), "image_urls": [img(1)?, img(2)?], "seed": seed,
+            // The first picture decides the shape.
+            "aspect_ratio": "auto",
+            "resolution": Dialect::gemini_resolution(opts.megapixels),
+            "num_images": 1, "output_format": "png",
+        }),
         (_, Dialect::Topaz { model }) => json!({
             "image_url": img(0)?, "model": model, "upscale_factor": opts.scale,
             "output_format": "png",
@@ -489,6 +516,11 @@ pub fn request_clip(
         // A future depth / normals / albedo / relight model in FLUX's field
         // names.
         (Task::Depth | Task::Normals | Task::Albedo, _) => json!({ "image_url": img(0)?, "seed": seed }),
+        // A future outpaint or two-picture edit in FLUX's field names.
+        (Task::Outpaint, _) => json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed }),
+        (Task::EditRef, _) => json!({
+            "prompt": prompt(), "image_urls": [img(1)?, img(2)?], "seed": seed,
+        }),
         (Task::Relight, _) => json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed }),
     };
     if !m.dialect.sends_seed() {
@@ -504,6 +536,31 @@ pub fn request_clip(
         }
     }
     Ok(v)
+}
+
+/// Bria Expand's canvas for a `w`x`h` picture grown `scale` times: the
+/// picture keeps its size and sits in the middle. Bria's canvas tops out
+/// under 5000 px a side, so a big picture grows less than asked rather
+/// than being refused after the upload. Leaves a request alone whose extra
+/// already places the picture (`canvas_size`, `aspect_ratio`).
+pub fn expand_canvas(req: &mut Value, (w, h): (u32, u32), scale: f32) {
+    let Some(o) = req.as_object_mut() else { return };
+    if o.contains_key("aspect_ratio") || (o.contains_key("canvas_size") && o.contains_key("original_image_size")) {
+        return;
+    }
+    let (w, h) = (w.max(1), h.max(1));
+    let s = (scale.max(1.0) as f64).min(4990.0 / w as f64).min(4990.0 / h as f64).max(1.0);
+    let (cw, ch) = ((w as f64 * s).round() as u32, (h as f64 * s).round() as u32);
+    o.insert("canvas_size".into(), json!([cw, ch]));
+    o.insert("original_image_size".into(), json!([w, h]));
+    o.insert("original_image_location".into(), json!([(cw - w.min(cw)) / 2, (ch - h.min(ch)) / 2]));
+}
+
+/// A PNG's size, from its header.
+fn png_size(path: &Path) -> Option<(u32, u32)> {
+    let f = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+    let r = png::Decoder::new(f).read_info().ok()?;
+    Some((r.info().width, r.info().height))
 }
 
 /// The service a remote step is billed through.
@@ -716,11 +773,11 @@ fn execute(
             Op::PromptIn => Val::Text(
                 inputs.prompt.clone().ok_or_else(|| anyhow!("no String node is wired into the node"))?,
             ),
-            Op::Reference | Op::Matte => {
-                let png = if matches!(p.steps[i].op, Op::Reference) {
-                    inputs.reference.as_ref()
-                } else {
-                    inputs.matte.as_ref()
+            Op::Reference | Op::Matte | Op::Second => {
+                let png = match p.steps[i].op {
+                    Op::Reference => inputs.reference.as_ref(),
+                    Op::Matte => inputs.matte.as_ref(),
+                    _ => inputs.second.as_ref(),
                 };
                 let png = png.ok_or_else(|| anyhow!("missing input picture"))?;
                 let path = match cached(dir, key) {
@@ -779,7 +836,19 @@ fn execute(
                         });
                     }
                     let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip()).map(Clip::shape);
-                    let req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, clip)?;
+                    let mut req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, clip)?;
+                    if m.dialect == Dialect::BriaExpand && opts.extra.trim().is_empty() {
+                        // Now the picture is in hand, the canvas is ITS
+                        // size grown, not the comp's.
+                        let size = match get(&vals, i, 1) {
+                            Some(Val::Image(path)) => png_size(&path),
+                            _ => None,
+                        };
+                        if let (Some(size), Some(o)) = (size, req.as_object_mut()) {
+                            o.remove("canvas_size");
+                            expand_canvas(&mut req, size, opts.scale);
+                        }
+                    }
                     let _ = tx.send(Event::Step(i, StepState::Sending));
                     let txp = tx.clone();
                     let phase = move |ph: Phase| {
@@ -1015,6 +1084,55 @@ mod tests {
         let i = request(m("fal/gpt-image-2-inpaint"), &o, 7, (2048, 1080), Some("p"), &[None, img, mask]).unwrap();
         assert_eq!(i["image_urls"], json!(["data:x"]));
         assert_eq!(i["mask_url"], "data:m");
+    }
+
+    #[test]
+    fn ready_made_edits_ask_in_their_own_words() {
+        let opts = Opts { scale: 2.0, ..Opts::default() };
+        let two = [None, Some("data:a".to_string()), Some("data:b".to_string())];
+        // Expand: the picture keeps its size, in the middle of the canvas.
+        let r = request(m("fal/bria-expand"), &opts, 7, (1000, 500), Some("a beach"), &two).unwrap();
+        assert_eq!(r["canvas_size"], json!([2000, 1000]));
+        assert_eq!(r["original_image_size"], json!([1000, 500]));
+        assert_eq!(r["original_image_location"], json!([500, 250]));
+        assert_eq!((r["prompt"].as_str(), r["seed"].as_u64()), (Some("a beach"), Some(7)));
+        // A big picture grows as far as Bria's canvas goes, never past it.
+        let mut v = json!({});
+        expand_canvas(&mut v, (4000, 2000), 3.0);
+        assert_eq!(v["canvas_size"], json!([4990, 2495]));
+        // An extra that picks an aspect places the picture itself.
+        let mut v = json!({"aspect_ratio": "16:9"});
+        expand_canvas(&mut v, (1000, 500), 2.0);
+        assert!(v.get("canvas_size").is_none());
+        let r = request(m("fal/bria-background-replace"), &opts, 7, (1000, 500), Some("a beach"), &two).unwrap();
+        assert_eq!((r["image_url"].as_str(), r["refine_prompt"].as_bool()), (Some("data:a"), Some(false)));
+        // Colour transfer: both pictures, the image first, and the fixed
+        // instruction ahead of whatever was typed.
+        let r = request(m("fal/colour-transfer"), &opts, 7, (1000, 500), Some("warmer"), &two).unwrap();
+        assert_eq!(r["image_urls"], json!(["data:a", "data:b"]));
+        let p = r["prompt"].as_str().unwrap();
+        assert!(p.starts_with("Recolour the first image") && p.ends_with(" warmer"), "{p}");
+        let r = request(m("fal/colour-transfer"), &opts, 7, (1000, 500), Some(""), &two).unwrap();
+        assert!(r["prompt"].as_str().unwrap().ends_with("second image."));
+        let r = request(m("fal/nano-banana-pro-edit-ref"), &opts, 7, (1000, 500), Some("in this style"), &two).unwrap();
+        assert_eq!(r["prompt"], "in this style");
+        // And it needs the second picture.
+        let one = [None, Some("data:a".to_string()), None];
+        assert!(request(m("fal/colour-transfer"), &opts, 7, (1000, 500), Some(""), &one).is_err());
+    }
+
+    #[test]
+    fn a_second_picture_keys_the_step_it_feeds() {
+        let dir = std::env::temp_dir().join("wobble-genai-second-none");
+        let p = Pipeline::for_model("fal/colour-transfer").unwrap();
+        let png = |b: u8| Png { bytes: vec![b; 8], w: 4, h: 4 };
+        let mut ins = Inputs { reference: Some(png(1)), comp: (1920, 1080), ..Default::default() };
+        assert!(plan(&p, &ins, &dir).unwrap_err().contains("second picture"));
+        ins.second = Some(png(2));
+        let a = plan(&p, &ins, &dir).unwrap();
+        ins.second = Some(png(3));
+        let b = plan(&p, &ins, &dir).unwrap();
+        assert_ne!(a.keys[a.target], b.keys[b.target], "another reference is another request");
     }
 
     #[test]
