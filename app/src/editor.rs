@@ -4,6 +4,7 @@
 //! pin rows) couldn't be bent this far.
 
 use crate::theme;
+use crate::pathpaste::paste_loads;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use engine::graph::{
     BlurParams, CornerPinParams, CurveParams, DefocusParams,     GlowParams,
@@ -7135,7 +7136,12 @@ impl NodeEditor {
                         .flatten()
                 });
                 if let (Some(text), Some(p)) = (paste, pointer) {
-                    if let Some(ids) = paste_nodes(graph, &text, view.to_graph(p), next_read_slot) {
+                    let at = view.to_graph(p);
+                    // A node clip first; else footage named by paths or a
+                    // script's Read blocks becomes Loads at the cursor.
+                    let ids = paste_nodes(graph, &text, at, next_read_slot)
+                        .or_else(|| paste_loads(graph, &text, at, next_read_slot));
+                    if let Some(ids) = ids {
                         *selection = ids;
                         self.sel_port = None;
                         self.pasted = true;
@@ -12917,6 +12923,46 @@ mod clipboard_tests {
     /// Through the real editor: ctrl+A selects every node, ⌘C (egui's Copy
     /// event) copies, ⌘V (Paste, carrying the text) pastes at the pointer,
     /// and ctrl+V pastes the last copy again.
+    #[test]
+    fn pasted_paths_become_loads_through_the_editor() {
+        let (mut g, ..) = scene();
+        let ctx = egui::Context::default();
+        let mut ed = NodeEditor::default();
+        ed.system_clipboard = false;
+        let (mut sel, mut act, mut pin, mut slot) = (Vec::new(), Vec::new(), Vec::new(), 10usize);
+        let mut rects = Vec::new();
+        let at = Pos2::new(300.0, 400.0);
+        let before = g.nodes.len();
+        for (i, ev) in [vec![], vec![egui::Event::Paste("/no/such/a.####.exr\nD:\\no\\b.%04d.exr".into())]]
+            .into_iter()
+            .enumerate()
+        {
+            let mut events = vec![egui::Event::PointerMoved(at)];
+            events.extend(ev);
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                time: Some(i as f64 / 60.0),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                ed.show(ui, &mut g, &mut sel, &mut act, &mut pin, &mut slot, &mut rects);
+            });
+        }
+        assert_eq!(g.nodes.len(), before + 2, "two lines, two Loads");
+        assert!(ed.pasted, "the app is told, so the Loads get their footage");
+        let mut got: Vec<(String, usize)> = sel
+            .iter()
+            .filter_map(|id| match &g.node(*id)?.kind {
+                NodeKind::Read { path, source, .. } => Some((path.clone(), *source)),
+                _ => None,
+            })
+            .collect();
+        got.sort();
+        assert_eq!(got, vec![("/no/such/a.####.exr".into(), 10), ("D:/no/b.####.exr".into(), 11)]);
+        assert_eq!(slot, 12);
+    }
+
     #[test]
     fn select_all_copy_and_paste_through_the_editor() {
         let (mut g, ..) = scene();

@@ -70,6 +70,7 @@ mod dockui;
 #[cfg(target_arch = "wasm32")]
 mod webdock;
 mod numfield;
+mod pathpaste;
 mod shaderui;
 mod sdfui;
 mod geolightui;
