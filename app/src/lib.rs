@@ -9262,7 +9262,33 @@ impl Gfx {
 
     /// Rebuild ring + player from every Read node with a loaded sequence.
     /// The playhead is kept (see below).
+    /// Inside a GenAI Pipeline the picture is the parked COMP's (the
+    /// pipeline's input, its take), but the open graph is the pipeline's
+    /// steps, which have no plates, formats or readers. Swap the comp —
+    /// as `render_preview` builds it, viewing what the dive shows — in for
+    /// a pass that reads `self.egraph` for those (the read rig, the output
+    /// size); `genai_comp_restore` swaps the steps back. Elsewhere None.
+    fn genai_comp_swap(&mut self) -> Option<EditorGraph> {
+        if !self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi) {
+            return None;
+        }
+        let comp = self.render_preview(self.eval_tick())?;
+        Some(std::mem::replace(&mut self.egraph, comp))
+    }
+
+    fn genai_comp_restore(&mut self, steps: Option<EditorGraph>) {
+        if let Some(steps) = steps {
+            self.egraph = steps;
+        }
+    }
+
     fn rebuild_playback(&mut self) {
+        let steps = self.genai_comp_swap();
+        self.rebuild_playback_inner();
+        self.genai_comp_restore(steps);
+    }
+
+    fn rebuild_playback_inner(&mut self) {
         self.playback_dirty = false;
         self.uploaded_fill.clear();
         self.rig_builds += 1;
@@ -10974,7 +11000,10 @@ impl Gfx {
         // Resolution follows the graph (view target, merge overrides): keep
         // the output texture in sync every frame. A resize changes the
         // render-cache key, so the stale cache drops in the check below.
-        if let Some((w, h)) = self.desired_output() {
+        let steps = self.genai_comp_swap();
+        let want = self.desired_output();
+        self.genai_comp_restore(steps);
+        if let Some((w, h)) = want {
             if self.comp.output_size() != Some((w, h)) {
                 self.comp.ensure_output(w, h);
                 self.blit.invalidate();
@@ -11618,8 +11647,8 @@ impl Gfx {
         // Inside a GenAI Pipeline: the viewed step's own result.
         self.genai_dive_show();
         let tick = self.eval_tick();
+        let preview = self.render_preview(tick);
         let (mut graph, view_now) = {
-            let preview = self.render_preview(tick);
             let src: &EditorGraph = preview.as_ref().unwrap_or(&self.egraph);
             let dual = self.dual_view;
             let mut g = src.to_engine_graph_at(Some(tick));
@@ -11636,8 +11665,24 @@ impl Gfx {
             }
             (g, live)
         };
-        self.stamp_formats(&mut graph);
-        self.apply_bake_state(&mut graph);
+        // Inside a GenAI Pipeline the picture is the PARKED comp's (the
+        // pipeline's input, its take): its formats and readers are keyed by
+        // the comp's node ids, so they are read off that graph — off the
+        // dive's, a plate turned or reformatted upstream came out at the
+        // wrong size, or blank.
+        let genai_dive = self.dive.last().is_some_and(|d| d.kind == DiveKind::GenAi);
+        match preview {
+            Some(mut comp) if genai_dive => {
+                std::mem::swap(&mut self.egraph, &mut comp);
+                self.stamp_formats(&mut graph);
+                self.apply_bake_state(&mut graph);
+                std::mem::swap(&mut self.egraph, &mut comp);
+            }
+            _ => {
+                self.stamp_formats(&mut graph);
+                self.apply_bake_state(&mut graph);
+            }
+        }
         // Time nodes: which frame each reader decodes. Pushed from here so
         // the walk rides the graph this frame already built; a changed map
         // re-seeks the player, so it takes effect on the next pump.
