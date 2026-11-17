@@ -8497,9 +8497,10 @@ impl Gfx {
             Ok(r) => {
                 // The same footage at its new home: one undo step (the Load
                 // now names an asset), keeping the range already set.
-                // No id: a copy made by `start_project_ingest`, named by
-                // project and shot — the Load becomes a Project Load.
-                let by_name = r.id == 0;
+                // A copy made by `start_project_ingest` (named by project and
+                // shot, with organisicator's id when it made it): the Load
+                // becomes a Project Load.
+                let by_name = !r.project.is_empty() && !r.shot.is_empty() || r.id == 0;
                 if let Some(n) = self.egraph.node_mut(node) {
                     n.asset = Some(r);
                     n.project_only |= by_name;
@@ -9197,7 +9198,9 @@ impl Gfx {
                 return;
             }
             projectui::Act::Media(node, r) => {
-                // A different clip: its own range.
+                // A different clip: its own range. Its id, when
+                // organisicator has indexed it, makes it follow renames.
+                let r = projects::with_id(r);
                 if let Some(n) = self.egraph.node_mut(node) {
                     n.asset = Some(r);
                 }
@@ -9212,16 +9215,18 @@ impl Gfx {
     /// `poll_asset_ingest` makes it a Project Load reading the copy when
     /// it lands. The original files are never moved or changed.
     fn start_project_ingest(&mut self, node: u64, plates: std::path::PathBuf) {
-        let Some(frames) = self.loaded.get(&node).map(|l| l.seq.frames.clone()).filter(|f| !f.is_empty()) else {
+        let Some((src, frames)) = self
+            .loaded
+            .get(&node)
+            .map(|l| (engine::paths::expand_home(&l.path).to_string_lossy().into_owned(), l.seq.frames.clone()))
+            .filter(|(_, f)| !f.is_empty())
+        else {
             self.asset_ingest_msg = Some((node, "load the footage first".into()));
             return;
         };
         let (tx, rx) = std::sync::mpsc::channel();
         bg::spawn(move || {
-            let r = projects::copy_clip(&frames, &plates).and_then(|clip| {
-                projects::locate_path(&clip).ok_or_else(|| "copied, but the copy is not inside a project".to_string())
-            });
-            let _ = tx.send(r);
+            let _ = tx.send(projects::bring_in(&src, &frames, &plates));
         });
         self.asset_ingest = Some((node, rx));
         self.asset_ingest_msg = None;

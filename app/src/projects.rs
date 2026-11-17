@@ -511,7 +511,9 @@ pub fn media(p: &Project, inst: Option<&Inst>) -> Vec<String> {
 /// same name is never overwritten — the clip goes in `<name>_2` instead.
 /// Returns the clip as a Load names it there (`…/bg.####.exr`).
 /// Blocking: run it on a worker.
-pub fn copy_clip(frames: &[PathBuf], plates: &Path) -> Result<PathBuf, String> {
+/// A clip's name for its folder (`bg` for `bg.####.exr` or `bg.mov`) and
+/// its file name as a Load names it (`bg.####.exr`).
+pub fn clip_names(frames: &[PathBuf]) -> Result<(String, String), String> {
     let mut files: Vec<&PathBuf> = frames.iter().collect();
     files.dedup();
     let first = files.first().ok_or("nothing to copy")?;
@@ -521,7 +523,13 @@ pub fn copy_clip(frames: &[PathBuf], plates: &Path) -> Result<PathBuf, String> {
         Some((head, pad, ext)) => (head.trim_end_matches(['.', '_', '-']).to_string(), format!("{head}{}{ext}", "#".repeat(pad))),
         None => (fname.rsplit_once('.').map_or(fname.as_str(), |(a, _)| a).to_string(), fname.clone()),
     };
-    let stem = if safe(&stem).is_empty() { "clip".to_string() } else { safe(&stem) };
+    Ok((if safe(&stem).is_empty() { "clip".to_string() } else { safe(&stem) }, pattern))
+}
+
+pub fn copy_clip(frames: &[PathBuf], plates: &Path) -> Result<PathBuf, String> {
+    let mut files: Vec<&PathBuf> = frames.iter().collect();
+    files.dedup();
+    let (stem, pattern) = clip_names(frames)?;
     let size = |p: &Path| std::fs::metadata(p).ok().filter(|m| m.is_file()).map(|m| m.len());
     let mut n = 1;
     let dir = loop {
@@ -588,6 +596,58 @@ pub fn resolve(r: &crate::assets::AssetRef) -> Result<String, String> {
             Err("no managed projects folder on this machine — set it in project… in the menubar".into())
         }
         None => Err(format!("{} is not in {} / {} on this machine", r.asset_label(), r.project_label(), r.shot_label())),
+    }
+}
+
+/// Brings a clip into the shot whose plates folder is `plates`. With
+/// organisicator running and knowing the project, IT copies and indexes
+/// the clip (`POST /v1/ingest`), so the reference carries its id; otherwise
+/// the files are copied here (`copy_clip`) and named by project and shot,
+/// for organisicator to index on its next scan. Blocking: run it on a worker.
+pub fn bring_in(src: &str, frames: &[PathBuf], plates: &Path) -> Result<crate::assets::AssetRef, String> {
+    use crate::assets;
+    let ps = projects(false);
+    let (p, inst, under) = ps
+        .iter()
+        .find_map(|p| p.locate(plates).map(|(i, rel)| (p, i, rel)))
+        .ok_or("that shot is not in a project")?;
+    let api = assets::Client::discover()
+        .ok()
+        .and_then(|c| assets::api_ids(&c, &p.root, inst.map(|i| i.rel.as_str())).map(|ids| (c, ids)));
+    match api {
+        Some((client, (pid, iid))) => {
+            let (stem, _) = clip_names(frames)?;
+            let folder = if under.is_empty() { stem } else { format!("{under}/{stem}") };
+            let dest = assets::Dest {
+                project: pid,
+                project_name: p.name.clone(),
+                instance: iid,
+                shot: p.names(inst),
+                folder,
+            };
+            let r = assets::ingest(&client, src, &dest)?;
+            assets::resolve(&client, &r).map(|res| res.named)
+        }
+        None => {
+            let clip = copy_clip(frames, plates)?;
+            locate_path(&clip).ok_or_else(|| "copied, but the copy is not inside a project".to_string())
+        }
+    }
+}
+
+/// A by-name reference with organisicator's id added when it is running
+/// and has indexed the file, so it follows renames from then on. Unchanged
+/// otherwise. Blocking (a local request or three).
+pub fn with_id(r: crate::assets::AssetRef) -> crate::assets::AssetRef {
+    use crate::assets;
+    let Ok(client) = assets::Client::discover() else { return r };
+    let ps = projects(false);
+    let Some(p) = ps.iter().find(|p| p.name == r.project) else { return r };
+    let Some(inst) = p.by_names(&r.shot) else { return r };
+    let Some((pid, iid)) = assets::api_ids(&client, &p.root, inst.map(|i| i.rel.as_str())) else { return r };
+    match assets::api_asset_id(&client, pid, iid, &r.rel) {
+        Some(id) => assets::AssetRef { id, ..r },
+        None => r,
     }
 }
 

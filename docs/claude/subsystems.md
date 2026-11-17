@@ -1841,8 +1841,15 @@ names, place under the shot), made by the project browser
 project's own `.organisicator/project.json` under THIS machine's managed
 root (`$WOBBLE_PROJECTS_ROOT`, else `~/.wobble/organisicator.json` "root" —
 shared with the addon — else the Dropbox defaults). It needs no API, and is
-how a comp saved on one OS opens on another. Keep the two apart: an id
-never falls back to names.
+how a comp saved on one OS opens on another. An id asks organisicator
+first; only when it cannot answer (not running, or its index holds a path
+another machine indexed) do the names it last gave find the file — never a
+stored path. A by-name pick gets its id added when organisicator has indexed
+the file (`projects::with_id`), and **make project load…** goes THROUGH
+organisicator's `POST /v1/ingest` when it is running and knows the project
+(`projects::bring_in`), so the copy is registered with an id; else it copies
+by itself. `--test-setup` with `WOBBLE_TEST_ORG_FIXTURE` set to a running
+`serve_a_fixture_until_killed` folder checks the API route.
 
 - **Project Load** (`ENode::project_only`): a Load that never shows a path or
   a file browser, only `pick from project…`. The add menu's "Project Load"
@@ -1876,8 +1883,9 @@ must stay true:
   `Read.path` and the fresh names into `asset`, mirrored into `undo_last`
   (never an undo step). `adopt_loads` re-asks for every asset Load, so a
   project moved or a shot/file renamed THROUGH organisicator keeps loading,
-  with its range. organisicator not running is an error that says so; never
-  fall back to the stale path or a folder scan.
+  with its range. organisicator not running is an error that says so
+  unless the reference's names find it (above); never fall back to the
+  stale path or a folder scan.
 - **Ids survive because organisicator rewrites rows in place**: a project
   move and a Files-view rename `rekey_dir` the index, `instance_rename` /
   `follow_dir_rename` keep a shot's record. A Finder rename does not.

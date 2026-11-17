@@ -259,11 +259,97 @@ impl Gfx {
                     self.test.setup = Some((7, frames, nodes, loads));
                     return;
                 }
+                // Against a REAL organisicator API when one is up for the
+                // suite (organisicator's `serve_a_fixture_until_killed`, its
+                // folder in WOBBLE_TEST_ORG_FIXTURE): the same footage brought
+                // in through it lands with organisicator's id.
+                if let Some(fx) = std::env::var_os("WOBBLE_TEST_ORG_FIXTURE").map(std::path::PathBuf::from) {
+                    let outside = std::env::var_os("WOBBLE_PROJECTS_ROOT")
+                        .map(|r| std::path::PathBuf::from(r).join("outside").join("clip.####.exr").to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let spooky = fx.join("spooky");
+                    let wrote = std::fs::create_dir_all(spooky.join(projects::MANIFEST_DIR))
+                        .and_then(|_| std::fs::write(spooky.join(projects::MANIFEST_DIR).join(projects::MANIFEST_FILE), ORG_FIXTURE));
+                    if let Err(e) = wrote {
+                        println!("SETUP TEST FAIL: organisicator fixture manifest: {e}");
+                        std::process::exit(1);
+                    }
+                    // SAFETY: single-threaded here, as above.
+                    unsafe {
+                        std::env::set_var("WOBBLE_PROJECTS_ROOT_OLD", std::env::var_os("WOBBLE_PROJECTS_ROOT").unwrap_or_default());
+                        std::env::set_var("WOBBLE_PROJECTS_ROOT", &fx);
+                        std::env::set_var("ORGANISICATOR_API_FILE", fx.join("api.json"));
+                    }
+                    projects::forget();
+                    let id = self.egraph.add(NodeKind::read(self.next_read_slot, outside.clone()), egui::pos2(0.0, 400.0));
+                    self.next_read_slot += 1;
+                    self.load_read(id, &outside);
+                    self.test.setup = Some((8, frames, id as usize, loads));
+                    return;
+                }
                 if let Some(d) = std::env::var_os("WOBBLE_PROJECTS_ROOT") {
                     let _ = std::fs::remove_dir_all(d);
                 }
                 println!(
                     "SETUP TEST PASS: save/load round trip, sequences reloaded, fps restored, history jump re-adopted them, new asks over edits, a Project Load saved into a shot and opened again finds its footage by name, and outside footage made a Project Load is copied into the shot and read from there"
+                );
+                std::process::exit(0);
+            }
+            8 => {
+                let id = nodes as u64;
+                if !self.loaded.get(&id).is_some_and(|l| l.seq.frames.len() == 3) {
+                    if let Some(e) = self.load_errors.get(&id) {
+                        println!("SETUP TEST FAIL: the outside Load did not load: {e}");
+                        std::process::exit(1);
+                    }
+                    self.test.setup = Some((8, frames, nodes, loads));
+                    return;
+                }
+                let ps = projects::projects(false);
+                let Some(p) = ps.iter().find(|p| p.name == "spooky") else {
+                    println!("SETUP TEST FAIL: the organisicator fixture's project is not found");
+                    std::process::exit(1);
+                };
+                let plates = p.plates_dir(p.by_names(&["a_010".into()]).flatten());
+                self.start_project_ingest(id, plates);
+                self.test.setup = Some((9, frames, nodes, loads));
+                return;
+            }
+            9 => {
+                let id = nodes as u64;
+                if self.asset_ingest.is_some() {
+                    self.test.setup = Some((9, frames, nodes, loads));
+                    return;
+                }
+                let a = self.egraph.node(id).and_then(|n| n.asset.clone());
+                let ok = a.as_ref().is_some_and(|a| a.id != 0 && a.shot == ["a_010"] && a.rel == "plates/clip/clip.####.exr");
+                if !ok || !self.egraph.node(id).is_some_and(|n| n.project_only) {
+                    println!("SETUP TEST FAIL: brought in through organisicator as {a:?}: {:?}", self.asset_ingest_msg);
+                    std::process::exit(1);
+                }
+                if !self.loaded.get(&id).is_some_and(|l| l.path.contains("a_010") && l.seq.frames.len() == 3) {
+                    if let Some(e) = self.load_errors.get(&id) {
+                        println!("SETUP TEST FAIL: organisicator's copy did not load: {e}");
+                        std::process::exit(1);
+                    }
+                    self.test.setup = Some((9, frames, nodes, loads));
+                    return;
+                }
+                // A pick by name gets the same id from the index.
+                let a = a.expect("checked");
+                let named = assets::AssetRef { id: 0, ..a.clone() };
+                if projects::with_id(named).id != a.id {
+                    println!("SETUP TEST FAIL: a by-name pick of the same file did not get id {}", a.id);
+                    std::process::exit(1);
+                }
+                for v in ["WOBBLE_PROJECTS_ROOT_OLD"] {
+                    if let Some(d) = std::env::var_os(v).filter(|d| !d.is_empty()) {
+                        let _ = std::fs::remove_dir_all(d);
+                    }
+                }
+                println!(
+                    "SETUP TEST PASS: save/load, new, Project Loads by name, outside footage copied into a shot, and through organisicator's API with its id (asset {})",
+                    a.id
                 );
                 std::process::exit(0);
             }
@@ -287,4 +373,11 @@ const PROJECT: &str = r#"{
         {"id": 1, "parent": null, "decl": "sequences/{sequence}", "value": "dev", "rel": "sequences/dev"},
         {"id": 2, "parent": 1, "decl": "sequences/{sequence}/{shot}", "value": "spb_010", "rel": "sequences/dev/spb_010"}
     ]
+}"#;
+
+/// organisicator's `serve_a_fixture_until_killed` project, as its manifest.
+const ORG_FIXTURE: &str = r#"{
+    "format": 1, "app": "organisicator", "name": "spooky", "code": "spb",
+    "folders": [{"path": "shots/{shot}", "type": "shot"}],
+    "instances": [{"id": 3, "parent": null, "decl": "shots/{shot}", "value": "a_010", "rel": "shots/a_010"}]
 }"#;

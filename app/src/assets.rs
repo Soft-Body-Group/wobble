@@ -208,10 +208,45 @@ pub fn resolve(client: &Client, r: &AssetRef) -> Result<Resolved, String> {
 /// machine's managed root (`crate::projects`), which is how a comp made on
 /// one OS finds its footage on another, organisicator running or not.
 pub fn resolve_now(r: &AssetRef) -> Result<Resolved, String> {
+    let by_names = || crate::projects::resolve(r).map(|path| Resolved { path, named: r.clone() });
     if r.id == 0 {
-        return crate::projects::resolve(r).map(|path| Resolved { path, named: r.clone() });
+        return by_names();
     }
-    resolve(&Client::discover()?, r)
+    // organisicator first: it follows renames and moves. When it cannot
+    // answer here (not running, or its index holds the path another machine
+    // indexed), the names it gave last time still find the file under this
+    // machine's managed root — never a stored path.
+    match Client::discover().and_then(|c| resolve(&c, r)) {
+        Ok(x) => Ok(x),
+        Err(e) if r.rel.is_empty() || r.project.is_empty() => Err(e),
+        Err(e) => by_names().map_err(|_| e),
+    }
+}
+
+/// organisicator's id for `project`'s project (matched by where it is on
+/// this machine) and for the level at `inst_rel` in it.
+pub fn api_ids(client: &Client, root: &std::path::Path, inst_rel: Option<&str>) -> Option<(i64, Option<i64>)> {
+    let canon = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let want = canon(root);
+    let pid = client
+        .get("/v1/projects")
+        .ok()?
+        .as_array()?
+        .iter()
+        .find(|p| p["root"].as_str().is_some_and(|r| canon(std::path::Path::new(r)) == want))?["id"]
+        .as_i64()?;
+    let Some(rel) = inst_rel else { return Some((pid, None)) };
+    let norm = |s: &str| s.replace('\\', "/").trim_matches('/').to_string();
+    let v = client.get(&format!("/v1/projects/{pid}")).ok()?;
+    let iid = v["instances"].as_array()?.iter().find(|i| i["rel"].as_str().map(norm) == Some(norm(rel)))?["id"].as_i64()?;
+    Some((pid, Some(iid)))
+}
+
+/// The id organisicator's index holds for `rel` under a level, if indexed.
+pub fn api_asset_id(client: &Client, pid: i64, inst: Option<i64>, rel: &str) -> Option<i64> {
+    let q = inst.map(|i| format!("?instance={i}")).unwrap_or_default();
+    let v = client.get(&format!("/v1/projects/{pid}/assets{q}")).ok()?;
+    v["assets"].as_array()?.iter().find(|a| a["rel"].as_str() == Some(rel))?["id"].as_i64()
 }
 
 // ---- ingest: a plain Load's footage into a shot ---------------------------------
