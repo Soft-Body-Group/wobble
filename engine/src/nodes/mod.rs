@@ -32,6 +32,7 @@ pub mod edgedetect;
 pub mod expression;
 pub mod flipflop;
 pub mod turn;
+pub mod uncrop;
 pub mod mirror;
 pub mod flow;
 pub mod rifetime;

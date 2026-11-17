@@ -26,6 +26,7 @@ pub use crate::nodes::text::TextParams;
 pub use crate::nodes::burnin::{BurninCorner, BurninParams};
 pub use crate::nodes::flipflop::{FlipFlopParams, FlipMode};
 pub use crate::nodes::turn::{TurnMode, TurnParams};
+pub use crate::nodes::uncrop::UncropParams;
 pub use crate::nodes::mirror::{MirrorParams, MirrorSide};
 pub use crate::nodes::gamma::GammaParams;
 pub use crate::nodes::tonemap::{ToneMapParams, ToneMode, ToneOp};
@@ -451,6 +452,9 @@ pub enum NodeKind {
     /// The picture rotated in quarter turns, its format turned with it
     /// (90° swaps width and height). See [`crate::nodes::turn`].
     Turn(TurnParams),
+    /// A cropped picture set back into the full format at the Crop's box,
+    /// the rest transparent black. See [`crate::nodes::uncrop`].
+    Uncrop(UncropParams),
     /// A power curve per channel, `x^(1/γ)`, master times r/g/b (alpha its
     /// own), negatives untouched. See [`crate::nodes::gamma`].
     Gamma(GammaParams),
@@ -6103,6 +6107,9 @@ impl NodeKind {
     pub fn samples_input(&self, i: usize) -> bool {
         match self {
             NodeKind::Switch(p) => i == p.live(),
+            // The reference only names the full format; its pixels are
+            // never read.
+            NodeKind::Uncrop(_) => i != crate::nodes::uncrop::REF_INPUT,
             _ => true,
         }
     }
@@ -6293,6 +6300,7 @@ impl NodeKind {
             NodeKind::Mirror(_) => MirrorParams::INPUTS,
             NodeKind::FlipFlop(_) => FlipFlopParams::INPUTS,
             NodeKind::Turn(_) => TurnParams::INPUTS,
+            NodeKind::Uncrop(_) => UncropParams::INPUTS,
             NodeKind::Gamma(_) => GammaParams::INPUTS,
             NodeKind::ToneMap(_) => ToneMapParams::INPUTS,
             NodeKind::UvWarp(_) => UvWarpParams::INPUTS,
@@ -6399,6 +6407,7 @@ impl NodeKind {
             NodeKind::Mirror(_) => MirrorParams::MASK_INPUT,
             NodeKind::FlipFlop(_) => FlipFlopParams::MASK_INPUT,
             NodeKind::Turn(_) => TurnParams::MASK_INPUT,
+            NodeKind::Uncrop(_) => UncropParams::MASK_INPUT,
             NodeKind::Gamma(_) => GammaParams::MASK_INPUT,
             NodeKind::ToneMap(_) => ToneMapParams::MASK_INPUT,
             NodeKind::UvWarp(_) => UvWarpParams::MASK_INPUT,
@@ -6715,6 +6724,7 @@ impl NodeKind {
             NodeKind::Recombine(p) => (input == p.base_input()).then_some("a"),
             // The UV map wears S: which port is the warp.
             NodeKind::UvWarp(_) => (input == 1).then_some("uv"),
+            NodeKind::Uncrop(_) => (input == crate::nodes::uncrop::REF_INPUT).then_some("f"),
             // The surface map wears N: which port is the glass.
             NodeKind::Refract(_) => (input == crate::nodes::refract::MAP_INPUT).then_some("n"),
             // The vectors port wears its letter: which wire says how
@@ -6900,6 +6910,14 @@ impl NodeKind {
                 } else {
                     s("the background it will sit over: its light bleeds round the \
                        foreground's edge")
+                }
+            }
+            NodeKind::Uncrop(_) => {
+                if input == 0 {
+                    s("the cropped picture coming back (a render of the Crop's box)")
+                } else {
+                    s("names the full format to put it back into; its pixels are never \
+                       read (the plate the Crop cut from)")
                 }
             }
             NodeKind::UvWarp(_) => {
@@ -7133,6 +7151,9 @@ impl NodeKind {
             NodeKind::Breakout(_) | NodeKind::ChannelSelect(_) => "channels",
             NodeKind::UvWarp(_) => {
                 if input == 0 { "source" } else { "uv map (u = red, v = green)" }
+            }
+            NodeKind::Uncrop(_) => {
+                if input == 0 { "cropped" } else { "full format" }
             }
             NodeKind::Env(_) => {
                 if input == crate::nodes::env::IMAGE_INPUT { "latlong" } else { "camera" }
@@ -7600,6 +7621,7 @@ impl NodeKind {
             NodeKind::Mirror(_) => MirrorParams::NAME,
             NodeKind::FlipFlop(_) => FlipFlopParams::NAME,
             NodeKind::Turn(_) => TurnParams::NAME,
+            NodeKind::Uncrop(_) => UncropParams::NAME,
             NodeKind::Gamma(_) => GammaParams::NAME,
             NodeKind::ToneMap(_) => ToneMapParams::NAME,
             NodeKind::UvWarp(_) => UvWarpParams::NAME,
@@ -7836,6 +7858,7 @@ impl NodeKind {
             NodeKind::Mirror(p) => p.topo_tag(),
             NodeKind::FlipFlop(p) => p.topo_tag(),
             NodeKind::Turn(p) => p.topo_tag(),
+            NodeKind::Uncrop(p) => p.topo_tag(),
             NodeKind::Gamma(p) => p.topo_tag(),
             NodeKind::ToneMap(p) => p.topo_tag(),
             NodeKind::UvWarp(p) => p.topo_tag(),

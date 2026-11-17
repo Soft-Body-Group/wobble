@@ -102,6 +102,7 @@ pub enum Icon {
     Reformat,
     CornerPin,
     SoftCrop,
+    Uncrop,
     UvWarp,
     Env,
     Refract,
@@ -236,6 +237,7 @@ pub const NODES: &[Node] = &[
     n(Icon::Reformat, "Reformat", Slot::node_reformat),
     n(Icon::CornerPin, "CornerPin", Slot::node_corner_pin),
     n(Icon::SoftCrop, "SoftCrop", Slot::node_soft_crop),
+    n(Icon::Uncrop, "Uncrop", Slot::node_uncrop),
     n(Icon::UvWarp, "UV Warp", Slot::node_uvwarp),
     n(Icon::Refract, "Refract", Slot::node_refract),
     n(Icon::GridWarp, "GridWarp", Slot::node_grid_warp),
@@ -732,6 +734,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         Icon::SoftCrop => {
             softcrop(painter, sp, r, fill, stroke)
         }
+        Icon::Uncrop => uncrop(painter, sp, r, fill, stroke),
         Icon::MotionBlur => {
             motionblur(painter, sp, r, fill, stroke)
         }
@@ -1398,6 +1401,29 @@ fn turn(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
     let k = r * 0.22;
     painter.line_segment([tip, tip - d * k + side * k], ink);
     painter.line_segment([tip, tip - d * k - side * k], ink);
+}
+
+/// `app/src/nodes/uncrop.rs` `glyph`.
+fn uncrop(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    painter.rect(
+        egui::Rect::from_center_size(c, egui::vec2(r * 1.7, r * 1.7)),
+        r * 0.3,
+        fill,
+        stroke,
+        egui::StrokeKind::Middle,
+    );
+    let ink = Stroke::new((r * 0.14).max(1.0), crate::theme::node_ink());
+    let (h, k) = (r * 0.25, r * 0.3);
+    painter.rect_stroke(
+        egui::Rect::from_center_size(c, egui::vec2(h * 2.0, h * 2.0)),
+        0.0,
+        ink,
+        egui::StrokeKind::Middle,
+    );
+    for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let p = c + egui::vec2(sx * h, sy * h);
+        painter.line_segment([p, p + egui::vec2(sx * k, sy * k)], ink);
+    }
 }
 
 /// `app/src/nodes/gamma.rs` `glyph`.

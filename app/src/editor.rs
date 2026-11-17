@@ -976,6 +976,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
                 ..Default::default()
             })
         }),
+        // A Crop's region set back into the full format (a render of the
+        // box, re-imported), linked to the Crop it undoes.
+        e(Transform, "Uncrop", false, |_| NodeKind::Uncrop(Default::default())),
         e(Transform, "UV Warp", false, |_| NodeKind::UvWarp(Default::default())),
         // A plate or a latlong through bumpy glass (a height or normal map).
         e(Transform, "Refract", false, |_| NodeKind::Refract(Default::default())),
@@ -1804,6 +1807,7 @@ impl Reduced {
             | NodeKind::FlipFlop(_)
             | NodeKind::Mirror(_)
             | NodeKind::Turn(_)
+            | NodeKind::Uncrop(_)
             | NodeKind::Write(_) => up(0),
             // A retime keeps the 8 bits only while it snaps to frames.
             NodeKind::Speed(engine::graph::SpeedParams { interp, .. })
@@ -1977,6 +1981,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::Warp(_) => t::node_warp(),
         NodeKind::ToRgba(_) => t::node_to_rgba(),
         NodeKind::SoftCrop(_) => t::node_soft_crop(),
+        NodeKind::Uncrop(_) => t::node_uncrop(),
         NodeKind::MotionBlur(_) => t::node_motion_blur(),
         NodeKind::Flow(_) => t::node_flow(),
         NodeKind::Rifetime(_) => t::node_rifetime(),
@@ -2528,6 +2533,7 @@ pub(crate) fn paint_body(
         NodeKind::SoftCrop(_) => {
             crate::nodes::softcrop::glyph(&painter, sp, r, fill, stroke)
         }
+        NodeKind::Uncrop(_) => crate::nodes::uncrop::glyph(&painter, sp, r, fill, stroke),
         NodeKind::MotionBlur(_) => {
             crate::nodes::motionblur::glyph(&painter, sp, r, fill, stroke)
         }

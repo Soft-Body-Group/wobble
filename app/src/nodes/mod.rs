@@ -42,6 +42,7 @@ pub mod mirror;
 pub mod lensdistort;
 pub mod flipflop;
 pub mod turn;
+pub mod uncrop;
 pub mod gamma;
 pub mod tonemap;
 pub mod lightwrap;

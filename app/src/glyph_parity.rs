@@ -94,6 +94,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::Reformat(_) => Icon::Reformat,
         NodeKind::CornerPin(_) => Icon::CornerPin,
         NodeKind::SoftCrop(_) => Icon::SoftCrop,
+        NodeKind::Uncrop(_) => Icon::Uncrop,
         NodeKind::Spline(_) => Icon::Spline,
         NodeKind::LumaKey(_) => Icon::LumaKey,
         NodeKind::Keyer(_) => Icon::Keyer,

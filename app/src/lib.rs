@@ -11578,6 +11578,14 @@ impl Gfx {
                 self.input_res(id, 0, visited)
                     .map(|r| p.output_format(r))
             }
+            // The full format: the reference port's, else the linked
+            // Crop's input's, else the cropped picture's own.
+            NodeKind::Uncrop(p) => {
+                let from = nodes::uncrop::format_from(&self.egraph, p);
+                self.input_res(id, engine::nodes::uncrop::REF_INPUT, visited)
+                    .or_else(|| from.and_then(|c| self.input_res(c, 0, visited)))
+                    .or_else(|| self.input_res(id, 0, visited))
+            }
             // A quarter turn swaps width and height (`TurnParams::output_format`).
             NodeKind::Turn(p) => {
                 let p = *p;
@@ -24843,6 +24851,15 @@ impl Gfx {
                         .collect(),
                     _ => Vec::new(),
                 };
+                // An Uncrop's Crop list and its linked box, read before
+                // the borrow (they look at other nodes).
+                let (uncrop_crops, uncrop_linked) = match self.egraph.node(node).map(|n| &n.kind) {
+                    Some(NodeKind::Uncrop(p)) => (
+                        nodes::uncrop::crops(&self.egraph),
+                        nodes::uncrop::linked_rect(&self.egraph, p, Some(cur_t as f32)),
+                    ),
+                    _ => (Vec::new(), None),
+                };
                 let mut r3d_act: Option<nodes::scene3d::SourceAct> = None;
                 let Some(n) = self.egraph.node_mut(node) else {
                     return;
@@ -25569,6 +25586,11 @@ impl Gfx {
                     }
                     NodeKind::Turn(p) => {
                         if let Some(h) = nodes::turn::panel(ui, &mut rcx, p) {
+                            hud_drag_out = Some(h);
+                        }
+                    }
+                    NodeKind::Uncrop(p) => {
+                        if let Some(h) = nodes::uncrop::panel(ui, &mut rcx, p, &uncrop_crops, uncrop_linked) {
                             hud_drag_out = Some(h);
                         }
                     }

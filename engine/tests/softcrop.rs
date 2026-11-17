@@ -171,3 +171,31 @@ fn a_reformat_is_the_box_and_nothing_past_it() {
         }
     }
 }
+
+/// Crop (reformat) then Uncrop with the same box is the plate inside the
+/// box and transparent black outside it, at the full format.
+#[test]
+fn an_uncrop_puts_a_reformat_back() {
+    let Some(ctx) = ctx() else { return };
+    let rect = [0.25, 0.125, 0.75, 0.625];
+    let p = SoftCropParams { rect, mode: engine::nodes::softcrop::CropMode::Reformat, ..Default::default() };
+    let ((x0, y0), (bw, bh)) = p.px_box(W, H);
+    let mut g = graph(NodeKind::SoftCrop(p));
+    g.nodes.insert(2, NodeKind::Uncrop(engine::graph::UncropParams { rect, crop: None }));
+    g.edges.insert((2, 0), 1);
+    g.view = Some(2);
+    g.formats.insert(0, (W, H));
+    g.formats.insert(1, (bw, bh));
+    g.formats.insert(2, (W, H));
+    let out = render(&ctx, &g);
+    for y in 0..H {
+        for x in 0..W {
+            let inside = x >= x0 && x < x0 + bw && y >= y0 && y < y0 + bh;
+            let want = if inside { source(x, y) } else { [0.0; 4] };
+            let got = out[(y * W + x) as usize];
+            for c in 0..4 {
+                assert!((got[c] - want[c]).abs() < 4e-3, "uncrop at ({x},{y}) ch{c}: {} want {}", got[c], want[c]);
+            }
+        }
+    }
+}

@@ -255,6 +255,7 @@ mod tests {
             NodeKind::Mirror(Default::default()),
             NodeKind::FlipFlop(Default::default()),
             NodeKind::Turn(Default::default()),
+            NodeKind::Uncrop(Default::default()),
             NodeKind::Gamma(Default::default()),
             NodeKind::ToneMap(Default::default()),
             NodeKind::UvWarp(Default::default()),

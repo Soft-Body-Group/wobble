@@ -1175,6 +1175,10 @@ impl EditorGraph {
                     }
                 }
             }
+            // A linked Uncrop takes its Crop's box as it is at this tick.
+            if let NodeKind::Uncrop(p) = &mut kind {
+                crate::nodes::uncrop::lower(self, p, t);
+            }
             // "default" input = the per-format table's answer; the engine
             // only ever sees Working / Explicit.
             if let NodeKind::Read { input, path, .. } = &mut kind {
