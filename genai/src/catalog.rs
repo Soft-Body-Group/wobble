@@ -130,6 +130,10 @@ pub enum Dialect {
     /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
     /// clip, `seed`; audio and prompt expansion off.
     LtxInpaint,
+    /// Wan VACE 14B inpainting: `prompt`, `video_url`, `mask_video_url`
+    /// (white = regenerate), `seed`; length and rate follow the clip
+    /// (17-241 frames), prompt expansion off.
+    WanVace,
     /// Bria Video Eraser (mask): `video_url`, `mask_video_url` (white =
     /// erase), both under 5 s; no prompt (the port is fed and ignored),
     /// no seed, sound off, no auto-trim (the plan refuses a long clip
@@ -243,6 +247,7 @@ impl Dialect {
                 | Dialect::IcLight
                 | Dialect::LucyEdit
                 | Dialect::LtxInpaint
+                | Dialect::WanVace
                 | Dialect::Clarity
                 | Dialect::SeedVr
                 | Dialect::SeedVrVideo
@@ -271,6 +276,9 @@ impl Dialect {
             }
             Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
                 return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
+            }
+            Dialect::WanVace if !(17..=241).contains(&frames) => {
+                return Err(format!("{label} takes 17-241 frames; this clip is {frames}"));
             }
             Dialect::BriaVideoEraser if secs >= 5.0 => {
                 return Err(format!("{label} takes a clip under 5 s; this one is {secs:.1} s"));
@@ -703,6 +711,19 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
     },
     RemoteModel {
+        id: "fal/wan-vace-inpaint",
+        label: "Wan VACE video inpaint",
+        short: "wan vace",
+        service: Service::Fal,
+        endpoint: "fal-ai/wan-vace-14b/inpainting",
+        dialect: Dialect::WanVace,
+        task: Task::VideoInpaint,
+        // Wan 2.1 (and VACE) are released under Apache 2.0.
+        commercial: true,
+        licence: "Wan 2.1 VACE (Apache 2.0)",
+        about: "repaint the matte's white over the input clip from the prompt: edit or remove on video, 17-241 frames, billed per second",
+    },
+    RemoteModel {
         id: "fal/bria-video-eraser",
         label: "Bria Video Eraser",
         short: "bria eraser",
@@ -1083,6 +1104,7 @@ mod tests {
                     | Dialect::LucyEdit
                     | Dialect::LtxInpaint
                     | Dialect::BriaVideoEraser
+                    | Dialect::WanVace
                     | Dialect::TopazVideo { .. }
                     | Dialect::SeedVrVideo
             );

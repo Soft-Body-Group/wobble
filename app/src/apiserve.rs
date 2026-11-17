@@ -2245,7 +2245,9 @@ impl Gfx {
             jobs.push(json!({ "node": r.node, "kind": "roto-track" }));
         }
         if let Some(r) = self.jobs.genai.run.as_ref().filter(|r| r.active()) {
-            jobs.push(json!({ "node": r.node, "kind": "genai" }));
+            // "ready" = quoted and waiting for pay & run (a click in the
+            // app): nothing more will happen until then.
+            jobs.push(json!({ "node": r.node, "kind": "genai", "state": self.genai_state_words() }));
         }
         if let Some(r) = self.jobs.flow.run.as_ref().filter(|r| r.active()) {
             let (done, total) = match &r.phase {

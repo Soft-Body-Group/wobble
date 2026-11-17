@@ -1168,6 +1168,8 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         let make = move |_| NodeKind::GenAiStep(op.clone());
         NodeEntry { cat: GenAiStep, label, reader: false, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
     }));
+    // A matte drawn in there: a real Spline (`genai::Op::Shape`).
+    v.push(e(GenAiStep, "Spline", false, |_| NodeKind::Spline(SplineParams::default())));
     v
 }
 

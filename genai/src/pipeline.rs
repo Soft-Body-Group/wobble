@@ -88,6 +88,16 @@ pub enum Op {
     },
     /// Text typed into the panel.
     Prompt { text: String },
+    /// A matte DRAWN inside the pipeline: a comp node (a Spline) the host
+    /// app owns, carried here whole as its own JSON (`node`; this crate
+    /// never reads it). Rendered by the host when the run starts, like an
+    /// Input — at the playhead, or over the run's range when `clip` (set
+    /// by the host from what it is wired into: a video port wants a clip).
+    Shape {
+        node: serde_json::Value,
+        #[serde(default)]
+        clip: bool,
+    },
     /// LEGACY (read from old files, converted by `Pipeline::normalize`
     /// into an `Input`, never run): the host node's image input.
     Reference,
@@ -204,6 +214,7 @@ impl Op {
         match self {
             Op::Prompt { .. }
             | Op::Input { .. }
+            | Op::Shape { .. }
             | Op::PromptIn
             | Op::Reference
             | Op::Matte
@@ -234,7 +245,7 @@ impl Op {
             }
             Op::Output => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
-            Op::Input { clip: true, .. } => Some(Pipe::Video),
+            Op::Input { clip: true, .. } | Op::Shape { clip: true, .. } => Some(Pipe::Video),
             Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_3d()) => {
                 Some(Pipe::Scene)
             }
@@ -272,6 +283,7 @@ impl Op {
             Op::Input { matte: true, clip: false, .. } => "Matte In",
             Op::Input { matte: false, clip: true, .. } => "Image Clip In",
             Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
+            Op::Shape { .. } => "Spline",
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
             Op::Matte => "Matte",
@@ -307,6 +319,8 @@ impl Op {
                     (n, true) => format!("{what} {} clip {seconds:.1}s", n + 1),
                 }
             }
+            Op::Shape { clip: false, .. } => "spline".into(),
+            Op::Shape { clip: true, .. } => "spline clip".into(),
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
@@ -952,9 +966,21 @@ impl Pipeline {
             })
             .collect()
     }
-    /// Does a run read any input as a clip?
+    /// The mattes drawn inside that a run reads — the Shape steps on the
+    /// way to Output, as (step, clip) — in plan order.
+    pub fn shapes(&self) -> Vec<(usize, bool)> {
+        let Some(Ok(order)) = self.output().map(|o| self.plan(o)) else { return vec![] };
+        order
+            .into_iter()
+            .filter_map(|i| match self.steps[i].op {
+                Op::Shape { clip, .. } => Some((i, clip)),
+                _ => None,
+            })
+            .collect()
+    }
+    /// Does a run read anything as a clip?
     pub fn reads_clip(&self) -> bool {
-        self.reads().iter().any(|r| r.1)
+        self.reads().iter().any(|r| r.1) || self.shapes().iter().any(|r| r.1)
     }
     /// What node input `k` carries (an image when out of range).
     pub fn in_kind(&self, k: usize) -> InKind {

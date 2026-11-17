@@ -1550,6 +1550,20 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   lands while you are inside the pipeline is written to the PARKED graph
   (`genai_params_anywhere`) — writing it to `self.egraph` lost it (reported
   "ran it, see nothing", 2026-11-17).
+- **A Spline can be drawn INSIDE** (`Op::Shape { node, clip }`): the dive
+  holds a real `NodeKind::Spline` (its panel, gizmo and keys work), carried
+  on the pipeline as the ENode's JSON (`genaiui::shape_node`, `is_step`).
+  `clip` is derived in `from_editor` from the port it feeds (a video port
+  wants a clip). The dive makes no pixels, so both the view of it
+  (`render_preview`) and the run's capture render a STAND-IN node put in
+  the comp (`shape_stand_in`, ids from `genaiui::SHAPE_IDS`, in
+  `undo_last` too so it is no undo step; `genai_drop_stand_ins` removes
+  it, also from `genai_poll` whenever no capture is running), at the
+  pipeline node's format (`Runs::dive_fmt` inside). Capture ports carry
+  the SHAPE flag and a STEP index; results land in `Inputs::shapes` /
+  `shape_clips`. A step's "mask" port is `PortKind::Mask` and a matte
+  Input gives Mask; `from_editor` walks through any converter the editor
+  bridged in.
 - **Clips** (an `Op::Input` with `clip` on, `Task::VideoEdit` /
   `VideoInpaint`): that input over `Pipeline::clip_seconds` (all clip
   Inputs share one length, `set_clip_seconds`) from the playhead, on the

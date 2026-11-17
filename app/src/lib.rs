@@ -20327,8 +20327,21 @@ impl Gfx {
         if let Some(d) = self.dive.last().filter(|d| d.kind == DiveKind::GenAi) {
             let owner = d.from?;
             let mut g = d.graph.clone();
-            let port = self.egraph.active_view().and_then(|v| match self.egraph.node(v).map(|n| &n.kind) {
-                Some(NodeKind::GenAiStep(genai::pipeline::Op::Input { input, .. })) => Some(*input),
+            let viewed = self.egraph.active_view().and_then(|v| self.egraph.node(v));
+            // A Spline drawn in here: its matte, from a stand-in node in
+            // the comp at the pipeline node's format (so it lines up).
+            if let Some(n) = viewed.filter(|n| matches!(n.kind, NodeKind::Spline(_))) {
+                let mut n = n.clone();
+                if let NodeKind::Spline(sp) = &mut n.kind {
+                    sp.format = sp.format.or(self.jobs.genai.dive_fmt);
+                }
+                let id = genaiui::SHAPE_IDS + 0xfff;
+                g.nodes.insert(id, n);
+                g.view = Some(id);
+                return Some(g);
+            }
+            let port = viewed.and_then(|n| match &n.kind {
+                NodeKind::GenAiStep(genai::pipeline::Op::Input { input, .. }) => Some(*input),
                 _ => None,
             });
             g.view = Some(port.and_then(|p| g.input_of(owner, p)).unwrap_or(owner));
@@ -21083,6 +21096,7 @@ impl Gfx {
             let mut pl = p.pipeline.clone();
             pl.sync_inputs();
             let mut body = genaiui::to_editor(&pl);
+            self.jobs.genai.dive_fmt = self.node_resolution_full(node, &mut std::collections::HashSet::new());
             body.node_status_min = self.egraph.node_status_min;
             let parked_graph = std::mem::replace(&mut self.egraph, body);
             let parked_last = std::mem::replace(&mut self.undo_last, self.egraph.clone());

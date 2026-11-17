@@ -87,6 +87,10 @@ pub struct Inputs {
     /// Per node input, rendered over the run's range from the playhead:
     /// what a clip `Input` reads.
     pub clips: std::collections::BTreeMap<usize, Clip>,
+    /// Per STEP index, a `Shape` step's matte, rendered by the host at
+    /// the playhead, and over the run's range.
+    pub shapes: std::collections::BTreeMap<usize, Png>,
+    pub shape_clips: std::collections::BTreeMap<usize, Clip>,
     pub comp: (u32, u32),
     /// The playhead the inputs were rendered at.
     pub tick: i64,
@@ -223,6 +227,16 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                         input + 1
                     ))?;
                     (h(&[&tag, &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
+                }
+            }
+            // Keyed on the pixels the host rendered, like an Input.
+            Op::Shape { clip, .. } => {
+                if *clip {
+                    let c = inputs.shape_clips.get(&i).ok_or("a Spline inside the pipeline was not rendered as a clip")?;
+                    (h(&["shape-clip", &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
+                } else {
+                    let r = inputs.shapes.get(&i).ok_or("a Spline inside the pipeline was not rendered")?;
+                    (h(&["shape", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
                 }
             }
             Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
@@ -429,6 +443,16 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::WanVace) => json!({
+            "prompt": prompt(),
+            "video_url": img(1)?,
+            "mask_video_url": img(2)?,
+            // The take must line up with the plate, frame for frame.
+            "match_input_num_frames": true,
+            "match_input_frames_per_second": true,
+            "seed": seed,
+            "enable_prompt_expansion": false,
+        }),
         (_, Dialect::BriaVideoEraser) => json!({
             "video_url": img(1)?,
             "mask_video_url": img(2)?,
@@ -891,6 +915,20 @@ fn execute(
                     (&c.bytes, "input.mp4")
                 } else {
                     let png = inputs.pics.get(input).ok_or_else(|| anyhow!("missing input picture"))?;
+                    (&png.bytes, "input.png")
+                };
+                let path = match cached(dir, key) {
+                    Some(m) => dir.join(key).join(m.file),
+                    None => commit(dir, key, file, bytes, &Meta { file: file.into(), when: now(), ..meta0() })?,
+                };
+                Val::Image(path)
+            }
+            Op::Shape { clip, .. } => {
+                let (bytes, file) = if *clip {
+                    let c = inputs.shape_clips.get(&i).ok_or_else(|| anyhow!("missing shape clip"))?;
+                    (&c.bytes, "input.mp4")
+                } else {
+                    let png = inputs.shapes.get(&i).ok_or_else(|| anyhow!("missing shape matte"))?;
                     (&png.bytes, "input.png")
                 };
                 let path = match cached(dir, key) {

@@ -7319,6 +7319,9 @@ impl NodeKind {
         if let NodeKind::GenAiStep(op) = self {
             return match op.ports().get(input) {
                 Some((genai::Pipe::Text, _)) => PortKind::Text,
+                // A matte: what a Matte In or a Spline drawn in there
+                // gives. (A picture wired in gets the usual ToMatte.)
+                Some((_, "mask")) => PortKind::Mask,
                 _ => PortKind::Image,
             };
         }
@@ -7460,6 +7463,7 @@ impl NodeKind {
         if let NodeKind::GenAiStep(op) = self {
             return match op.output() {
                 Some(genai::Pipe::Text) => PortKind::Text,
+                _ if matches!(op, genai::Op::Input { matte: true, .. }) => PortKind::Mask,
                 _ => PortKind::Image,
             };
         }

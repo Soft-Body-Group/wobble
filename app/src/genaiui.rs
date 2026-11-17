@@ -51,6 +51,15 @@ pub const CLIP_SHORT: u32 = 720;
 /// convert a frame without looking at the node.
 pub const CLIP: usize = 0x100;
 pub const MATTE: usize = 0x200;
+/// The port's low byte is a STEP index, not a node input: a `Shape` step
+/// (a Spline drawn inside), rendered from a stand-in node the capture
+/// puts in the comp for as long as it takes (`shape_stand_in`).
+pub const SHAPE: usize = 0x400;
+
+/// Ids of the stand-in nodes a run's Shape captures (and the dive's view
+/// of one) put in the comp: far above any real id, so they are found and
+/// removed by id alone. `SHAPE_IDS + step`; the dive's view uses the top.
+pub const SHAPE_IDS: u64 = u64::MAX - 0x1000;
 
 /// The capture port of node input `input`, read as a still or a clip.
 pub fn capture_port(input: usize, matte: bool, clip: bool) -> usize {
@@ -133,7 +142,17 @@ pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
     for (i, s) in pl.steps.iter().enumerate() {
         let id = i as u64 + 1;
         let pos = egui::pos2(s.at[0] * k, s.at[1] * k);
-        g.nodes.insert(id, crate::editor::ENode::new(NodeKind::GenAiStep(s.op.clone()), pos));
+        // A Shape is the comp node it carries (a Spline, keys and all), so
+        // its own panel and viewer gizmo edit it in here.
+        let node = match &s.op {
+            Op::Shape { node, .. } => {
+                let mut n = shape_node(node);
+                n.pos = pos;
+                n
+            }
+            op => crate::editor::ENode::new(NodeKind::GenAiStep(op.clone()), pos),
+        };
+        g.nodes.insert(id, node);
     }
     for (to, s) in pl.steps.iter().enumerate() {
         for (port, src) in s.inputs.iter().enumerate() {
@@ -150,25 +169,66 @@ pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
 /// not a step is dropped, and so is a wire into a port the step lacks or of
 /// the wrong pipe (`Op::accepts`, the pipeline's one wiring rule).
 pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
-    let ids: Vec<u64> =
-        g.nodes.iter().filter(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(_))).map(|(id, _)| *id).collect();
+    let ids: Vec<u64> = g.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
     let index = |id: u64| ids.iter().position(|&x| x == id);
+    // A wire's real source: through any converter the editor spliced in
+    // (a Spline is a matte, a step's port a picture) and any dot, to the
+    // step above it. Those in-between nodes are not steps and are dropped.
+    let source = |mut id: u64| -> Option<usize> {
+        for _ in 0..16 {
+            if let Some(i) = index(id) {
+                return Some(i);
+            }
+            id = g.input_of(id, 0)?;
+        }
+        None
+    };
     let mut steps: Vec<genai::Step> = ids
         .iter()
         .map(|id| {
             let n = &g.nodes[id];
-            let NodeKind::GenAiStep(op) = &n.kind else { unreachable!() };
-            genai::Step { op: op.clone(), at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()] }
+            let op = match &n.kind {
+                NodeKind::GenAiStep(op) => op.clone(),
+                // A matte drawn in here, carried whole.
+                _ => Op::Shape { node: serde_json::to_value(n).unwrap_or_default(), clip: false },
+            };
+            genai::Step { at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()], op }
         })
         .collect();
-    for &(dst, port, src) in &g.edges {
-        let (Some(to), Some(from)) = (index(dst), index(src)) else { continue };
+    let edges: Vec<(usize, usize, usize)> = g
+        .edges
+        .iter()
+        .filter_map(|&(dst, port, src)| Some((index(dst)?, port, source(src)?)))
+        .collect();
+    // A Shape wired into a video port is rendered as a clip.
+    for &(to, port, from) in &edges {
+        let video = matches!(steps[to].op.ports().get(port), Some((genai::Pipe::Video, _)));
+        if let (true, Op::Shape { clip, .. }) = (video, &mut steps[from].op) {
+            *clip = true;
+        }
+    }
+    for (to, port, from) in edges {
         let Some(pipe) = steps[from].op.output() else { continue };
         if steps[to].op.accepts(port, pipe) {
             steps[to].inputs[port] = Some(from);
         }
     }
     steps
+}
+
+/// Is this dive node a pipeline step? A step proper, or a comp node the
+/// pipeline carries as a `Shape` (a Spline).
+pub(crate) fn is_step(kind: &NodeKind) -> bool {
+    matches!(kind, NodeKind::GenAiStep(_) | NodeKind::Spline(_))
+}
+
+/// The comp node a `Shape` step carries; an empty Spline when the JSON is
+/// not one this build reads.
+pub(crate) fn shape_node(node: &serde_json::Value) -> crate::editor::ENode {
+    serde_json::from_value::<crate::editor::ENode>(node.clone())
+        .ok()
+        .filter(|n| matches!(n.kind, NodeKind::Spline(_)))
+        .unwrap_or_else(|| crate::editor::ENode::new(NodeKind::Spline(Default::default()), egui::Pos2::ZERO))
 }
 
 /// The step nodes the dive's add menu offers: a prompt, a template, one
@@ -258,6 +318,10 @@ pub struct Runs {
     /// Each take's stages (`genai::history::load_stages`), by its key, read
     /// once: what the dive shows when a step is viewed.
     stages: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// The open pipeline's node format, read as the dive was entered (the
+    /// comp cannot change while inside): what a Spline drawn in there is
+    /// rendered at, so it lines up with the plate.
+    pub dive_fmt: Option<(u32, u32)>,
     account: Account,
 }
 
@@ -335,6 +399,7 @@ impl Default for Runs {
             captured: vec![],
             clip_frames: vec![],
             stages: Default::default(),
+            dive_fmt: None,
             account: Account::Unknown,
         }
     }
@@ -650,6 +715,9 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
             if !wired {
                 ui.colored_label(theme::warn(), small(format!("nothing is wired into this {what} input")));
             }
+        }
+        Op::Shape { .. } => {
+            ui.label(small("a matte drawn inside the pipeline: open it (Enter) to edit the Spline"));
         }
         Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
             ui.colored_label(theme::warn(), small("a step from an older build: step out and back in to update it"));
@@ -1339,6 +1407,10 @@ impl Gfx {
                 todo.push(port);
             }
         }
+        // Mattes drawn inside: rendered from a stand-in node, by step.
+        for (step, clip) in pl.shapes() {
+            todo.push((step & 0xff) | SHAPE | MATTE | if clip { CLIP } else { 0 });
+        }
         if !todo.is_empty() {
             if let Some(up) = self.genai_unrun_upstream(node) {
                 return self.genai_fail(node, pl, format!("{up} upstream has no take yet: run it first"));
@@ -1394,7 +1466,12 @@ impl Gfx {
         let (node, tick, next, pl) = (r.node, r.tick, todo.first().copied(), r.pipeline.clone());
         match next {
             Some(port) => {
-                let Some(input) = self.egraph.input_of(node, input_of_port(port)) else {
+                let input = if port & SHAPE != 0 {
+                    self.shape_stand_in(node, &pl, input_of_port(port))
+                } else {
+                    self.egraph.input_of(node, input_of_port(port))
+                };
+                let Some(input) = input else {
                     return self.genai_fail(node, pl, "an input was unwired mid-run");
                 };
                 let frames = if port & CLIP != 0 { self.genai_clip_frames(&pl) } else { 1 };
@@ -1403,6 +1480,33 @@ impl Gfx {
                 }
             }
             None => self.genai_next_frame(),
+        }
+    }
+
+    /// Put step `step`'s Spline in the comp as a stand-in node the capture
+    /// bake can render, at the pipeline node's format. In `undo_last` too,
+    /// so its few frames in the graph are not an undo step. Returns its
+    /// id; `genai_drop_stand_ins` takes it out again.
+    fn shape_stand_in(&mut self, node: u64, pl: &Pipeline, step: usize) -> Option<u64> {
+        let Op::Shape { node: json, .. } = &pl.steps.get(step)?.op else { return None };
+        let mut n = shape_node(json);
+        let fmt = self.node_resolution_full(node, &mut std::collections::HashSet::new());
+        if let NodeKind::Spline(sp) = &mut n.kind {
+            sp.format = sp.format.or(fmt);
+        }
+        // Far off the canvas for the moment it exists.
+        n.pos = egui::pos2(1.0e7, 1.0e7);
+        let id = SHAPE_IDS + step as u64;
+        self.egraph.nodes.insert(id, n.clone());
+        self.undo_last.nodes.insert(id, n);
+        Some(id)
+    }
+
+    /// Take every Shape stand-in back out of the comp.
+    pub(crate) fn genai_drop_stand_ins(&mut self) {
+        if self.egraph.nodes.keys().next_back().is_some_and(|id| *id >= SHAPE_IDS) {
+            self.egraph.nodes.retain(|id, _| *id < SHAPE_IDS);
+            self.undo_last.nodes.retain(|id, _| *id < SHAPE_IDS);
         }
     }
 
@@ -1462,6 +1566,7 @@ impl Gfx {
 
     /// The bake loop finished a capture: encode what it left and go on.
     pub(crate) fn genai_capture_finished(&mut self, node: u64) {
+        self.genai_drop_stand_ins();
         let working = self.egraph.working;
         let got = std::mem::take(&mut self.jobs.genai.captured);
         let Some(r) = self.jobs.genai.run.as_mut().filter(|r| r.node == node) else { return };
@@ -1475,7 +1580,11 @@ impl Gfx {
                 .collect();
             match encode_clip(frames, self.fps) {
                 Ok(clip) => {
-                    inputs.clips.insert(input_of_port(port), clip);
+                    if port & SHAPE != 0 {
+                        inputs.shape_clips.insert(input_of_port(port), clip);
+                    } else {
+                        inputs.clips.insert(input_of_port(port), clip);
+                    }
                     todo.remove(0);
                     self.genai_capture_next();
                 }
@@ -1502,7 +1611,11 @@ impl Gfx {
         };
         match png {
             Ok(png) => {
-                inputs.pics.insert(input_of_port(port), png);
+                if port & SHAPE != 0 {
+                    inputs.shapes.insert(input_of_port(port), png);
+                } else {
+                    inputs.pics.insert(input_of_port(port), png);
+                }
                 todo.remove(0);
                 self.genai_capture_next();
             }
@@ -1623,6 +1736,11 @@ impl Gfx {
 
     /// Once a redraw: quotes landing, run progress, the account balance.
     pub(crate) fn genai_poll(&mut self) {
+        // A capture that ended any other way (failed, cancelled, its bake
+        // aborted) must not leave its stand-in in the comp.
+        if !self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Capturing { .. })) {
+            self.genai_drop_stand_ins();
+        }
         // The relay balance, fetched once per config change.
         #[cfg(feature = "commerce")]
         if self.jobs.genai.cfg.route == Route::Relay && self.jobs.genai.cfg.relay_token.is_some() {
@@ -1866,7 +1984,7 @@ impl Gfx {
             .egraph
             .nodes
             .iter()
-            .filter(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(_)))
+            .filter(|(_, n)| is_step(&n.kind))
             .map(|(id, _)| *id)
             .collect();
         let viewed = self.egraph.active_view().and_then(|v| {
@@ -2604,7 +2722,7 @@ impl Gfx {
         self.test.genai = Some(t);
     }
 
-    fn genai_state_words(&self) -> String {
+    pub(crate) fn genai_state_words(&self) -> String {
         match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
             None => "none".into(),
             Some(Phase::Capturing { todo, .. }) => format!("capturing {todo:?}, bake {}", self.graph_bake.is_some()),
