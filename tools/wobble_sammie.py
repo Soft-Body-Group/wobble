@@ -37,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 # OpenCV only reads / writes EXR with this set BEFORE it is imported.
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
@@ -104,12 +105,21 @@ def device_and_autocast():
     return torch.device("cpu"), contextlib.nullcontext
 
 
+_SRGB8 = None
+
+
 def srgb8(lin):
+    """Linear to sRGB 8-bit through a 16-bit table: a lookup a pixel instead
+    of a `pow`, which on a 2K plate cost more than SAM's whole frame. The
+    table's step is a twentieth of a code value at its steepest."""
     import numpy as np
 
-    c = np.clip(lin, 0.0, 1.0)
-    c = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
-    return (c * 255.0 + 0.5).astype(np.uint8)
+    global _SRGB8
+    if _SRGB8 is None:
+        c = np.linspace(0.0, 1.0, 65536)
+        c = np.where(c <= 0.0031308, c * 12.92, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
+        _SRGB8 = (c * 255.0 + 0.5).astype(np.uint8)
+    return _SRGB8[(np.clip(lin, 0.0, 1.0) * 65535.0 + 0.5).astype(np.uint16)]
 
 
 def serve(model: str) -> int:
@@ -205,55 +215,52 @@ def main() -> int:
     total = n * (2 if a.matting != "off" else 1)
     say("frame", 0, total)
 
-    # The plate, the way SAM sees pictures: sRGB 8-bit, numbered from 0.
+    # The plate, the way SAM sees pictures: sRGB 8-bit, numbered from 0, and
+    # no bigger than its 1024 x 1024 input on either axis (it resizes every
+    # frame to that; the masks come back at plate size from the logits).
+    # One frame per worker: the EXR decode and the encode drop the GIL, and
+    # on one thread this step cost several times the tracking itself.
     frames = os.path.join(a.shot, "frames")
     os.makedirs(frames, exist_ok=True)
-    h = w = 0
-    for i, path in enumerate(inputs):
+    first = cv2.imread(inputs[0], cv2.IMREAD_UNCHANGED)
+    if first is None:
+        say("error", f"could not read {stems[0]}")
+        return 1
+    h, w = first.shape[:2]
+    del first
+
+    def to_jpeg(i: int) -> str | None:
         out = os.path.join(frames, f"{i:05d}.jpg")
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if os.path.exists(out):
+            return None
+        img = cv2.imread(inputs[i], cv2.IMREAD_UNCHANGED)
         if img is None:
-            say("error", f"could not read {stems[i]}")
-            return 1
-        h, w = img.shape[:2]
-        if not os.path.exists(out):
-            cv2.imwrite(out, srgb8(img[:, :, :3].astype(np.float32)), [cv2.IMWRITE_JPEG_QUALITY, 95])
+            return f"could not read {stems[i]}"
+        img = img[:, :, :3]
+        size = (min(img.shape[1], 1024), min(img.shape[0], 1024))
+        if size != (img.shape[1], img.shape[0]):
+            img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+        ok, jpg = cv2.imencode(".jpg", srgb8(img.astype(np.float32)), [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            return f"could not encode {stems[i]}"
+        # Not `.jpg` until whole: SAM lists the directory by extension.
+        with open(out + ".part", "wb") as f:
+            f.write(jpg.tobytes())
+        os.replace(out + ".part", out)
+        return None
+
+    workers = min(16, os.cpu_count() or 4)
+    with ThreadPoolExecutor(workers) as pool:
+        for e in pool.map(to_jpeg, range(n)):
+            if e:
+                say("error", e)
+                return 1
 
     device, autocast = device_and_autocast()
     print(f"running on {device}", flush=True)
     ckpt, cfg = SAM[a.model]
     fetch(ckpt, a.model)
     from sam2.build_sam import build_sam2_video_predictor
-
-    masks: dict[int, np.ndarray] = {}
-    done = 0
-    with torch.inference_mode(), autocast():
-        pred = build_sam2_video_predictor(cfg, ckpt, device=device)
-
-        def prompted():
-            state = pred.init_state(video_path=frames, offload_video_to_cpu=True)
-            for i in keys:
-                ps = by_frame[i]
-                xy = np.array([[p["x"] * w, p["y"] * h] for p in ps], dtype=np.float32)
-                lb = np.array([1 if p["positive"] else 0 for p in ps], dtype=np.int32)
-                pred.add_new_points_or_box(state, frame_idx=i, obj_id=1, points=xy, labels=lb)
-            return state
-
-        def run(reverse: bool) -> None:
-            # A fresh state each way: a backward pass over a state the
-            # forward one has filled comes back empty.
-            nonlocal done
-            state = prompted()
-            for fi, _ids, logits in pred.propagate_in_video(state, start_frame_idx=keys[0], reverse=reverse):
-                if fi not in masks:
-                    done += 1
-                    say("frame", done, total)
-                masks[fi] = (logits[0] > 0.0).cpu().numpy().squeeze().astype(np.uint8) * 255
-
-        run(False)
-        if keys[0] > 0:
-            run(True)
-        del pred
 
     out_dir = os.path.join(a.shot, "Matte")
     os.makedirs(out_dir, exist_ok=True)
@@ -268,9 +275,57 @@ def main() -> int:
         cv2.imwrite(tmp, rgba, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_HALF])
         os.replace(tmp, out)
 
-    if a.matting == "off":
-        for i in range(n):
-            write(i, masks.get(i, np.zeros((h, w), np.uint8)) / 255.0)
+    # Without matting the segment IS the matte: each frame is written by a
+    # worker as it is tracked, not all at the end. With matting the
+    # segments are kept for MatAnyone to seed from.
+    keep = a.matting != "off"
+    masks: dict[int, np.ndarray] = {}
+    seen: set[int] = set()
+    writes = []
+    done = 0
+    with ThreadPoolExecutor(workers) as pool, torch.inference_mode(), autocast():
+        pred = build_sam2_video_predictor(cfg, ckpt, device=device)
+        # The frames load once and serve both ways. Not SAM's async loader:
+        # measured, it halved the tracking rate for the whole run.
+        state = pred.init_state(video_path=frames, offload_video_to_cpu=True)
+
+        def run(reverse: bool) -> None:
+            # Prompted afresh each way: a backward pass over a state the
+            # forward one has filled comes back empty.
+            nonlocal done
+            pred.reset_state(state)
+            for i in keys:
+                ps = by_frame[i]
+                xy = np.array([[p["x"] * w, p["y"] * h] for p in ps], dtype=np.float32)
+                lb = np.array([1 if p["positive"] else 0 for p in ps], dtype=np.int32)
+                pred.add_new_points_or_box(state, frame_idx=i, obj_id=1, points=xy, labels=lb)
+            for fi, _ids, logits in pred.propagate_in_video(state, start_frame_idx=keys[0], reverse=reverse):
+                if fi in seen:
+                    continue
+                seen.add(fi)
+                # SAM's own last step (logits up to size, then > 0), at the
+                # plate's size rather than the frames' it was given.
+                up = torch.nn.functional.interpolate(logits[:1].float(), size=(h, w), mode="bilinear", align_corners=False)
+                m = (up[0, 0] > 0.0).to(torch.uint8).cpu().numpy()
+                if keep:
+                    masks[fi] = m * 255
+                else:
+                    writes.append(pool.submit(write, fi, m))
+                done += 1
+                say("frame", done, total)
+
+        run(False)
+        if keys[0] > 0:
+            run(True)
+        del pred, state
+        if not keep:
+            for i in range(n):
+                if i not in seen:
+                    writes.append(pool.submit(write, i, np.zeros((h, w), np.uint8)))
+            for f in writes:
+                f.result()
+
+    if not keep:
         say("done")
         return 0
 
@@ -285,10 +340,23 @@ def main() -> int:
     model = get_matanyone_model(ckpt, device=device)
     h8, w8 = max(8, h // 8 * 8), max(8, w // 8 * 8)
 
-    def image(i: int):
-        img = cv2.cvtColor(cv2.imread(os.path.join(frames, f"{i:05d}.jpg")), cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (w8, h8), interpolation=cv2.INTER_AREA)
-        return torch.tensor(img / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
+    # MatAnyone sees the plate at its own size, not SAM's smaller frames;
+    # decoded a few frames ahead on the pool, since a frame is a full EXR.
+    def picture(i: int):
+        img = cv2.imread(inputs[i], cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise RuntimeError(f"could not read {stems[i]}")
+        img = cv2.resize(srgb8(img[:, :, 2::-1].astype(np.float32)), (w8, h8), interpolation=cv2.INTER_AREA)
+        return img
+
+    def pictures(order):
+        order, ahead = list(order), []
+        with ThreadPoolExecutor(min(4, workers)) as pool:
+            for k, i in enumerate(order):
+                while len(ahead) < 4 and k + len(ahead) < len(order):
+                    ahead.append(pool.submit(picture, order[k + len(ahead)]))
+                img = ahead.pop(0).result()
+                yield i, torch.tensor(img / 255.0, dtype=torch.float32, device=device).permute(2, 0, 1)
 
     def segment(seed: int, order, seeded_elsewhere: bool = False) -> None:
         nonlocal done
@@ -306,8 +374,7 @@ def main() -> int:
         seed_mask = torch.tensor(
             cv2.resize(m, (w8, h8), interpolation=cv2.INTER_NEAREST), dtype=torch.float32, device=device
         )
-        for k, i in enumerate(order):
-            img = image(i)
+        for k, (i, img) in enumerate(pictures(order)):
             if k == 0:
                 prob = proc.step(img, seed_mask, objects=[1])
                 for _ in range(10):  # the warm-up the model is trained with
