@@ -662,6 +662,9 @@ impl Gfx {
             Err(e) => return self.sammie_fail(node, &e),
         };
         cmd.arg("--shot").arg(&dir).arg("--model").arg(p.model.arg()).arg("--matting").arg(p.matting.arg());
+        if !p.matting.commercial() && p.matting_res > 0 {
+            cmd.arg("--matting-res").arg(p.matting_res.to_string());
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "sammie") {
@@ -996,7 +999,7 @@ mod tests {
 
     #[test]
     fn the_driver_speaks_the_protocol_the_reader_parses() {
-        for w in ["WOBBLE frame", "WOBBLE done", "WOBBLE error", "--shot", "--model", "--matting", "points.json", "Matte"] {
+        for w in ["WOBBLE frame", "WOBBLE done", "WOBBLE error", "--shot", "--model", "--matting", "--matting-res", "points.json", "Matte"] {
             assert!(DRIVER.contains(w), "{w}");
         }
         // Every model the node offers is one the driver knows.

@@ -1510,6 +1510,11 @@ shared with `corridorkey.rs`. README has the user-facing story.
   MatAnyone2` tags the node; `nc_take` (AUTHORED, saved) records that the
   LOADED matte was made with it, set on every adopt from the run's recipe.
   `cost::licence_of` reads `SammieParams::commercial()`.
+- **Internal resolution is MATTING's only** (`matting_res`, Sammie's
+  `matany_res`): the driver cuts the shorter side to it before MatAnyone and
+  scales the matte back. SAM 2 always runs at 1024x1024, so segmentation has
+  no knob. It rides in `recipe()`'s matting field (`matting_key`) only while
+  matting is on, and at 0 that field is the old number, so old runs load.
 - **Output picks the pipe.** `Cutout` (image, fuses input 0 × matte;
   unloaded = plate pass-through) or `Matte` (mask; unloaded = 0; loaded it
   is `inputs_unsampled` and `clears_slow`). The pick is in `topo_tag`.

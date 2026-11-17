@@ -65,6 +65,21 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut SammieParams, v: &View) -> Option<A
             ui.selectable_value(&mut p.matting, m, m.label());
         }
     });
+    if p.matting != SammieMatting::Off {
+        const RES: [(u32, &str); 6] =
+            [(0, "full"), (480, "480"), (720, "720"), (1080, "1080"), (1440, "1440"), (2160, "2160")];
+        let text = RES.iter().find(|r| r.0 == p.matting_res).map_or(p.matting_res.to_string(), |r| r.1.to_string());
+        ui.horizontal(|ui| {
+            ui.label("internal res").on_hover_text(
+                "matting runs with the plate's shorter side cut to this, then scales the matte back up. Lower is faster and lighter on memory, softer at the edge. Segmentation always runs at SAM 2's own 1024",
+            );
+            egui::ComboBox::from_id_salt(("sammie-mres", node)).width(190.0).selected_text(text).show_ui(ui, |ui| {
+                for (v, l) in RES {
+                    ui.selectable_value(&mut p.matting_res, v, l);
+                }
+            });
+        });
+    }
     if !p.matting.commercial() {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(theme::error(), "MatAnyone 2 is");

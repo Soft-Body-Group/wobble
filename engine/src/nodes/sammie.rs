@@ -152,6 +152,12 @@ pub struct SammieParams {
     pub source: usize,
     pub model: SamModel,
     pub matting: Matting,
+    /// Matting's internal resolution: the plate's SHORTER side is cut to
+    /// this before MatAnyone sees it (0 = the plate's own size), and the
+    /// matte is scaled back up. Sammie's own "internal resolution": it
+    /// applies to matting only — SAM 2 always segments at 1024x1024
+    /// whatever the plate, so there is nothing to set for that stage.
+    pub matting_res: u32,
     pub points: Vec<SamPoint>,
     pub output: SammieOut,
     /// The matte LOADED in the reader was made with non-commercial
@@ -178,6 +184,7 @@ impl Default for SammieParams {
             source: 0,
             model: SamModel::Large,
             matting: Matting::Off,
+            matting_res: 0,
             points: Vec::new(),
             output: SammieOut::Cutout,
             nc_take: false,
@@ -217,13 +224,21 @@ impl SammieParams {
 
     /// The settings that shape pixels, for the app's result key: change one
     /// and the matte has to be made again, into a new directory. Points
-    /// are compared by their bits.
-    pub fn recipe(&self) -> (u8, u8, Vec<(i64, u32, u32, bool)>) {
+    /// are compared by their bits. The matting resolution rides in the
+    /// matting field's high bits, and only while matting is on (it shapes
+    /// nothing otherwise): at 0 the key is the one it always was, so mattes
+    /// made before the setting existed still load.
+    pub fn matting_key(&self) -> u32 {
+        let res = if self.matting == Matting::Off { 0 } else { self.matting_res };
+        self.matting as u32 | res << 8
+    }
+
+    pub fn recipe(&self) -> (u8, u32, Vec<(i64, u32, u32, bool)>) {
         let mut pts: Vec<(i64, u32, u32, bool)> =
             self.points.iter().map(|p| (p.frame, p.x.to_bits(), p.y.to_bits(), p.positive)).collect();
         // The order clicks were made in is not a prompt.
         pts.sort();
-        (self.model as u8, self.matting as u8, pts)
+        (self.model as u8, self.matting_key(), pts)
     }
 
     /// The comp frames that carry points, in order.
@@ -310,6 +325,20 @@ mod tests {
             assert_ne!(a.recipe(), c.recipe());
         }
         assert_eq!(a.keyframes(), vec![1, 4]);
+    }
+
+    #[test]
+    fn matting_res_is_a_rerun_only_while_matting() {
+        let mut a = SammieParams::default();
+        a.points = vec![pt(1, 0.2)];
+        let mut b = a.clone();
+        b.matting_res = 720;
+        assert_eq!(a.recipe(), b.recipe(), "no matting, nothing to resize");
+        a.matting = Matting::MatAnyone2;
+        b.matting = Matting::MatAnyone2;
+        assert_ne!(a.recipe(), b.recipe());
+        // At 0 the key is the old u8's number (same JSON), so old runs load.
+        assert_eq!(a.matting_key(), Matting::MatAnyone2 as u32);
     }
 
     #[test]

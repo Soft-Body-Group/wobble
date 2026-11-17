@@ -148,6 +148,9 @@ def main() -> int:
     ap.add_argument("--shot")
     ap.add_argument("--model", choices=sorted(SAM), default="Base")
     ap.add_argument("--matting", choices=["off", "matanyone2"], default="off")
+    # Matting's internal resolution (Sammie's matany_res): the shorter side
+    # is cut to this before MatAnyone sees it; 0 = the plate's own size.
+    ap.add_argument("--matting-res", type=int, default=0)
     a = ap.parse_args()
     if a.serve:
         return serve(a.model)
@@ -258,7 +261,8 @@ def main() -> int:
     from matanyone.utils.get_default_model import get_matanyone_model
 
     model = get_matanyone_model(ckpt, device=device)
-    h8, w8 = max(8, h // 8 * 8), max(8, w // 8 * 8)
+    scale = a.matting_res / min(h, w) if 0 < a.matting_res < min(h, w) else 1.0
+    h8, w8 = max(8, int(h * scale) // 8 * 8), max(8, int(w * scale) // 8 * 8)
 
     def image(i: int):
         img = cv2.cvtColor(cv2.imread(os.path.join(frames, f"{i:05d}.jpg")), cv2.COLOR_BGR2RGB)
