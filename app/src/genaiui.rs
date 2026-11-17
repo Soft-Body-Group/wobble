@@ -1858,6 +1858,31 @@ impl Gfx {
                     if takes != Some(2) {
                         fail(format!("the cached re-run changed the takes: {takes:?}, expected 2"));
                     }
+                    // An upscaler feeding Output makes the node the size of
+                    // its take (the fake's 64x36 card); any other model
+                    // leaves it its input's format. Asked of the pipeline as
+                    // it stands, so swapping the model and back is the test.
+                    let res = |me: &Self| me.node_resolution_full(t.node, &mut Default::default());
+                    let plain = res(self);
+                    let swap = |me: &mut Self, id: &str| {
+                        if let Some(p) = me.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
+                            let g = p.pipeline.model_step().unwrap_or_else(|| fail("no model step".into()));
+                            p.pipeline.set_model(g, id);
+                            let out = p.pipeline.output().unwrap();
+                            p.pipeline.connect(g, out, 0);
+                        }
+                    };
+                    let kept = self.egraph.node(t.node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.steps.clone());
+                    swap(self, "fal/esrgan");
+                    let up = res(self);
+                    if let (Some(p), Some(steps)) =
+                        (self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)), kept)
+                    {
+                        p.pipeline.steps = steps;
+                    }
+                    if up != Some((64, 36)) || plain == up || res(self) != plain {
+                        fail(format!("an upscaler's node is {up:?} (its take is 64x36); without one it is {plain:?}"));
+                    }
                     // One-model nodes, made the way the add menu makes them.
                     self.genai_action(t.node, Action::Dismiss);
                     let entry = |label: &str| {
