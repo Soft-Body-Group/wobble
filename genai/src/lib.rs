@@ -22,6 +22,7 @@
 //! Services: fal with your own key ([`fal`]), the wobble relay with credits
 //! ([`relay`]), and a local ComfyUI ([`comfy`]).
 
+pub mod app;
 pub mod catalog;
 pub mod comfy;
 pub mod config;
@@ -38,4 +39,5 @@ pub mod templates;
 pub mod vary;
 
 pub use pipeline::{Op, Opts, Pipe, Pipeline, Step, Take};
+pub use app::AppForm;
 pub use vary::Vary;

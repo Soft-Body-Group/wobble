@@ -268,6 +268,10 @@ pub struct Saved {
     #[serde(default)]
     pub about: String,
     pub steps: Vec<Step>,
+    /// The pipeline's app form, when it had one: a template shared as an
+    /// app opens as that form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<crate::AppForm>,
 }
 
 /// `$WOBBLE_GENAI_TEMPLATES`, else `~/.wobble/genai-templates`.
@@ -299,11 +303,28 @@ pub fn file_name(name: &str) -> String {
 /// Save `steps` as a template in `dir` (made if missing), over any of the
 /// same name. Returns the file.
 pub fn save(dir: &Path, name: &str, about: &str, steps: &[Step]) -> std::io::Result<PathBuf> {
+    save_with(dir, name, about, steps, None)
+}
+
+/// [`save`], with the pipeline's app form riding along.
+pub fn save_with(
+    dir: &Path,
+    name: &str,
+    about: &str,
+    steps: &[Step],
+    app: Option<&crate::AppForm>,
+) -> std::io::Result<PathBuf> {
     if name.trim().is_empty() {
         return Err(std::io::Error::other("a template needs a name"));
     }
     std::fs::create_dir_all(dir)?;
-    let t = Saved { kind: KIND.into(), name: name.trim().into(), about: about.trim().into(), steps: steps.to_vec() };
+    let t = Saved {
+        kind: KIND.into(),
+        name: name.trim().into(),
+        about: about.trim().into(),
+        steps: steps.to_vec(),
+        app: app.filter(|a| !a.is_empty()).cloned(),
+    };
     let path = dir.join(file_name(name));
     let text = serde_json::to_string_pretty(&t).map_err(std::io::Error::other)?;
     std::fs::write(&path, text)?;
@@ -322,6 +343,9 @@ pub fn load(path: &Path) -> Result<Saved, String> {
     let mut p = Pipeline { steps: std::mem::take(&mut t.steps), takes: vec![], take: 0 };
     for i in 0..p.steps.len() {
         p.sync_ports(i);
+    }
+    if let Some(a) = &mut t.app {
+        a.prune(&p);
     }
     t.steps = p.steps;
     Ok(t)
@@ -383,6 +407,23 @@ mod tests {
         let text = std::fs::read_to_string(&f).unwrap();
         assert!(!text.contains("takes") && !text.contains("http"), "{text}");
         assert!(save(&dir, "  ", "", &p.steps).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_template_saved_from_an_app_opens_as_that_app() {
+        let dir = std::env::temp_dir().join(format!("wobble-genai-templates-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let p = BUILTIN[0].pipeline();
+        let mut form = crate::AppForm::suggested(&p);
+        form.on = true;
+        form.title = "Concept".into();
+        let f = save_with(&dir, "concept app", "", &p.steps, Some(&form)).unwrap();
+        assert_eq!(load(&f).unwrap().app, Some(form));
+        // No form, no field in the file.
+        let f = save(&dir, "plain", "", &p.steps).unwrap();
+        assert!(!std::fs::read_to_string(&f).unwrap().contains("\"app\""));
+        assert_eq!(load(&f).unwrap().app, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

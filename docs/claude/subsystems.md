@@ -1453,6 +1453,15 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   is local text with `{a}` `{b}` `{frame}`; its ports are optional like
   Comfy's, and `{frame}` enters the key only when the text uses it.
   `Event::Text` carries the words to `Run::texts` for the panel.
+- **App mode is a view, not a second model** (`genai::app`,
+  `GenAiParams::app`, `app/src/genaiapp.rs`). An `AppForm` lists
+  `(step, What)` fields that edit the SAME authored values the full panel
+  does; with `on`, `panel()` draws `appui::form` in place of the step list
+  and the two dive entry points in `lib.rs` refuse the node. Step indices
+  slide, so the form is `prune`d against the pipeline every time it is
+  shown, and a field that no longer matches is dropped, never re-pointed.
+  A user template carries its form (`templates::Saved::app`); a built-in
+  clears it.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

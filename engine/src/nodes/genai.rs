@@ -47,6 +47,10 @@ pub struct GenAiParams {
     /// Empty = one run, one take.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "genai::Vary::is_empty"))]
     pub vary: genai::Vary,
+    /// App mode (`genai::app`): the fields a simple form shows, and
+    /// whether the node is showing it with everything else locked.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "genai::AppForm::is_empty"))]
+    pub app: genai::AppForm,
     /// TRANSIENT: a take is loaded in the reader slot. Set by the app on the
     /// engine-graph copy only; flipping it recompiles (sample vs pass
     /// through), exactly like a GraphBake's `baked`.
@@ -56,7 +60,14 @@ pub struct GenAiParams {
 
 impl Default for GenAiParams {
     fn default() -> Self {
-        Self { source: 0, pipeline: genai::Pipeline::default(), model: None, vary: Default::default(), loaded: false }
+        Self {
+            source: 0,
+            pipeline: genai::Pipeline::default(),
+            model: None,
+            vary: Default::default(),
+            app: Default::default(),
+            loaded: false,
+        }
     }
 }
 
@@ -79,7 +90,7 @@ impl GenAiParams {
     pub fn for_model(source: usize, id: &str) -> Self {
         match genai::Pipeline::for_model(id) {
             Some(pipeline) => {
-                Self { source, pipeline, model: Some(id.to_string()), vary: Default::default(), loaded: false }
+                Self { source, pipeline, model: Some(id.to_string()), ..Self::new(source) }
             }
             None => Self::new(source),
         }

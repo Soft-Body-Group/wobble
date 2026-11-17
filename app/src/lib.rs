@@ -19982,7 +19982,8 @@ impl Gfx {
             | Some(NodeKind::Particles(_)) => Some(n),
             // A GenAI Pipeline opens onto its steps; a one-model node IS
             // its model and has nothing inside.
-            Some(NodeKind::GenAi(p)) if p.model.is_none() => Some(n),
+            // App mode locks the steps: the form is the way in.
+            Some(NodeKind::GenAi(p)) if p.model.is_none() && !p.app.on => Some(n),
             // A Roto opens onto its shapes — but not a shape inside one,
             // which is a Spline too and has nothing further inside.
             Some(NodeKind::Spline(_)) if !self.dive.last().is_some_and(|d| d.kind == DiveKind::Roto) => {
@@ -20923,7 +20924,7 @@ impl Gfx {
         }
         // So is a GenAI Pipeline's step graph.
         if let Some(NodeKind::GenAi(p)) = self.egraph.node(node).map(|n| &n.kind).filter(|k| {
-            matches!(k, NodeKind::GenAi(p) if p.model.is_none())
+            matches!(k, NodeKind::GenAi(p) if p.model.is_none() && !p.app.on)
         }) {
             let mut body = genaiui::to_editor(&p.pipeline);
             body.node_status_min = self.egraph.node_status_min;

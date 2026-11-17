@@ -3632,6 +3632,15 @@ typed style), `{frame}` the frame. After a run the panel shows what each
 wrote, which is the prompt the model was really sent. The templates
 *Enhanced concept* and *Describe and reimagine* show them wired.
 
+**App mode: a pipeline as a form.** Next to templates, **app…** turns a
+GenAI Pipeline into a simple form. Tick the fields worth showing (a
+prompt, a seed, a scale, megapixels, a clip's length), name each, give the
+form a title, and press **app mode**: the panel becomes that form and the
+run button, and the steps are locked (Enter no longer opens them).
+**suggest** picks every prompt and the last model's seed. **edit** on the
+form unlocks it again. A template saved from a pipeline in app mode opens
+as that form on whoever's machine it lands on.
+
 **Templates.** A GenAI Pipeline's panel has a **templates…** menu: whole
 pipelines, ready-made (Clean plate, Restyle the plate, New background
 upscaled, Outpaint the plate, Match a look, Relight, Concept to clip,

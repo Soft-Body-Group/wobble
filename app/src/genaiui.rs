@@ -442,6 +442,8 @@ pub(crate) mod hist;
 pub(crate) mod tmpl;
 #[path = "genaivary.rs"]
 pub(crate) mod varyui;
+#[path = "genaiapp.rs"]
+pub(crate) mod appui;
 
 // ------------------------------------------------------------ panel
 
@@ -467,9 +469,15 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<Ac
     ui.columns(2, |cols| {
         if p.model.is_some() {
             model_column(&mut cols[0], node, p, v);
+        } else if p.app.on {
+            // App mode: the form, and nothing else of the pipeline.
+            appui::form(&mut cols[0], node, p);
         } else {
             pipeline_column(&mut cols[0], p, v);
-            tmpl::menu(&mut cols[0], node, p);
+            cols[0].horizontal(|ui| {
+                tmpl::menu(ui, node, p);
+                appui::author(ui, node, p);
+            });
         }
         if let Some(a) = run_column(&mut cols[1], node, p, v) {
             act = Some(a);
