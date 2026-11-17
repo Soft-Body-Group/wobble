@@ -708,10 +708,18 @@ impl App {
         if a.project_doc(Some(&p)).sequence != b.project_doc(Some(&p)).sequence {
             fails.push("the sequences differ".into());
         }
-        // Move the whole folder: found again by the relative path.
+        // Move the whole folder: found again by the relative path. Close
+        // both editors first: Windows will not move a folder with files
+        // open in it (their decoders let go on their own threads, so retry).
+        drop((a, b));
         let moved = dir.with_extension("moved");
         let _ = std::fs::remove_dir_all(&moved);
-        std::fs::rename(&dir, &moved).expect("move");
+        let mut tries = 0;
+        while let Err(e) = std::fs::rename(&dir, &moved) {
+            tries += 1;
+            assert!(tries < 50, "move: {e:?}");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         let mut c = editor::Editor::new(true);
         c.open_project(&moved.join("cut.scrub"));
         if !c.project.missing.is_empty() {

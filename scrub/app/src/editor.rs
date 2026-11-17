@@ -294,7 +294,7 @@ impl Editor {
     pub fn new(headless: bool) -> Self {
         let cache = Cache::new(Cache::default_budget());
         let seq = Sequence::new(Fps::new(24, 1));
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| ".".into());
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap_or_else(|| ".".into());
         Self {
             opt: crate::optimiseui::OptimiseUi::new(),
             source: None,

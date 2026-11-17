@@ -76,6 +76,8 @@ pub fn fonts() -> Arc<Vec<(String, PathBuf)>> {
             PathBuf::from("/System/Library/Fonts/Supplemental"),
             PathBuf::from("/Library/Fonts"),
             home.join("Library/Fonts"),
+            PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into())).join("Fonts"),
+            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("Microsoft/Windows/Fonts"),
         ];
         let mut v = Vec::new();
         for d in dirs {

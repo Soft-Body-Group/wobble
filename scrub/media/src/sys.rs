@@ -17,6 +17,14 @@ pub fn ram_bytes() -> Option<u64> {
         let kb: u64 = s.lines().find(|l| l.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse().ok()?;
         return Some(kb * 1024);
     }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+        m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        // SAFETY: a zeroed out-struct with its length set, as the call asks.
+        return (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.ullTotalPhys);
+    }
     #[allow(unreachable_code)]
     None
 }
@@ -38,12 +46,21 @@ fn home() -> std::path::PathBuf {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
 }
 
-/// `~/Library/Application Support/Scrub` (prefs, recent files, autosave,
-/// Wobble comps). The first time, what Edify kept in its own folder is
-/// COPIED here (the old folder is left as it was).
+/// `%VAR%` as a folder, else `~/<fallback>` (Windows' AppData folders).
+#[cfg(windows)]
+fn win_dir(var: &str, fallback: &str) -> std::path::PathBuf {
+    std::env::var_os(var).map(std::path::PathBuf::from).unwrap_or_else(|| home().join(fallback))
+}
+
+/// `~/Library/Application Support/Scrub` (`%APPDATA%\Scrub` on Windows):
+/// prefs, recent files, autosave, Wobble comps. The first time, what Edify
+/// kept in its own folder is COPIED here (the old folder is left as it was).
 pub fn support_dir() -> std::path::PathBuf {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
+        #[cfg(windows)]
+        let base = win_dir("APPDATA", "AppData/Roaming");
+        #[cfg(not(windows))]
         let base = home().join("Library/Application Support");
         let new = base.join(APP);
         let old = base.join("Edify");
@@ -55,11 +72,18 @@ pub fn support_dir() -> std::path::PathBuf {
     .clone()
 }
 
-/// `~/Library/Caches/Scrub` (`~/.cache/scrub` elsewhere). The first time,
-/// Edify's cache folder is MOVED here (a cache, so moving loses nothing).
+/// `~/Library/Caches/Scrub` (`%LOCALAPPDATA%\Scrub\cache` on Windows,
+/// `~/.cache/scrub` elsewhere). The first time, Edify's cache folder is
+/// MOVED here (a cache, so moving loses nothing).
 pub fn cache_dir() -> std::path::PathBuf {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
+        #[cfg(windows)]
+        let (new, old) = {
+            let base = win_dir("LOCALAPPDATA", "AppData/Local");
+            (base.join(APP).join("cache"), base.join("Edify").join("cache"))
+        };
+        #[cfg(not(windows))]
         let (new, old) = if cfg!(target_os = "macos") {
             (home().join("Library/Caches").join(APP), home().join("Library/Caches/Edify"))
         } else {

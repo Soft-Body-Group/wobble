@@ -641,6 +641,7 @@ mod tests {
         assert_eq!(relative(Path::new("/a/b/c.mov"), Path::new("/a/b")), Some(PathBuf::from("c.mov")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_save_leaves_the_last_good_file() {
         let dir = std::env::temp_dir().join(format!("scrub-save-{}", std::process::id()));
