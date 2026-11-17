@@ -152,6 +152,8 @@ fn hover(k: usize, t: &Take) -> String {
     if let Some(u) = t.usd {
         s.push_str(&format!(" · {}", service::usd(u)));
     }
+    // The frame it was made at: what tells a batch over frames apart.
+    s.push_str(&format!(" · frame {}", t.tick));
     let a = ago(t.when, now());
     if !a.is_empty() {
         s.push_str(&format!(" · {a}"));

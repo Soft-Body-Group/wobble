@@ -649,7 +649,10 @@ fn a_fan_out_runs_each_model_once_and_lands_a_take_for_each() {
     if let Op::Prompt { text } = &mut p.steps[0].op {
         *text = "make it night".into();
     }
-    let vary = genai::Vary { models: vec!["fal/seedream-5-pro-edit".into(), "fal/nano-banana-2-edit".into()] };
+    let vary = genai::Vary {
+        models: vec!["fal/seedream-5-pro-edit".into(), "fal/nano-banana-2-edit".into()],
+        ..Default::default()
+    };
     let variants = vary.expand(&p);
     assert_eq!(variants.len(), 3);
     let planned: Vec<(Pipeline, run::Plan)> =
@@ -669,7 +672,7 @@ fn a_fan_out_runs_each_model_once_and_lands_a_take_for_each() {
         };
         let vs = planned
             .iter()
-            .map(|(p, plan)| run::Variant { pipeline: p.clone(), plan: plan.clone(), approved: vec![] })
+            .map(|(p, plan)| run::Variant { pipeline: p.clone(), plan: plan.clone(), approved: vec![], inputs: None })
             .collect();
         run::start_many(vs, inputs(), svcs, dir.clone())
     };

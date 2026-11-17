@@ -705,7 +705,7 @@ pub type Approved = Vec<(usize, f64)>;
 
 /// Run a plan on a thread.
 pub fn start(p: Pipeline, plan: Plan, inputs: Inputs, svcs: Services, dir: PathBuf, approved: Approved) -> Job {
-    start_many(vec![Variant { pipeline: p, plan, approved }], inputs, svcs, dir)
+    start_many(vec![Variant { pipeline: p, plan, approved, inputs: None }], inputs, svcs, dir)
 }
 
 /// One pipeline of a batch, planned and approved like a single run.
@@ -713,6 +713,9 @@ pub struct Variant {
     pub pipeline: Pipeline,
     pub plan: Plan,
     pub approved: Approved,
+    /// This variant's own inputs (a batch over frames captures each
+    /// frame's); `None` = the batch's shared ones.
+    pub inputs: Option<Inputs>,
 }
 
 /// Run several planned pipelines over the same inputs, one after another,
@@ -728,7 +731,8 @@ pub fn start_many(variants: Vec<Variant>, inputs: Inputs, svcs: Services, dir: P
     let spawned = std::thread::Builder::new().name("genai-run".into()).spawn(move || {
         let n = variants.len();
         for (k, v) in variants.into_iter().enumerate() {
-            let r = execute(&v.pipeline, &v.plan, &inputs, &svcs, &dir, &stop, &tx, &v.approved);
+            let ins = v.inputs.as_ref().unwrap_or(&inputs);
+            let r = execute(&v.pipeline, &v.plan, ins, &svcs, &dir, &stop, &tx, &v.approved);
             match r {
                 Ok(t) => {
                     let _ = crate::history::save_recipe(&dir, &t.key, &v.pipeline.steps);

@@ -3612,6 +3612,16 @@ confirm, one take per model. They land side by side in the history;
 and a click shows that one. A model already run is a cache hit and is not
 billed again. Ticking a research-only model tags the node straight away.
 
+**Batch: lists of prompts, seeds, frames.** Under the fan-out row,
+**batch…** runs the node over lists: **prompts**, one per line, each in
+place of the node's own; **more seeds**, that many after the authored one;
+and **frames** (`1001, 1010-1050x10`), which captures the node's inputs at
+each of those frames instead of the playhead. Frames are how a pipeline
+runs over a list of images: a Load of ten stills is ten frames. The lists
+multiply each other and the fan-out, the line beneath says how many takes
+`run…` will make (64 at most in one go), and it is still one price and one
+confirm. Every take records its frame; hover it in the history.
+
 **Templates.** A GenAI Pipeline's panel has a **templates…** menu: whole
 pipelines, ready-made (Clean plate, Restyle the plate, New background
 upscaled, Outpaint the plate, Match a look, Relight, Concept to clip,

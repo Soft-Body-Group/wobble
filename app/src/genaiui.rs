@@ -334,9 +334,19 @@ pub struct Run {
     /// The node's fan-out when the run was asked for; an edit since makes
     /// the quote stale, like an edit to the pipeline.
     pub vary: genai::Vary,
-    /// The fan-out's other variants, planned beside `pipeline` (which is
-    /// variant one): each lands its own take.
-    pub more: Vec<(Pipeline, Plan)>,
+    /// The batch's other variants, planned beside `pipeline` (which is
+    /// variant one): each lands its own take. A variant at another frame
+    /// carries that frame's inputs.
+    pub more: Vec<(Pipeline, Plan, Option<Inputs>)>,
+    /// A batch over frames: the ports captured at each frame, the frames
+    /// still to capture, and the inputs of those already done.
+    pub ports: Vec<usize>,
+    pub ticks: Vec<i64>,
+    pub frames: Vec<Inputs>,
+    /// Variant one when it is not `pipeline` itself: a prompt list runs
+    /// its first prompt in place of the node's own. `pipeline` stays what
+    /// the node holds, for the staleness check.
+    pub lead: Option<Pipeline>,
 }
 
 pub enum Phase {
@@ -1001,7 +1011,7 @@ impl Gfx {
                     || self.genai_prompt_moved(node, &r.pipeline, inputs)
                     || self.egraph.node(node).and_then(|n| params(&n.kind)).is_none_or(|p| p.vary != r.vary);
                 let billed = plan.billed(&r.pipeline).len()
-                    + r.more.iter().map(|(p, plan)| plan.billed(p).len()).sum::<usize>();
+                    + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
                 ViewState::Ready { quote: quote.clone(), billed, stale }
             }
             Some(Phase::Running { .. }) => ViewState::Running,
@@ -1100,6 +1110,10 @@ impl Gfx {
             steps: BTreeMap::new(),
             vary: Default::default(),
             more: vec![],
+            ports: vec![],
+            ticks: vec![],
+            frames: vec![],
+            lead: None,
         });
     }
 
@@ -1161,8 +1175,24 @@ impl Gfx {
         let Some(comp) = self.comp.output_size() else {
             return self.genai_fail(node, pl, "nothing is rendering yet");
         };
-        let tick = self.timeline_pos as i64;
         let vary = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone()).unwrap_or_default();
+        // A batch over frames captures the inputs at each; with nothing to
+        // capture a frame changes nothing, so the list is not walked.
+        let mut ticks = match vary.ticks() {
+            Ok(t) if !todo.is_empty() => t,
+            Ok(_) => vec![],
+            Err(e) => return self.genai_fail(node, pl, format!("frames: {e}")),
+        };
+        let runs = vary.count(&pl) * ticks.len().max(1);
+        if runs > genai::vary::MAX_RUNS {
+            return self.genai_fail(
+                node,
+                pl,
+                format!("{runs} runs in one go is more than {}: shorten a list", genai::vary::MAX_RUNS),
+            );
+        }
+        let tick = if ticks.is_empty() { self.timeline_pos as i64 } else { ticks.remove(0) };
+        let ports = todo.clone();
         self.jobs.genai.captured.clear();
         self.jobs.genai.clip_frames.clear();
         self.jobs.genai.run = Some(Run {
@@ -1173,6 +1203,10 @@ impl Gfx {
             steps: BTreeMap::new(),
             vary,
             more: vec![],
+            ports,
+            ticks,
+            frames: vec![],
+            lead: None,
         });
         self.genai_capture_next();
     }
@@ -1192,8 +1226,24 @@ impl Gfx {
                     self.genai_fail(node, pl, e);
                 }
             }
-            None => self.genai_plan(),
+            None => self.genai_next_frame(),
         }
+    }
+
+    /// One frame's inputs are in: capture the next frame of a batch, or
+    /// move on to the plan.
+    fn genai_next_frame(&mut self) {
+        let Some(r) = self.jobs.genai.run.as_mut() else { return };
+        if r.ticks.is_empty() {
+            return self.genai_plan();
+        }
+        let Phase::Capturing { inputs, todo } = &mut r.phase else { return };
+        let next = r.ticks.remove(0);
+        let fresh = Inputs { prompt: inputs.prompt.clone(), comp: inputs.comp, tick: next, ..Default::default() };
+        r.frames.push(std::mem::replace(inputs, fresh));
+        *todo = r.ports.clone();
+        r.tick = next;
+        self.genai_capture_next();
     }
 
     /// How many frames a run's clips are: its length at the comp's rate.
@@ -1300,7 +1350,16 @@ impl Gfx {
             return;
         };
         let dir = config::results_dir();
-        let plan = match run::plan(&r.pipeline, &inputs, &dir) {
+        // A batch over frames: the first frame's inputs are the run's own
+        // (the quote and the staleness check read them), the rest ride
+        // with their variants.
+        let mut frames = std::mem::take(&mut r.frames);
+        frames.push(inputs);
+        let inputs = frames.remove(0);
+        let pipes = r.vary.expand(&r.pipeline);
+        r.lead = pipes.first().filter(|p| p.steps != r.pipeline.steps).cloned();
+        let lead = r.lead.clone().unwrap_or_else(|| r.pipeline.clone());
+        let plan = match run::plan(&lead, &inputs, &dir) {
             Ok(p) => p,
             Err(e) => {
                 r.phase = Phase::Failed(e);
@@ -1310,22 +1369,31 @@ impl Gfx {
         // The fan-out's other variants: the same inputs, planned the same
         // way. One that cannot be planned stops the lot before a quote.
         r.more.clear();
-        for v in r.vary.expand(&r.pipeline).into_iter().skip(1) {
-            match run::plan(&v, &inputs, &dir) {
-                Ok(p) => r.more.push((v, p)),
-                Err(e) => {
-                    r.phase = Phase::Failed(format!("fan-out: {e}"));
-                    return;
+        for (fi, ins) in std::iter::once(&inputs).chain(frames.iter()).enumerate() {
+            for (vi, v) in pipes.iter().enumerate() {
+                if fi == 0 && vi == 0 {
+                    // The lead, planned above.
+                    continue;
+                }
+                match run::plan(v, ins, &dir) {
+                    Ok(p) => r.more.push((v.clone(), p, (fi > 0).then(|| ins.clone()))),
+                    Err(e) => {
+                        r.phase = Phase::Failed(format!("run {}: {e}", fi * pipes.len() + vi + 1));
+                        return;
+                    }
                 }
             }
         }
-        let mut all = vec![(r.pipeline.clone(), plan.clone())];
-        all.extend(r.more.iter().cloned());
+        let mut all = vec![(lead.clone(), plan.clone())];
+        all.extend(r.more.iter().map(|(p, plan, _)| (p.clone(), plan.clone())));
         if all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
-            let variants = all
-                .into_iter()
-                .map(|(pipeline, plan)| run::Variant { pipeline, plan, approved: vec![] })
-                .collect();
+            let mut variants = vec![run::Variant { pipeline: lead, plan, approved: vec![], inputs: None }];
+            variants.extend(r.more.iter().cloned().map(|(pipeline, plan, inputs)| run::Variant {
+                pipeline,
+                plan,
+                approved: vec![],
+                inputs,
+            }));
             let job = run::start_many(variants, inputs, run::Services::from_config(&self.jobs.genai.cfg), dir);
             r.phase = Phase::Running { job };
             return;
@@ -1375,11 +1443,12 @@ impl Gfx {
                 .collect()
         };
         let mut variants = vec![];
-        let approved = approve(&r.pipeline, &plan);
-        variants.push(run::Variant { pipeline: r.pipeline.clone(), plan, approved });
-        for (p, plan) in r.more.clone() {
+        let lead = r.lead.clone().unwrap_or_else(|| r.pipeline.clone());
+        let approved = approve(&lead, &plan);
+        variants.push(run::Variant { pipeline: lead, plan, approved, inputs: None });
+        for (p, plan, inputs) in r.more.clone() {
             let approved = approve(&p, &plan);
-            variants.push(run::Variant { pipeline: p, plan, approved });
+            variants.push(run::Variant { pipeline: p, plan, approved, inputs });
         }
         let job = run::start_many(
             variants,
@@ -1688,7 +1757,9 @@ pub mod fake {
                     let json = |v: serde_json::Value| ("application/json", serde_json::to_vec(&v).unwrap());
                     let (ct, out) = match (m, p) {
                         ("POST", p @ ("/fal-ai/flux/schnell" | "/fal-ai/flux/dev")) => {
-                            if p.ends_with("dev") { &nf } else { &n }.fetch_add(1, Ordering::SeqCst);
+                            // A batch's other seeds count with the fan-out.
+                            let own_seed = String::from_utf8_lossy(&body).replace(' ', "").contains("\"seed\":1,");
+                            if p.ends_with("dev") || !own_seed { &nf } else { &n }.fetch_add(1, Ordering::SeqCst);
                             json(serde_json::json!({
                                 "request_id": "r1",
                                 "status_url": format!("{base}/fal-ai/flux/requests/r1/status"),
@@ -1740,12 +1811,14 @@ pub struct TestGenai {
     /// A probe waiting for a second one that agrees.
     last: Option<f32>,
     fake: Option<fake::Fal>,
+    /// The pipeline's steps, set aside while a stage borrows the node.
+    kept: Option<Vec<genai::Step>>,
 }
 
 impl Default for TestGenai {
     fn default() -> Self {
         let now = web_time::Instant::now();
-        Self { stage: 0, t0: now, since: now, node: 0, pipe: 0, before: None, last: None, fake: None }
+        Self { stage: 0, t0: now, since: now, node: 0, pipe: 0, before: None, last: None, fake: None, kept: None }
     }
 }
 
@@ -2020,6 +2093,90 @@ impl Gfx {
                     if lic(self) != engine::cost::Licence::Permissive {
                         fail("the node stayed tagged after the fan-out was cleared and schnell's take picked".into());
                     }
+                    // Batch: one more seed. The authored seed's take is
+                    // cached, so one call is billed.
+                    self.genai_action(t.node, Action::Dismiss);
+                    if let Some(p) = self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
+                        p.vary.seeds = 1;
+                    }
+                    self.genai_action(t.node, Action::Prepare);
+                    next(&mut t, 72);
+                }
+                _ => {}
+            },
+            72 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the seed batch failed before its quote: {e}")),
+                Some(Phase::Ready { .. }) => {
+                    if !matches!(self.genai_view(t.node).state, ViewState::Ready { billed: 1, stale: false, .. }) {
+                        fail("a batch of one more seed does not quote exactly one billed call".into());
+                    }
+                    self.genai_action(t.node, Action::Confirm);
+                    next(&mut t, 73);
+                }
+                _ => {}
+            },
+            73 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the seed batch's run failed: {e}")),
+                Some(Phase::Done(_)) => {
+                    let fake = t.fake.as_ref().unwrap();
+                    let (submits, other) = (fake.submits(), fake.fanned());
+                    let takes = self.egraph.node(t.node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
+                    if (submits, other, takes) != (1, 2, Some(4)) {
+                        fail(format!(
+                            "the seed batch left {submits} + {other} request(s) and {takes:?} takes; expected 1 + 2 and 4"
+                        ));
+                    }
+                    // Batch over FRAMES, on a local pipeline (nothing
+                    // billed): Reference -> Output at this frame and the
+                    // next. Two captures, two takes, no request.
+                    self.genai_action(t.node, Action::Dismiss);
+                    let at = self.timeline_pos as i64;
+                    if let Some(p) = self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)) {
+                        t.kept = Some(p.pipeline.steps.clone());
+                        let mut local = Pipeline { steps: vec![], takes: vec![], take: 0 };
+                        let r = local.push(Op::Reference, [0.0, -0.5]);
+                        let o = local.push(Op::Output, [0.0, 0.5]);
+                        local.connect(r, o, 0);
+                        p.pipeline.steps = local.steps;
+                        p.vary = genai::Vary { frames: format!("{at}-{}", at + 1), ..Default::default() };
+                    }
+                    self.genai_action(t.node, Action::Prepare);
+                    next(&mut t, 74);
+                }
+                _ => {}
+            },
+            74 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the frame batch failed: {e}")),
+                Some(Phase::Ready { .. }) => fail("a local frame batch asked to be paid for".into()),
+                Some(Phase::Done(words)) => {
+                    if !words.contains("2 takes") {
+                        fail(format!("a batch over two frames ended with \"{words}\""));
+                    }
+                    let fake = t.fake.as_ref().unwrap();
+                    if (fake.submits(), fake.fanned()) != (1, 2) {
+                        fail("a local frame batch sent a request".into());
+                    }
+                    // The second frame's take was captured at ITS frame.
+                    let at = self.timeline_pos as i64;
+                    let ticks: Vec<i64> = self
+                        .egraph
+                        .node(t.node)
+                        .and_then(|n| params(&n.kind))
+                        .map(|p| p.pipeline.takes.iter().map(|x| x.tick).collect())
+                        .unwrap_or_default();
+                    if self.jobs.genai.run.as_ref().map(|r| r.tick) != Some(at + 1) {
+                        fail(format!("the frame batch's last capture was not at frame {} (takes at {ticks:?})", at + 1));
+                    }
+                    // Back to the remote pipeline, one run, schnell's take.
+                    let kept = t.kept.take();
+                    if let (Some(p), Some(steps)) =
+                        (self.egraph.node_mut(t.node).and_then(|n| params_mut(&mut n.kind)), kept)
+                    {
+                        p.pipeline.steps = steps;
+                        p.vary = Default::default();
+                        p.pipeline.take = 1;
+                    }
+                    self.genai_show(t.node);
                     // One-model nodes, made the way the add menu makes them.
                     self.genai_action(t.node, Action::Dismiss);
                     let entry = |label: &str| {

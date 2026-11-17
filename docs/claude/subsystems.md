@@ -1436,6 +1436,16 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   (`Event::Take` for all but the last). An edit to `vary` makes a waiting
   quote stale. `GenAiParams::commercial` asks the fan-out's models too.
   The recipe is now written by the run thread, per variant, not the app.
+- **A batch multiplies the same way** (`Vary::prompts`, `seeds`,
+  `frames`). Prompts, seeds and models are `Vary::expand`'s (pipelines);
+  FRAMES are the app's, because only it can render an input:
+  `genai_next_frame` re-runs the capture ports at each tick
+  (`Run::ports` / `ticks` / `frames`) and a variant at another frame
+  carries its own `Inputs` (`run::Variant::inputs`). A frame list is
+  ignored when the pipeline captures nothing. `Run::lead` is variant one
+  when a prompt list displaces the node's own prompt; `Run::pipeline`
+  stays the node's, for the staleness check. `vary::MAX_RUNS` (64) is
+  refused in `genai_prepare`, before any capture.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).
