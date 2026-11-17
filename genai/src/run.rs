@@ -443,6 +443,15 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::Wan27Edit) => json!({
+            "prompt": prompt(),
+            "video_url": img(1)?,
+            "resolution": "720p",
+            // The input's own length, so the take lines up with the plate.
+            "duration": 0,
+            "audio_setting": "origin",
+            "seed": seed,
+        }),
         (_, Dialect::WanVace) => json!({
             "prompt": prompt(),
             "video_url": img(1)?,

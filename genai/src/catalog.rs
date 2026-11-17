@@ -130,6 +130,10 @@ pub enum Dialect {
     /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
     /// clip, `seed`; audio and prompt expansion off.
     LtxInpaint,
+    /// Wan 2.7 video edit: `prompt`, `video_url` (2-10 s), `seed`;
+    /// 720p (what our clips are; 1080p bills half as much again), the
+    /// input's own length (`duration` 0), its own (silent) audio.
+    Wan27Edit,
     /// Wan VACE 14B inpainting: `prompt`, `video_url`, `mask_video_url`
     /// (white = regenerate), `seed`; length and rate follow the clip
     /// (17-241 frames), prompt expansion off.
@@ -248,6 +252,7 @@ impl Dialect {
                 | Dialect::LucyEdit
                 | Dialect::LtxInpaint
                 | Dialect::WanVace
+                | Dialect::Wan27Edit
                 | Dialect::Clarity
                 | Dialect::SeedVr
                 | Dialect::SeedVrVideo
@@ -276,6 +281,9 @@ impl Dialect {
             }
             Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
                 return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
+            }
+            Dialect::Wan27Edit if !(2.0..=10.0).contains(&secs) => {
+                return Err(format!("{label} takes a 2-10 s clip; this one is {secs:.1} s"));
             }
             Dialect::WanVace if !(17..=241).contains(&frames) => {
                 return Err(format!("{label} takes 17-241 frames; this clip is {frames}"));
@@ -711,6 +719,18 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
     },
     RemoteModel {
+        id: "fal/wan-2.7-video-edit",
+        label: "Wan 2.7 video edit",
+        short: "wan 2.7 edit",
+        service: Service::Fal,
+        endpoint: "fal-ai/wan/v2.7/edit-video",
+        dialect: Dialect::Wan27Edit,
+        task: Task::VideoEdit,
+        commercial: true,
+        licence: "Wan 2.7 via fal API terms (commercial use through the API)",
+        about: "edit the input clip by instruction (restyle, change, remove): 2-10 s, 720p, billed per second",
+    },
+    RemoteModel {
         id: "fal/wan-vace-inpaint",
         label: "Wan VACE video inpaint",
         short: "wan vace",
@@ -1105,6 +1125,7 @@ mod tests {
                     | Dialect::LtxInpaint
                     | Dialect::BriaVideoEraser
                     | Dialect::WanVace
+                    | Dialect::Wan27Edit
                     | Dialect::TopazVideo { .. }
                     | Dialect::SeedVrVideo
             );
