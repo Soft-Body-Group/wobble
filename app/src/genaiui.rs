@@ -774,7 +774,7 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                             ui.weak(small("at the comp's aspect"));
                         }
                         Task::ImageToVideo => {
-                            if let catalog::Dialect::Seedance { max_seconds, top_res } = m.dialect {
+                            if let catalog::Dialect::Seedance { max_seconds, top_res, .. } = m.dialect {
                                 let mut secs = opts.seconds.clamp(4, max_seconds) as f32;
                                 crate::widgets::plain_slider(ui, "seconds", &mut secs, 4.0, max_seconds as f32, false);
                                 opts.seconds = secs.round() as u32;

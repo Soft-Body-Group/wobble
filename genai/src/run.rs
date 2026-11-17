@@ -344,7 +344,7 @@ pub fn t2i_size(m: &RemoteModel, opts: &crate::pipeline::Opts, comp: (u32, u32))
 /// A video step's (seconds, resolution), clamped to what its model takes;
 /// `None` for a model that does not make video.
 pub fn video_opts(m: &RemoteModel, opts: &crate::pipeline::Opts) -> Option<(u32, u32)> {
-    let Dialect::Seedance { max_seconds, top_res } = m.dialect else { return None };
+    let Dialect::Seedance { max_seconds, top_res, .. } = m.dialect else { return None };
     let res = [480, 720, 1080]
         .into_iter()
         .filter(|&r| r <= top_res)
@@ -443,6 +443,15 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::SeedanceEdit) => json!({
+            "prompt": prompt(),
+            // Editing: length and shape follow the clip.
+            "task": "editing",
+            "video_urls": [img(1)?],
+            "resolution": "720p",
+            "generate_audio": false,
+            "seed": seed,
+        }),
         (_, Dialect::Wan27Edit) => json!({
             "prompt": prompt(),
             "video_url": img(1)?,
@@ -526,6 +535,19 @@ pub fn request_clip(
         (Task::VideoEdit | Task::VideoInpaint, _) => json!({
             "prompt": prompt(), "video_url": img(1)?, "seed": seed,
         }),
+        (Task::ImageToVideo, Dialect::Seedance { reference: true, .. }) => {
+            let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
+            json!({
+                "prompt": prompt(),
+                "task": "reference",
+                "image_urls": [img(1)?],
+                "duration": secs.to_string(),
+                "resolution": format!("{res}p"),
+                "aspect_ratio": "auto",
+                "generate_audio": false,
+                "seed": seed,
+            })
+        }
         (Task::ImageToVideo, _) => {
             let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
             json!({

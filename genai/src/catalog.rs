@@ -94,7 +94,14 @@ pub enum Dialect {
     Seedream,
     /// ByteDance Seedance image-to-video: no `seed`, `duration` and
     /// `resolution` are strings, audio off (a take is pictures).
-    Seedance { max_seconds: u32, top_res: u32 },
+    /// `reference`: the reference-to-video endpoint, which takes the
+    /// picture in `image_urls` (the prompt names it `@Image1`) rather than
+    /// as the first frame.
+    Seedance { max_seconds: u32, top_res: u32, reference: bool },
+    /// Seedance 2.5's reference endpoint on its EDITING task: `prompt`,
+    /// `video_urls` (one clip, 1.8-30.2 s, 24 fps or more), 720p, no sound;
+    /// length and shape follow the clip.
+    SeedanceEdit,
     /// Google's Gemini image models (Nano Banana): no width or height. The
     /// size is an `aspect_ratio` from a fixed list plus a `resolution`
     /// class ("1K", "2K"), and an edit takes `image_urls`. Takes a seed.
@@ -253,6 +260,7 @@ impl Dialect {
                 | Dialect::LtxInpaint
                 | Dialect::WanVace
                 | Dialect::Wan27Edit
+                | Dialect::SeedanceEdit
                 | Dialect::Clarity
                 | Dialect::SeedVr
                 | Dialect::SeedVrVideo
@@ -281,6 +289,14 @@ impl Dialect {
             }
             Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
                 return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
+            }
+            Dialect::SeedanceEdit => {
+                if !(1.8..=30.2).contains(&secs) {
+                    return Err(format!("{label} takes a 1.8-30 s clip; this one is {secs:.1} s"));
+                }
+                if fps < 24.0 {
+                    return Err(format!("{label} needs a clip at 24 fps or more; the comp is at {fps}"));
+                }
             }
             Dialect::Wan27Edit if !(2.0..=10.0).contains(&secs) => {
                 return Err(format!("{label} takes a 2-10 s clip; this one is {secs:.1} s"));
@@ -660,7 +676,7 @@ pub const CATALOG: &[RemoteModel] = &[
         short: "seedance",
         service: Service::Fal,
         endpoint: "bytedance/seedance-2.0/fast/image-to-video",
-        dialect: Dialect::Seedance { max_seconds: 15, top_res: 720 },
+        dialect: Dialect::Seedance { max_seconds: 15, top_res: 720, reference: false },
         task: Task::ImageToVideo,
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
@@ -672,11 +688,35 @@ pub const CATALOG: &[RemoteModel] = &[
         short: "seedance 2.5",
         service: Service::Fal,
         endpoint: "bytedance/seedance-2.5/image-to-video",
-        dialect: Dialect::Seedance { max_seconds: 30, top_res: 1080 },
+        dialect: Dialect::Seedance { max_seconds: 30, top_res: 1080, reference: false },
         task: Task::ImageToVideo,
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
         about: "the bigger Seedance: up to 30 s and 1080p; about twice 2.0 fast's price per second",
+    },
+    RemoteModel {
+        id: "fal/seedance-2.5-reference",
+        label: "Seedance 2.5 reference",
+        short: "seedance ref",
+        service: Service::Fal,
+        endpoint: "bytedance/seedance-2.5/reference-to-video",
+        dialect: Dialect::Seedance { max_seconds: 30, top_res: 1080, reference: true },
+        task: Task::ImageToVideo,
+        commercial: true,
+        licence: "ByteDance via fal API terms (commercial use through the API)",
+        about: "a clip made FROM the picture as a reference (a character, a product, a look), not starting on it: call it @Image1 in the prompt",
+    },
+    RemoteModel {
+        id: "fal/seedance-2.5-video-edit",
+        label: "Seedance 2.5 video edit",
+        short: "seedance edit",
+        service: Service::Fal,
+        endpoint: "bytedance/seedance-2.5/reference-to-video",
+        dialect: Dialect::SeedanceEdit,
+        task: Task::VideoEdit,
+        commercial: true,
+        licence: "ByteDance via fal API terms (commercial use through the API)",
+        about: "edit the input clip by instruction (change, add, remove): 2-30 s, 720p; billed on the clip sent and the clip made",
     },
     RemoteModel {
         id: "fal/kling-o3-pro-video-edit",
@@ -1126,6 +1166,7 @@ mod tests {
                     | Dialect::BriaVideoEraser
                     | Dialect::WanVace
                     | Dialect::Wan27Edit
+                    | Dialect::SeedanceEdit
                     | Dialect::TopazVideo { .. }
                     | Dialect::SeedVrVideo
             );
