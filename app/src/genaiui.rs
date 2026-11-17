@@ -918,6 +918,35 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                         },
                         _ => {}
                     }
+                    // The model's own settings (`Dialect::params`): each is
+                    // a request field, kept in `extra` when not the default.
+                    let params = m.dialect.params();
+                    if !params.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for p in params {
+                                let cur = opts.param(p);
+                                let onoff = p.choices.len() == 2 && p.choices[0].0 == "off";
+                                if onoff {
+                                    let mut on = cur == 1;
+                                    if ui.checkbox(&mut on, small(p.label)).changed() {
+                                        opts.set_param(p, usize::from(on));
+                                    }
+                                    continue;
+                                }
+                                ui.label(small(p.label));
+                                egui::ComboBox::from_id_salt(id(p.key))
+                                    .width(74.0)
+                                    .selected_text(small(p.choices[cur].0))
+                                    .show_ui(ui, |ui| {
+                                        for (k, c) in p.choices.iter().enumerate() {
+                                            if ui.add(egui::Button::selectable(k == cur, small(c.0))).clicked() {
+                                                opts.set_param(p, k);
+                                            }
+                                        }
+                                    });
+                            }
+                        });
+                    }
                     ui.horizontal(|ui| {
                         ui.add_sized([crate::widgets::LABEL_W, 16.0], egui::Label::new(small("extra")))
                             .on_hover_text("a JSON object merged over the request, for fields this build does not model");
@@ -3059,6 +3088,24 @@ mod tests {
     /// The panel as it really draws, text and all, to
     /// `target/genai-panel-gpu.png`: `cargo test -p app genai_panel_render
     /// -- --ignored`.
+    /// `genai_model_panel_render` draws the one-model panels with the most
+    /// settings (Seedance 2.5 reference, Wan 2.7 edit) to
+    /// `target/genai-model-<n>.png`.
+    #[test]
+    #[ignore]
+    fn genai_model_panel_render() {
+        let span = |n: usize| crate::widgets::TILE * n as f32 + crate::widgets::TILE_GAP * (n as f32 - 1.0);
+        for (k, id) in ["fal/seedance-2.5-reference", "fal/wan-2.7-video-edit"].into_iter().enumerate() {
+            let mut p = GenAiParams::for_model(0, id);
+            let v = view(ViewState::Idle);
+            let name: &'static str = if k == 0 { "genai-model-0" } else { "genai-model-1" };
+            let out = crate::uishot::render(name, span(TILES), span(TILE_ROWS), 2.0, 4, |ui, _| {
+                let _ = panel(ui, 1, &mut p, &v);
+            });
+            println!("{:?}", out.map(|p| p.display().to_string()));
+        }
+    }
+
     #[test]
     #[ignore]
     fn genai_panel_render() {

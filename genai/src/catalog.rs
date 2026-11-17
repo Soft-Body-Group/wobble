@@ -79,6 +79,16 @@ pub enum Task {
     Describe,
 }
 
+/// One setting of a model the panel offers (`Dialect::params`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Param {
+    /// The request field.
+    pub key: &'static str,
+    pub label: &'static str,
+    /// (what the menu says, the JSON it sends). The first is the default.
+    pub choices: &'static [(&'static str, &'static str)],
+}
+
 /// How a model's request is shaped, beyond its task. Most fal endpoints
 /// share FLUX's field names; the ones that do not say so here, so the
 /// differences live in one match in `run::request` rather than in a string
@@ -248,6 +258,71 @@ impl Dialect {
         }
     }
 
+    /// The model's own settings the panel offers beyond seed and size: a
+    /// request field, and the values it may take as JSON literals. The
+    /// FIRST choice is what the request already says (nothing is stored
+    /// for it); any other is written into the step's `extra`, which is
+    /// merged over the request and is already part of the cache key.
+    pub fn params(self) -> &'static [Param] {
+        const ONOFF: &[(&str, &str)] = &[("off", "false"), ("on", "true")];
+        const CODEC: Param =
+            Param { key: "codec", label: "codec", choices: &[("auto", "\"auto\""), ("H264", "\"H264\""), ("H265", "\"H265\"")] };
+        const BITRATE: Param =
+            Param { key: "bitrate_mode", label: "bitrate", choices: &[("standard", "\"standard\""), ("high", "\"high\"")] };
+        const AUDIO: Param = Param { key: "generate_audio", label: "generate audio", choices: ONOFF };
+        const DRAFT: Param = Param { key: "draft", label: "draft (480p preview)", choices: ONOFF };
+        match self {
+            Dialect::Wan27Edit => &[
+                Param { key: "resolution", label: "resolution", choices: &[("720p", "\"720p\""), ("1080p", "\"1080p\"")] },
+                Param {
+                    key: "duration",
+                    label: "duration",
+                    choices: &[
+                        ("input's", "0"), ("2 s", "2"), ("3 s", "3"), ("4 s", "4"), ("5 s", "5"), ("6 s", "6"),
+                        ("7 s", "7"), ("8 s", "8"), ("9 s", "9"), ("10 s", "10"),
+                    ],
+                },
+                Param {
+                    key: "aspect_ratio",
+                    label: "aspect",
+                    choices: &[
+                        ("input's", "null"), ("16:9", "\"16:9\""), ("9:16", "\"9:16\""), ("1:1", "\"1:1\""),
+                        ("4:3", "\"4:3\""), ("3:4", "\"3:4\""),
+                    ],
+                },
+                Param { key: "audio_setting", label: "audio", choices: &[("original", "\"origin\""), ("auto", "\"auto\"")] },
+            ],
+            Dialect::Seedance { reference: true, .. } => &[
+                DRAFT,
+                Param { key: "resolution", label: "resolution", choices: &[("size above", "null"), ("4k", "\"4k\"")] },
+                Param { key: "duration", label: "duration", choices: &[("seconds above", "null"), ("auto", "\"auto\"")] },
+                Param {
+                    key: "aspect_ratio",
+                    label: "aspect",
+                    choices: &[
+                        ("auto", "\"auto\""), ("21:9", "\"21:9\""), ("16:9", "\"16:9\""), ("4:3", "\"4:3\""),
+                        ("1:1", "\"1:1\""), ("3:4", "\"3:4\""), ("9:16", "\"9:16\""),
+                    ],
+                },
+                AUDIO,
+                BITRATE,
+                CODEC,
+            ],
+            Dialect::SeedanceEdit => &[
+                DRAFT,
+                Param {
+                    key: "resolution",
+                    label: "resolution",
+                    choices: &[("720p", "\"720p\""), ("480p", "\"480p\""), ("1080p", "\"1080p\""), ("4k", "\"4k\"")],
+                },
+                AUDIO,
+                BITRATE,
+                CODEC,
+            ],
+            _ => &[],
+        }
+    }
+
     /// OPTIONAL ports this model has after its task's own: a reference
     /// picture for Wan 2.7's edit; for Seedance's reference endpoint, more
     /// reference pictures — `refs` already wired plus one free, so there
@@ -274,6 +349,7 @@ impl Dialect {
                 | Dialect::IcLight
                 | Dialect::LucyEdit
                 | Dialect::LtxInpaint
+                | Dialect::Seedance { reference: true, .. }
                 | Dialect::WanVace
                 | Dialect::Wan27Edit
                 | Dialect::SeedanceEdit

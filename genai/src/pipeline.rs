@@ -197,6 +197,38 @@ pub struct Opts {
     pub refs: usize,
 }
 
+impl Opts {
+    /// Which choice of `p` the step has (`Dialect::params`): what `extra`
+    /// says for its key, else the first.
+    pub fn param(&self, p: &catalog::Param) -> usize {
+        let extra: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&self.extra).unwrap_or_default();
+        let Some(v) = extra.get(p.key) else { return 0 };
+        p.choices.iter().position(|c| serde_json::from_str::<serde_json::Value>(c.1).ok().as_ref() == Some(v)).unwrap_or(0)
+    }
+
+    /// Pick choice `k` of `p`: written into `extra`, or taken out of it
+    /// for the default. An `extra` that is not a JSON object is left
+    /// alone (the panel says so).
+    pub fn set_param(&mut self, p: &catalog::Param, k: usize) {
+        let mut extra: serde_json::Map<String, serde_json::Value> = match self.extra.trim() {
+            "" => Default::default(),
+            t => match serde_json::from_str(t) {
+                Ok(m) => m,
+                Err(_) => return,
+            },
+        };
+        match p.choices.get(k).filter(|_| k > 0).and_then(|c| serde_json::from_str::<serde_json::Value>(c.1).ok()) {
+            Some(v) => {
+                extra.insert(p.key.into(), v);
+            }
+            None => {
+                extra.remove(p.key);
+            }
+        }
+        self.extra = if extra.is_empty() { String::new() } else { serde_json::Value::Object(extra).to_string() };
+    }
+}
+
 fn is_zero(n: &usize) -> bool {
     *n == 0
 }
@@ -1457,5 +1489,26 @@ mod tests {
         q.normalize();
         assert_eq!(q.ins, vec![InKind::Image, InKind::Matte, InKind::Image]);
         assert_eq!(q.clip_seconds(), 2.0);
+    }
+
+    #[test]
+    fn a_model_s_settings_live_in_extra_and_the_default_stores_nothing() {
+        let wan = catalog::get("fal/wan-2.7-video-edit").unwrap();
+        let res = wan.dialect.params().iter().find(|p| p.key == "resolution").unwrap();
+        let mut o = Opts::default();
+        assert_eq!(o.param(res), 0);
+        o.set_param(res, 1);
+        assert_eq!(o.extra, r#"{"resolution":"1080p"}"#);
+        assert_eq!(o.param(res), 1);
+        o.set_param(res, 0);
+        assert_eq!(o.extra, "", "the default is the request's own");
+        // Every choice is a JSON literal.
+        for m in catalog::CATALOG {
+            for p in m.dialect.params() {
+                for c in p.choices {
+                    assert!(serde_json::from_str::<serde_json::Value>(c.1).is_ok(), "{} {} {}", m.id, p.key, c.1);
+                }
+            }
+        }
     }
 }
