@@ -107,6 +107,12 @@ impl GenAiParams {
         self.pipeline.picked().is_none_or(|t| t.commercial) && self.pipeline.all_commercial()
     }
 
+    /// The node takes its RESULT's size as its format (an upscaler feeds
+    /// Output), rather than its input's. The app's format walk asks.
+    pub fn resizes(&self) -> bool {
+        self.pipeline.resizes()
+    }
+
     pub fn input_name(input: usize) -> &'static str {
         match input {
             0 => "image (the reference, or the clip)",

@@ -59,6 +59,9 @@ pub enum Task {
     /// prompt + clip + matte clip (white = regenerate) -> the clip with
     /// the matted region filled: object removal on video. A video take.
     VideoInpaint,
+    /// a clip (the node's input over a range, or a video step's result)
+    /// -> the same clip, bigger. A video take.
+    VideoUpscale,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -112,9 +115,35 @@ pub enum Dialect {
     /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
     /// clip, `seed`; audio and prompt expansion off.
     LtxInpaint,
+    /// Topaz image upscale: `image_url`, `model` (which of Topaz's
+    /// networks), `upscale_factor`. No seed. Face enhancement is OFF: on
+    /// by default at Topaz, and a face quietly redrawn is not an upscale.
+    Topaz { model: &'static str },
+    /// Clarity upscaler: `image_url`, `upscale_factor`, `seed`; its
+    /// creativity and resemblance ride in extra.
+    Clarity,
+    /// SeedVR2 on an image: `image_url`, `upscale_factor`, `seed`.
+    SeedVr,
+    /// Recraft's upscalers: `image_url` (a PNG, which is what we send) and
+    /// nothing else. The factor is the model's own.
+    Recraft,
+    /// Topaz video upscale: `video_url`, `model`, `upscale_factor`; H.264
+    /// out, because that is what every movie build decodes.
+    TopazVideo { model: &'static str },
+    /// SeedVR2 on a clip: `video_url`, `upscale_factor`, `seed`.
+    SeedVrVideo,
 }
 
 impl Dialect {
+    /// The range an upscaler's factor may take, or `None` when the model
+    /// picks its own (the panel then shows no slider).
+    pub fn scale_range(self) -> Option<(f32, f32)> {
+        match self {
+            Dialect::Recraft => None,
+            _ => Some((1.0, 4.0)),
+        }
+    }
+
     /// The megapixel range a text-to-image call must land in.
     pub fn mp_range(self) -> (f32, f32) {
         match self {
@@ -132,7 +161,17 @@ impl Dialect {
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
-        matches!(self, Dialect::Flux | Dialect::Gemini | Dialect::IcLight | Dialect::LucyEdit | Dialect::LtxInpaint)
+        matches!(
+            self,
+            Dialect::Flux
+                | Dialect::Gemini
+                | Dialect::IcLight
+                | Dialect::LucyEdit
+                | Dialect::LtxInpaint
+                | Dialect::Clarity
+                | Dialect::SeedVr
+                | Dialect::SeedVrVideo
+        )
     }
 
     /// Can this model take a clip of `frames` at `fps`, `w`×`h`? Said in
@@ -313,6 +352,90 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "upscale by 2 or 4; invents detail, so judge it at 1:1",
     },
     RemoteModel {
+        id: "fal/topaz-upscale",
+        label: "Topaz Upscale",
+        short: "topaz",
+        service: Service::Fal,
+        endpoint: "fal-ai/topaz/upscale/image",
+        dialect: Dialect::Topaz { model: "Standard V2" },
+        task: Task::Upscale,
+        commercial: true,
+        licence: "Topaz Labs via fal API terms (commercial use through the API)",
+        about: "Topaz's faithful upscaler: sharper, not repainted; the one to try first on a plate",
+    },
+    RemoteModel {
+        id: "fal/topaz-upscale-hifi",
+        label: "Topaz Upscale High Fidelity",
+        short: "topaz hifi",
+        service: Service::Fal,
+        endpoint: "fal-ai/topaz/upscale/image",
+        dialect: Dialect::Topaz { model: "High Fidelity V2" },
+        task: Task::Upscale,
+        commercial: true,
+        licence: "Topaz Labs via fal API terms (commercial use through the API)",
+        about: "Topaz High Fidelity: keeps fine texture and grain structure, for an already clean source",
+    },
+    RemoteModel {
+        id: "fal/topaz-recovery",
+        label: "Topaz Recovery",
+        short: "topaz recovery",
+        service: Service::Fal,
+        endpoint: "fal-ai/topaz/upscale/image",
+        dialect: Dialect::Topaz { model: "Recovery V2" },
+        task: Task::Upscale,
+        commercial: true,
+        licence: "Topaz Labs via fal API terms (commercial use through the API)",
+        about: "Topaz Recovery: rebuilds a small or badly compressed picture; invents more, so check it",
+    },
+    RemoteModel {
+        id: "fal/topaz-redefine",
+        label: "Topaz Redefine",
+        short: "topaz redefine",
+        service: Service::Fal,
+        endpoint: "fal-ai/topaz/upscale/image",
+        dialect: Dialect::Topaz { model: "Redefine" },
+        task: Task::Upscale,
+        commercial: true,
+        licence: "Topaz Labs via fal API terms (commercial use through the API)",
+        about: "Topaz's creative upscaler: repaints detail as it enlarges; extra {\"creativity\": 3, \"prompt\": \"...\"} steers it",
+    },
+    RemoteModel {
+        id: "fal/clarity-upscaler",
+        label: "Clarity Upscaler",
+        short: "clarity",
+        service: Service::Fal,
+        endpoint: "fal-ai/clarity-upscaler",
+        dialect: Dialect::Clarity,
+        task: Task::Upscale,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "creative upscale in the Magnific manner: adds detail that was never there; extra {\"creativity\": 0.35, \"resemblance\": 0.6} trades invention against likeness",
+    },
+    RemoteModel {
+        id: "fal/seedvr2-upscale",
+        label: "SeedVR2 Upscale",
+        short: "seedvr2",
+        service: Service::Fal,
+        endpoint: "fal-ai/seedvr/upscale/image",
+        dialect: Dialect::SeedVr,
+        task: Task::Upscale,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "restoring upscale by a one-step diffusion model: strong on soft or noisy sources",
+    },
+    RemoteModel {
+        id: "fal/recraft-crisp-upscale",
+        label: "Recraft Crisp Upscale",
+        short: "recraft crisp",
+        service: Service::Fal,
+        endpoint: "fal-ai/recraft/upscale/crisp",
+        dialect: Dialect::Recraft,
+        task: Task::Upscale,
+        commercial: true,
+        licence: "Recraft via fal API terms (commercial use through the API)",
+        about: "a clean enlargement with sharper edges and no repainting; the size is the model's choice",
+    },
+    RemoteModel {
         id: "fal/birefnet-v2",
         label: "BiRefNet v2",
         short: "cutout",
@@ -411,6 +534,30 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: false,
         licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
         about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
+    },
+    RemoteModel {
+        id: "fal/topaz-video-upscale",
+        label: "Topaz Video Upscale",
+        short: "topaz video",
+        service: Service::Fal,
+        endpoint: "fal-ai/topaz/upscale/video",
+        dialect: Dialect::TopazVideo { model: "Proteus" },
+        task: Task::VideoUpscale,
+        commercial: true,
+        licence: "Topaz Labs via fal API terms (commercial use through the API)",
+        about: "upscale the input clip with Topaz Proteus: steady frame to frame, where a per-frame upscaler shimmers",
+    },
+    RemoteModel {
+        id: "fal/seedvr2-video-upscale",
+        label: "SeedVR2 Video Upscale",
+        short: "seedvr2 video",
+        service: Service::Fal,
+        endpoint: "fal-ai/seedvr/upscale/video",
+        dialect: Dialect::SeedVrVideo,
+        task: Task::VideoUpscale,
+        commercial: true,
+        licence: "fal lists it for commercial use",
+        about: "restore and upscale the input clip with SeedVR2: for soft, noisy or generated footage",
     },
     RemoteModel {
         id: "fal/nano-banana-pro",
@@ -642,17 +789,25 @@ impl Task {
             Task::Relight => "relight",
             Task::VideoEdit => "video edit",
             Task::VideoInpaint => "video inpaint",
+            Task::VideoUpscale => "video upscale",
         }
     }
 
     /// Does this task return a video rather than a picture?
     pub fn is_video(self) -> bool {
-        matches!(self, Task::ImageToVideo | Task::VideoEdit | Task::VideoInpaint)
+        matches!(self, Task::ImageToVideo | Task::VideoEdit | Task::VideoInpaint | Task::VideoUpscale)
     }
 
     /// Does this task READ a clip (the node's input over a range)?
     pub fn takes_clip(self) -> bool {
         matches!(self, Task::VideoEdit | Task::VideoInpaint)
+    }
+
+    /// Does this task make its input BIGGER? The node then takes the
+    /// result's own size as its format, instead of stretching the result
+    /// back over its input's.
+    pub fn resizes(self) -> bool {
+        matches!(self, Task::Upscale | Task::VideoUpscale)
     }
 
     /// Does this task hand back MEASUREMENTS rather than a picture? A data
@@ -661,7 +816,7 @@ impl Task {
         matches!(self, Task::Depth | Task::Normals)
     }
 
-    pub const ALL: [Task; 12] = [
+    pub const ALL: [Task; 13] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -674,6 +829,7 @@ impl Task {
         Task::Relight,
         Task::VideoEdit,
         Task::VideoInpaint,
+        Task::VideoUpscale,
     ];
 }
 
@@ -710,7 +866,12 @@ mod tests {
         for m in CATALOG {
             let video = matches!(
                 m.dialect,
-                Dialect::Seedance { .. } | Dialect::KlingEdit | Dialect::LucyEdit | Dialect::LtxInpaint
+                Dialect::Seedance { .. }
+                    | Dialect::KlingEdit
+                    | Dialect::LucyEdit
+                    | Dialect::LtxInpaint
+                    | Dialect::TopazVideo { .. }
+                    | Dialect::SeedVrVideo
             );
             assert_eq!(video, m.task.is_video(), "{}", m.id);
         }

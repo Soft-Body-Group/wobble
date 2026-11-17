@@ -3583,6 +3583,15 @@ leaves the comp as sRGB at up to 2 MP and values above 1.0 clip; the result
 comes in through the sRGB input transform, on straight colour so a cutout's
 soft edge survives.
 
+**Upscalers make the node bigger.** A node whose picture comes out of an
+upscaler (Real-ESRGAN, Topaz Upscale / High Fidelity / Recovery / Redefine,
+Clarity, SeedVR2, Recraft Crisp, and Topaz or SeedVR2 on a clip) takes the
+RESULT's size as its format instead of stretching it back over its
+input's, and its reference goes up whole to about 4 MP rather than 2.
+Topaz's face enhancement is off unless the step's extra turns it on:
+`{"face_enhancement": true}`. A clip is still sent at 720 px on its short
+side, so a video upscale starts from there.
+
 **Who pays** is the machine's business, never the comp's: **wobble
 credits** (one account, no provider keys) or **my fal key** (straight to
 fal, nothing through us). Keys live in `~/.wobble/genai.json`, readable only

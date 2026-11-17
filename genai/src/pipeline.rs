@@ -271,6 +271,7 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
         Task::VideoInpaint => {
             vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
         }
+        Task::VideoUpscale => vec![(Pipe::Video, "video")],
     }
 }
 
@@ -316,6 +317,11 @@ impl Take {
         is_video_file(&self.file)
     }
 }
+
+/// The reference cap for a pipeline with an image upscaler in it: enough
+/// for a 2K DCI or UHD-half plate to go whole (2048x1080 = 2.2 MP,
+/// 2560x1440 = 3.7 MP).
+pub const UPSCALE_REF_MP: f32 = 4.2;
 
 /// The extensions a video step's result can come back as.
 pub const VIDEO_EXTS: &[&str] = &["mp4", "mov", "webm"];
@@ -583,6 +589,31 @@ impl Pipeline {
     pub fn wants_prompt(&self) -> bool {
         self.steps.iter().any(|s| matches!(s.op, Op::PromptIn))
     }
+    /// Does the node's picture come straight out of an UPSCALER? Then the
+    /// result's own size is the node's format: stretched back over the
+    /// input's format, an upscale would be a blur with a bill attached.
+    pub fn resizes(&self) -> bool {
+        self.output()
+            .and_then(|o| self.steps[o].inputs.first().copied().flatten())
+            .is_some_and(|i| {
+                matches!(&self.steps[i].op, Op::Generate { model, .. }
+                    if catalog::get(model).is_some_and(|m| m.task.resizes()))
+            })
+    }
+    /// The most megapixels of the host's image a run should send: `usual`,
+    /// or [`UPSCALE_REF_MP`] when an image upscaler is among the steps. An
+    /// upscaler fed a shrunken plate hands back the plate it started with.
+    pub fn reference_mp(&self, usual: f32) -> f32 {
+        let up = self.steps.iter().any(|s| {
+            matches!(&s.op, Op::Generate { model, .. }
+                if catalog::get(model).is_some_and(|m| m.task == Task::Upscale))
+        });
+        if up {
+            usual.max(UPSCALE_REF_MP)
+        } else {
+            usual
+        }
+    }
     /// Does it read the host's image input as a clip? Its matte as one?
     pub fn wants_clip(&self) -> bool {
         self.steps.iter().any(|s| matches!(s.op, Op::ClipIn { .. }))
@@ -765,6 +796,27 @@ mod tests {
             Op::Generate { opts, .. } => assert_eq!(opts, Opts::default()),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn only_a_pipeline_ending_in_an_upscaler_resizes_the_node() {
+        assert!(!Pipeline::default().resizes());
+        assert!(!Pipeline::for_model("fal/flux-kontext-pro").unwrap().resizes());
+        for id in ["fal/esrgan", "fal/topaz-upscale", "fal/topaz-video-upscale"] {
+            assert!(Pipeline::for_model(id).unwrap().resizes(), "{id}");
+        }
+        // An upscaler in the MIDDLE feeds a model that picks its own size.
+        let mut p = Pipeline::for_model("fal/esrgan").unwrap();
+        let up = p.model_step().unwrap();
+        let out = p.output().unwrap();
+        let cut = p.push(Op::Generate { model: "fal/birefnet-v2".into(), seed: 1, opts: Opts::default() }, [0.0, 0.3]);
+        assert!(p.connect(up, cut, 0) && p.connect(cut, out, 0));
+        assert!(!p.resizes());
+        // But its reference still goes up whole.
+        assert_eq!(p.reference_mp(2.0), UPSCALE_REF_MP);
+        assert_eq!(Pipeline::default().reference_mp(2.0), 2.0);
+        // A clip is sized by the clip capture, not by this.
+        assert_eq!(Pipeline::for_model("fal/topaz-video-upscale").unwrap().reference_mp(2.0), 2.0);
     }
 
     #[test]

@@ -1387,6 +1387,18 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `Dialect::output_key` (MoGe `normal_map`, MiDaS `depth_map`/`normal_map`).
   MoGe's `depth_map` is a colourised visualisation: never offer it as depth.
 
+- **An upscaler RESIZES the node.** `Pipeline::resizes()` (Output fed by
+  a `Task::resizes()` model: Upscale, VideoUpscale) makes
+  `node_resolution_walk` answer the loaded take's own size, so
+  `emit_loaded`'s stretch is 1:1; everything else still fills the input's
+  format. `Pipeline::reference_mp` raises the capture cap to
+  `UPSCALE_REF_MP` when an image upscaler is among the steps. Upscaler
+  dialects (`Topaz`, `Clarity`, `SeedVr`, `Recraft`, `TopazVideo`,
+  `SeedVrVideo`) each have their own request arm; Real-ESRGAN keeps
+  `scale` (its keys must not move). `VideoUpscale` is NOT `takes_clip()`:
+  its video port may be fed by a video step, not only the captured clip.
+  `genai/tests/live.rs` (ignored, free) asks fal's pricing API about every
+  catalog endpoint; run it after adding rows.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

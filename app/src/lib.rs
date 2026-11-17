@@ -10214,6 +10214,12 @@ impl Gfx {
                 Some(l) => Some((l.seq.info.width * l.seq.proxy, l.seq.info.height * l.seq.proxy)),
                 None => self.input_res(id, 0, visited),
             },
+            // A GenAI upscaler: the take's own size (an upscale stretched
+            // back over its input's format would be a blur with a bill).
+            NodeKind::GenAi(p) if p.resizes() => match self.loaded.get(&id) {
+                Some(l) => Some((l.seq.info.width, l.seq.info.height)),
+                None => self.input_res(id, 0, visited),
+            },
             // These declare their own format rather than inheriting one: a
             // Grid is a source, and redefining the format is what a Reformat
             // is for.

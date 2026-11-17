@@ -84,7 +84,7 @@ pub fn video_ok() -> bool {
 
 /// Is this model one this build may offer?
 fn offered(m: &catalog::RemoteModel) -> bool {
-    if m.task.takes_clip() {
+    if m.task.takes_clip() || m.task == Task::VideoUpscale {
         clip_ok()
     } else {
         !m.task.is_video() || video_ok()
@@ -638,9 +638,16 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                                 ui.colored_label(theme::error(), small(NO_VIDEO));
                             }
                         }
-                        Task::Upscale => {
-                            crate::widgets::plain_slider(ui, "scale", &mut opts.scale, 1.0, 4.0, false);
-                        }
+                        Task::Upscale | Task::VideoUpscale => match m.dialect.scale_range() {
+                            Some((lo, hi)) => {
+                                opts.scale = opts.scale.clamp(lo, hi);
+                                crate::widgets::plain_slider(ui, "scale", &mut opts.scale, lo, hi, false);
+                                ui.weak(small("the node takes the result's size as its format"));
+                            }
+                            None => {
+                                ui.weak(small("the model picks the size; the node takes it as its format"));
+                            }
+                        },
                         _ => {}
                     }
                     ui.horizontal(|ui| {
@@ -1223,7 +1230,10 @@ impl Gfx {
         };
         let png = if port == 0 {
             to_rec709(&mut px, working);
-            let (small, sw, sh) = genai::image::shrink_rgba(&px, w, h, REF_MP);
+            // An upscaler's reference goes up whole (to a point): shrunk,
+            // it would hand back the plate it started with.
+            let cap = r.pipeline.reference_mp(REF_MP);
+            let (small, sw, sh) = genai::image::shrink_rgba(&px, w, h, cap);
             genai::image::png_srgb_rgb(&small, sw, sh).map(|b| Png { bytes: b, w: sw, h: sh })
         } else {
             // Coverage rides every channel of a matte; take red.

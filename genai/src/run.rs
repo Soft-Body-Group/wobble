@@ -239,6 +239,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     // The whole clip's megapixels: what a per-megapixel
                     // video price is billed on.
                     Task::VideoEdit | Task::VideoInpaint => in_mp(1).unwrap_or(0.0),
+                    Task::VideoUpscale => in_mp(0).unwrap_or(0.0) * (opts.scale as f64).powi(2),
                 };
                 (h(&parts), out_mp)
             }
@@ -394,6 +395,30 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::Topaz { model }) => json!({
+            "image_url": img(0)?, "model": model, "upscale_factor": opts.scale,
+            "output_format": "png",
+            // On by default at Topaz. A face redrawn behind your back is
+            // not an upscale; extra turns it back on.
+            "face_enhancement": false,
+        }),
+        (_, Dialect::Clarity) => json!({
+            "image_url": img(0)?, "upscale_factor": opts.scale, "seed": seed,
+        }),
+        (_, Dialect::SeedVr) => json!({
+            "image_url": img(0)?, "upscale_factor": opts.scale, "seed": seed,
+            "output_format": "png",
+        }),
+        (_, Dialect::Recraft) => json!({ "image_url": img(0)? }),
+        (_, Dialect::TopazVideo { model }) => json!({
+            "video_url": img(0)?, "model": model, "upscale_factor": opts.scale,
+            // H.265 by default, which not every movie build decodes.
+            "H264_output": true,
+        }),
+        (_, Dialect::SeedVrVideo) => json!({
+            "video_url": img(0)?, "upscale_factor": opts.scale, "seed": seed,
+        }),
+        (Task::VideoUpscale, _) => json!({ "video_url": img(0)?, "upscale_factor": opts.scale }),
         (Task::VideoEdit | Task::VideoInpaint, _) => json!({
             "prompt": prompt(), "video_url": img(1)?, "seed": seed,
         }),
@@ -510,7 +535,9 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
             let m = catalog::get(model).unwrap();
             let ph: Vec<Option<String>> =
                 p.steps[i].inputs.iter().map(|s| s.map(|_| "<image>".to_string())).collect();
-            let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip());
+            // A video upscaler is billed on the clip it is sent too, when
+            // that is the captured one.
+            let clip = inputs.clip.as_ref().filter(|_| m.task.takes_clip() || m.task == Task::VideoUpscale);
             let r = request_clip(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph, clip.map(Clip::shape))?;
             let video = match clip {
                 // Billed on the clip sent: its length, its size.
@@ -988,6 +1015,36 @@ mod tests {
         let i = request(m("fal/gpt-image-2-inpaint"), &o, 7, (2048, 1080), Some("p"), &[None, img, mask]).unwrap();
         assert_eq!(i["image_urls"], json!(["data:x"]));
         assert_eq!(i["mask_url"], "data:m");
+    }
+
+    #[test]
+    fn upscalers_ask_in_their_own_words() {
+        let opts = Opts { scale: 3.0, ..Opts::default() };
+        let img = [Some("data:image/png;base64,AA".to_string())];
+        let r = request(m("fal/topaz-upscale-hifi"), &opts, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!(r["model"], "High Fidelity V2");
+        assert_eq!(r["upscale_factor"], 3.0);
+        assert_eq!(r["face_enhancement"], false, "a face is never redrawn unasked");
+        assert!(r.get("seed").is_none() && r.get("scale").is_none());
+        let r = request(m("fal/clarity-upscaler"), &opts, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!((r["upscale_factor"].as_f64(), r["seed"].as_u64()), (Some(3.0), Some(7)));
+        let r = request(m("fal/seedvr2-upscale"), &opts, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!((r["upscale_factor"].as_f64(), r["seed"].as_u64()), (Some(3.0), Some(7)));
+        let r = request(m("fal/recraft-crisp-upscale"), &opts, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!(r.as_object().unwrap().len(), 1, "image_url and nothing else: {r}");
+        // Real-ESRGAN keeps the request it always had (and so its keys).
+        let r = request(m("fal/esrgan"), &opts, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!(r["scale"], 3.0);
+        let clip = [Some("data:video/mp4;base64,AA".to_string())];
+        let r = request(m("fal/topaz-video-upscale"), &opts, 7, (1920, 1080), None, &clip).unwrap();
+        assert_eq!((r["model"].as_str(), r["H264_output"].as_bool()), (Some("Proteus"), Some(true)));
+        assert!(r["video_url"].is_string() && r.get("image_url").is_none());
+        let r = request(m("fal/seedvr2-video-upscale"), &opts, 7, (1920, 1080), None, &clip).unwrap();
+        assert_eq!((r["upscale_factor"].as_f64(), r["seed"].as_u64()), (Some(3.0), Some(7)));
+        // An extra field still wins, which is how face enhancement comes back.
+        let on = Opts { extra: r#"{"face_enhancement": true}"#.into(), ..opts };
+        let r = request(m("fal/topaz-upscale"), &on, 7, (1920, 1080), None, &img).unwrap();
+        assert_eq!(r["face_enhancement"], true);
     }
 
     #[test]
