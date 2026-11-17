@@ -3,9 +3,9 @@
 use crate::*;
 
 impl Gfx {
-    /// --test-picker driver: the pixel readout end to end — P toggles it,
+    /// --test-picker driver: the pixel readout end to end — Z toggles it,
     /// hovering the image lands a sample that matches what the comp actually
-    /// holds there, shift+P pins it, and P again clears out.
+    /// holds there, shift+Z pins it, and Z again clears out.
     ///
     /// The unit tests cover the state machine; this covers the wiring the
     /// unit tests cannot see — the key reaching the app, the pointer mapping
@@ -32,21 +32,21 @@ impl Gfx {
             // Let the plates land and the comp render before sampling it.
             0 if frames >= 30 && self.comp.output_size().is_some() => {
                 if self.picker.on {
-                    println!("PICKER TEST FAIL: readout on before P");
+                    println!("PICKER TEST FAIL: readout on before Z");
                     std::process::exit(1);
                 }
-                key(raw, egui::Key::P, false, true);
+                key(raw, egui::Key::Z, false, true);
                 next = 1;
             }
             1 => {
-                key(raw, egui::Key::P, false, false);
+                key(raw, egui::Key::Z, false, false);
                 raw.events.push(egui::Event::PointerMoved(centre));
                 next = 2;
             }
             // The readback is async: give it frames to land.
             2 if frames >= 60 => {
                 if !self.picker.on {
-                    println!("PICKER TEST FAIL: P did not turn the readout on");
+                    println!("PICKER TEST FAIL: Z did not turn the readout on");
                     std::process::exit(1);
                 }
                 raw.events.push(egui::Event::PointerMoved(centre));
@@ -73,17 +73,17 @@ impl Gfx {
                 // Hold it, then look somewhere else: the two have to differ,
                 // which is the thing a readout wired to the wrong texture (or
                 // to nothing) cannot fake.
-                key(raw, egui::Key::P, true, true);
+                key(raw, egui::Key::Z, true, true);
                 next = 3;
             }
             3 => {
-                key(raw, egui::Key::P, true, false);
+                key(raw, egui::Key::Z, true, false);
                 next = 4;
             }
             4 if frames >= 70 => {
                 if self.picker.pinned.len() != 1 {
                     println!(
-                        "PICKER TEST FAIL: shift+P pinned {} samples, want 1",
+                        "PICKER TEST FAIL: shift+Z pinned {} samples, want 1",
                         self.picker.pinned.len()
                     );
                     std::process::exit(1);
@@ -119,19 +119,19 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                key(raw, egui::Key::P, false, true);
+                key(raw, egui::Key::Z, false, true);
                 next = 6;
             }
             6 => {
-                key(raw, egui::Key::P, false, false);
+                key(raw, egui::Key::Z, false, false);
                 next = 7;
             }
             7 if frames >= 130 => {
                 if self.picker.on || !self.picker.pinned.is_empty() {
-                    println!("PICKER TEST FAIL: P did not clear the readout");
+                    println!("PICKER TEST FAIL: Z did not clear the readout");
                     std::process::exit(1);
                 }
-                println!("PICKER TEST PASS: P toggles, hover samples the right pixel, shift+P pins");
+                println!("PICKER TEST PASS: Z toggles, hover samples the right pixel, shift+Z pins");
                 std::process::exit(0);
             }
             _ => {}

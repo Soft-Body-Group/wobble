@@ -521,7 +521,7 @@ pub const DEFS: &[Def] = &[
         "viewer.readout",
         "pixel readout under the pointer",
         Scope::Viewer,
-        Binding::plain(Key::P),
+        Binding::plain(Key::Z),
         Exact,
     ),
     def(
@@ -529,7 +529,7 @@ pub const DEFS: &[Def] = &[
         "viewer.pin_sample",
         "hold the current sample beside the live one",
         Scope::Viewer,
-        Binding::shift(Key::P),
+        Binding::shift(Key::Z),
         Exact,
     ),
     // F, Nuke's (R went to the red channel). With a Paint node selected
@@ -2629,9 +2629,11 @@ mod tests {
             modifiers,
         };
         let mut i = egui::InputState::default();
-        i.events = vec![press(Key::P, Modifiers::SHIFT)];
-        assert!(!pressed(&i, Act::PixelReadout), "shift+P is not P");
+        i.events = vec![press(Key::Z, Modifiers::SHIFT)];
+        assert!(!pressed(&i, Act::PixelReadout), "shift+Z is not Z");
         assert!(pressed(&i, Act::PinSample));
+        i.events = vec![press(Key::Z, Modifiers::COMMAND)];
+        assert!(!pressed(&i, Act::PixelReadout), "cmd+Z is undo, not the readout");
         i.events = vec![press(Key::G, Modifiers::COMMAND)];
         assert!(!pressed(&i, Act::GraphGrab), "cmd+G is the group chord");
         assert!(pressed(&i, Act::GraphGroup));

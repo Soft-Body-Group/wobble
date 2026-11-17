@@ -1414,7 +1414,7 @@ the viewer B shows the blue channel.
 
 Viewer keys: `F` frames the image (Home too; with a Paint node selected, held
 `F` is the brush adjust instead), `R` / `G` / `B` show one channel as grey and
-`A` the alpha — the same key again goes back to rgb.
+`A` the alpha — the same key again goes back to rgb. `Z` toggles the pixel readout (scene-linear and display values under the pointer) and shift+`Z` pins a sample to compare against; Z still sets the finest drag rate while a value drag is under way.
 
 Main keys: `Q` fullscreens the pane under the cursor, alone — the graph,
 the properties or the image (`Q` again or Esc puts the layout back), ⌘Q

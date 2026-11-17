@@ -13708,20 +13708,23 @@ impl Gfx {
             // panel's swatches draw before this and consume it themselves;
             // the viewer's HUD chips draw after, and need the stand-down.)
             let back = back && !colorpicker::any_open(&ctx);
-            // P: pixel readout. Shift+P holds the current sample beside the
-            // live one, which is how you compare two points of a grade. Two
+            // Z: pixel readout. Shift+Z holds the current sample beside the
+            // live one, which is how you compare two points of a grade. Z is
+            // also the finest drag rate, so a press with a button down (a
+            // value drag under way) is the rate's, not the readout's. Two
             // separate BINDINGS — the keymap matches the modifiers off the
             // KEY EVENT, not `i.modifiers` (frame-time global state, which
             // can differ from what was held when the key went down and is
             // not set at all by a synthetic --test-picker event).
             let (p_plain, p_shift) = ctx.input(|i| {
+                let free = !i.pointer.any_down();
                 (
-                    keymap::pressed(i, Act::PixelReadout),
-                    keymap::pressed(i, Act::PinSample),
+                    free && keymap::pressed(i, Act::PixelReadout),
+                    free && keymap::pressed(i, Act::PinSample),
                 )
             });
             if p_shift {
-                // Shift+P on a hidden readout shows it rather than doing
+                // Shift+Z on a hidden readout shows it rather than doing
                 // nothing: there is no sample to pin yet.
                 if self.picker.on {
                     self.picker.pin();
