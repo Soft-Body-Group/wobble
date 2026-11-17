@@ -1796,7 +1796,7 @@ const FIXED: &[Fixed] = &[
     Fixed { how: "ctrl-drag", label: "graph: slice wires", key: None, mods: Modifiers::CTRL },
     Fixed { how: "shift", label: "graph: wire the courting pair", key: None, mods: Modifiers::SHIFT },
     Fixed { how: "hold tab + drag", label: "viewer: scrub the timeline", key: Some(Key::Tab), mods: Modifiers::NONE },
-    Fixed { how: "alt-click", label: "paint: set the clone source", key: None, mods: Modifiers::ALT },
+    Fixed { how: "hold alt/cmd + move", label: "paint: move the clone source (brush stays put)", key: None, mods: Modifiers::ALT },
     Fixed { how: "ctrl-click", label: "viewer: pick the layer's transform, show its HUD", key: None, mods: Modifiers::CTRL },
     Fixed { how: "cmd-click", label: "viewer: pick the layer's transform, raise its properties", key: None, mods: Modifiers::COMMAND },
     Fixed { how: "shift+ctrl/cmd-click", label: "viewer: add the pick instead of soloing it", key: None, mods: Modifiers::SHIFT },

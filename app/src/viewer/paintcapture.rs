@@ -57,6 +57,30 @@ impl Gfx {
             let pens = pen::drain();
             let adjusting = !ui.ctx().egui_wants_keyboard_input()
                 && ui.input(|i| keymap::down(i, keymap::Act::BrushAdjust));
+            // HELD alt (or cmd on a Mac) + clone: the brush freezes where it
+            // is and pointer travel moves the SOURCE; let go and it paints
+            // again with the new offset. Nothing to click, nothing to exit.
+            let clone_hold = clone_mode && (mods.alt || mods.mac_cmd);
+            let held = adjusting || clone_hold;
+            let hover = ui.ctx().pointer_latest_pos().filter(|p| rect.contains(*p));
+            let primary_down = ui.input(|i| i.pointer.primary_down());
+            if !primary_down {
+                self.brush.swallow = false;
+            } else if held && (started || ui.input(|i| i.pointer.primary_pressed())) {
+                self.brush.swallow = true;
+            }
+            if held {
+                // The ring stays where the gesture began, whatever the hand
+                // does while the key is down.
+                if self.brush.pin.is_none() {
+                    self.brush.pin = hover.map(to_norm);
+                }
+            } else {
+                self.brush.pin = None;
+            }
+            if !clone_hold || adjusting {
+                self.brush.grab = None;
+            }
             if adjusting {
                 let d = ui.input(|i| i.pointer.delta());
                 if mods.ctrl {
@@ -71,22 +95,19 @@ impl Gfx {
                         (self.brush.radius * (1.0 + d.x * 0.01)).clamp(1.0, 500.0);
                     self.brush.soft = (self.brush.soft - d.y * 0.005).clamp(0.0, 1.0);
                 }
-            } else if clone_mode && mods.alt {
-                // ALT + clone = picking the source, not painting. It holds
-                // for the WHOLE gesture, not just the press: an alt-drag
-                // that fell through to the paint branch would quietly
-                // extend the previous stroke.
-                if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
-                    if let Some(p) =
-                        ui.ctx().pointer_latest_pos().filter(|p| rect.contains(*p))
-                    {
-                        self.brush.clone_src = Some(to_norm(p));
-                        // A fresh anchor re-derives the offset on the next
-                        // stroke; until then there is nothing to paint with.
-                        self.brush.clone_off = None;
-                    }
+            } else if clone_hold {
+                // The offset moves by the pointer's travel since the grab,
+                // so a second hold nudges the source from where it was
+                // instead of snapping it onto the brush. The first hold
+                // starts from zero: the source leaves the brush with the hand.
+                if let Some(n) = hover.map(to_norm) {
+                    let (p0, o0) = *self
+                        .brush
+                        .grab
+                        .get_or_insert((n, self.brush.clone_off.unwrap_or([0.0, 0.0])));
+                    self.brush.clone_off = Some([o0[0] + n[0] - p0[0], o0[1] + n[1] - p0[1]]);
                 }
-            } else if !scrubbing && !cmd && (started || dragging) {
+            } else if !scrubbing && !cmd && !self.brush.swallow && (started || dragging) {
                 // Every cursor sample since last frame (pen.rs), with its
                 // pressure — a fast pen stroke is many samples a frame, and
                 // one per frame draws polygons. A stroke starts where the
@@ -110,16 +131,9 @@ impl Gfx {
                 }
                 if let Some(&(p0, press0)) = hand.first() {
                     let norm = to_norm(p0);
-                    // Aligned clone: the offset is fixed when the first
-                    // stroke after an alt-click starts, and every later
-                    // stroke reuses it, so a patch stays registered with its
+                    // Aligned clone: every stroke reuses the offset the last
+                    // alt/cmd hold left, so a patch stays registered with its
                     // source instead of jumping per stroke.
-                    if started && clone_mode && self.brush.clone_off.is_none() {
-                        if let Some(src) = self.brush.clone_src {
-                            self.brush.clone_off =
-                                Some([src[0] - norm[0], src[1] - norm[1]]);
-                        }
-                    }
                     let clone_off = if clone_mode { self.brush.clone_off } else { None };
                     // Cloning with no source set would lay down a
                     // zero-offset stroke, i.e. an invisible no-op.

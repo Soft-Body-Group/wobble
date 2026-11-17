@@ -248,16 +248,12 @@ pub(crate) fn panel(
                         "offset {:+.3}, {:+.3}",
                         o[0], o[1]
                     ));
-                    if ui.button("re-anchor").clicked() {
-                        brush.clone_src = None;
+                    if ui.button("clear").clicked() {
                         brush.clone_off = None;
                     }
                 }
-                None if brush.clone_src.is_some() => {
-                    ui.weak("source set — paint to fix the offset");
-                }
                 None => {
-                    ui.weak("alt-click the viewer to set the source");
+                    ui.weak("hold alt/cmd and move to pull the source off the brush");
                 }
             }
         });

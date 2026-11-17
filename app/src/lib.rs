@@ -6745,8 +6745,10 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             blend: engine::graph::PaintBlend::Normal,
             press: engine::graph::PressureMap::default(),
             presets: brush_presets,
-            clone_src: None,
             clone_off: None,
+            pin: None,
+            grab: None,
+            swallow: false,
         },
         auto_bake: None,
         bake_queue: Default::default(),
@@ -14530,7 +14532,7 @@ impl Gfx {
                                 ("drag rotate ring".into(), "rotate (whole ring grabs)"),
                                 ("HUD corner drag".into(), "resize HUD (alt = stretch)"),
                                 (format!("paint: {} / {}", key_of(Act::BrushDown), key_of(Act::BrushUp)), "brush size (shift = softness, alt = opacity)"),
-                                ("paint: alt-click".into(), "set the clone source"),
+                                ("paint: hold alt/cmd + move".into(), "clone: move the source, brush stays put"),
                                 ("spline: S-click".into(), "add a point (on the outline: insert); S-click a point toggles it in the pick"),
                                 ("spline: D-click point".into(), "remove point"),
                                 ("spline: alt-drag point".into(), "adjust softness"),
@@ -16060,25 +16062,34 @@ impl Gfx {
         // chord (clone source / subtractive sample) — alt+LMB pan stands
         // down there and MMB / cmd+LMB / the wheel carry navigation, the
         // way MMB still pans inside Blender's paint modes.
-        let alt_is_tools = matches!(
-            self.egraph
-                .active_view()
-                .and_then(|id| self.egraph.node(id))
-                .map(|n| &n.kind),
-            Some(NodeKind::Paint(_)) | Some(NodeKind::Keyer(_))
-        );
+        // A selected Paint node in clone mode owns alt AND cmd wherever the
+        // view is: holding either moves the clone source (paintcapture.rs),
+        // and a click during that hold must not turn into a pan.
+        let clone_hold = self.brush.mode == engine::graph::BrushMode::Clone
+            && (mods.alt || mods.mac_cmd)
+            && self.selected.iter().any(|id| {
+                matches!(self.egraph.node(*id).map(|n| &n.kind), Some(NodeKind::Paint(_)))
+            });
+        let alt_is_tools = clone_hold
+            || matches!(
+                self.egraph
+                    .active_view()
+                    .and_then(|id| self.egraph.node(id))
+                    .map(|n| &n.kind),
+                Some(NodeKind::Paint(_)) | Some(NodeKind::Keyer(_))
+            );
         // Likewise cmd/ctrl while a Cryptomatte is the view target: the usual
         // picker chords (ctrl-click adds, ctrl+shift-click removes) own
         // the button, so the legacy cmd+LMB pan and the Tab scrub stand
         // down; MMB, alt+LMB and the wheel still navigate.
         let cmd_is_tools = cmd
-            && matches!(
+            && (clone_hold || matches!(
                 self.egraph
                     .active_view()
                     .and_then(|id| self.egraph.node(id))
                     .map(|n| &n.kind),
                 Some(NodeKind::Cryptomatte(_))
-            );
+            ));
         // ...and while ctrl/cmd is held at all: shift+ctrl/cmd-click is the
         // viewer pick ADDING to what is up, not a scrub.
         let scrub_held = scrub_held && !cmd_is_tools && !cmd;

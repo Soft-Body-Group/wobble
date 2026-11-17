@@ -42,7 +42,13 @@ impl Gfx {
             let to_scr = |q: [f32; 2]| {
                 out_to_pts(apply_h(&hd, egui::vec2(q[0] * owf, q[1] * ohf)))
             };
-            if let Some(p) = pointer_pos.filter(|p| rect.contains(*p)) {
+            // A held gesture (F, or alt/cmd in clone) freezes the brush:
+            // the ring stays where it began, not under the moving hand.
+            let at = match self.brush.pin {
+                Some(n) => Some(to_scr(n)),
+                None => pointer_pos.filter(|p| rect.contains(*p)),
+            };
+            if let Some(p) = at {
                 use engine::graph::BrushMode;
                 // The radius is in FULL-res px; `owf` is the proxied
                 // canvas, so scale back or the ring doubles in proxy.
@@ -51,9 +57,7 @@ impl Gfx {
                 // Clone armed with nowhere to clone FROM paints nothing.
                 // The ring goes faint rather than letting the brush look
                 // ready and then quietly do nothing.
-                let inert = clone_mode
-                    && self.brush.clone_off.is_none()
-                    && self.brush.clone_src.is_none();
+                let inert = clone_mode && self.brush.clone_off.is_none();
                 // The outline is the brush's unit disc through the same
                 // squash-and-turn the stamp shader applies, so what is
                 // drawn is exactly the stamp about to land.
@@ -89,17 +93,11 @@ impl Gfx {
                     ink.seg(p - ax, p + ax, 0.6, 0.3, false);
                 }
                 if clone_mode {
-                    // Where the pixels come FROM: the anchor until the
-                    // offset is fixed, then the live source under the
-                    // brush.
-                    let src = match (self.brush.clone_off, self.brush.clone_src) {
-                        (Some(o), _) => {
-                            let n = to_norm(p);
-                            Some(to_scr([n[0] + o[0], n[1] + o[1]]))
-                        }
-                        (None, Some(a)) => Some(to_scr(a)),
-                        _ => None,
-                    };
+                    // Where the pixels come FROM: the brush plus the offset.
+                    let src = self.brush.clone_off.map(|o| {
+                        let n = to_norm(p);
+                        to_scr([n[0] + o[0], n[1] + o[1]])
+                    });
                     if let Some(sp) = src {
                         ellipse(ink, sp, r, 0.9, 0.5);
                         ink.seg(sp, p, 0.8, 0.35, false);
@@ -139,7 +137,7 @@ impl Gfx {
                     ("ctrl + F         x: aspect", held && m.ctrl),
                 ];
                 if self.brush.mode == engine::graph::BrushMode::Clone {
-                    lines.push(("alt-click        set the clone source", m.alt));
+                    lines.push(("hold alt/cmd     move the clone source", m.alt || m.mac_cmd));
                 }
                 let (lh, pad, w) = (14.0, 8.0, 296.0);
                 let h = lh * lines.len() as f32 + pad * 2.0;

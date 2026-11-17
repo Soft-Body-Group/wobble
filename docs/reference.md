@@ -2615,7 +2615,7 @@ matters in a fused pass, and which the panel says in amber:
 |---|---|---|
 | **colour** | composites the brush colour | nothing: the layer is `over`'d |
 | **dodge** / **burn** | exposure up / down by `stops`, premultiplied by opacity and ADDED across strokes, so a dodge brush builds up | nothing: pointwise on the pixel already there |
-| **clone** | the PAINTED picture at an offset — alt-click sets the source, the first stroke fixes the offset, later strokes keep it (aligned) | the input read once more, per pixel |
+| **clone** | the PAINTED picture at an offset — hold alt (or cmd) and move: the brush stays put while the source follows the hand; let go and every stroke keeps that offset (aligned) | the input read once more, per pixel |
 | **smear** | the painted picture from `drag px` back along the stroke, per stamp — a smudge | the input read once more, per pixel |
 | **blur** | a ring of `PAINT_BLUR_TAPS` (8) reads at the mean `blur px` under the pixel, plus the centre | the input read 8 more times, per pixel — the heavy one; the tap count is fixed, so a wider blur is sparser, not slower |
 

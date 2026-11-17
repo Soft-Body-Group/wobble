@@ -26,10 +26,18 @@ pub(crate) struct BrushState {
     pub(crate) press: engine::graph::PressureMap,
     /// The preset row (`brushes.rs`), mirrored into prefs on change.
     pub(crate) presets: Vec<brushes::BrushPreset>,
-    /// The alt-clicked SOURCE anchor, normalized. Setting it re-derives the
-    /// offset on the next stroke; after that the offset is aligned (it
-    /// stays put stroke to stroke, Photoshop-style) until the next alt-click.
-    pub(crate) clone_src: Option<[f32; 2]>,
-    /// The live offset, normalized — what actually goes on a stroke.
+    /// The clone offset (source minus brush), normalized — what goes on a
+    /// stroke. Aligned: it stays put stroke to stroke until the next
+    /// alt/cmd hold moves it.
     pub(crate) clone_off: Option<[f32; 2]>,
+    /// Where the brush is FROZEN, normalized, while a held gesture uses the
+    /// pointer for something else (alt/cmd: the clone source; F: size,
+    /// softness, aspect…). The ring draws here; None = it follows the hand.
+    pub(crate) pin: Option<[f32; 2]>,
+    /// The alt/cmd clone hold in progress: (pointer at the grab, offset at
+    /// the grab), both normalized. The offset moves by the pointer's travel.
+    pub(crate) grab: Option<([f32; 2], [f32; 2])>,
+    /// The current left drag began inside a held gesture: it never paints,
+    /// even after the key is let go mid-drag.
+    pub(crate) swallow: bool,
 }

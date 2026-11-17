@@ -177,27 +177,70 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
-                // Clone: alt-click sets the source, the next stroke fixes
-                // the offset against its own first point.
+                // Clone: HOLD alt, move 300px right, let go. The brush stays
+                // where alt went down and the source travels with the hand;
+                // a click during the hold paints nothing.
                 self.brush.mode = engine::graph::BrushMode::Clone;
-                self.brush.clone_src = None;
                 self.brush.clone_off = None;
-                press_mod(raw, c + egui::vec2(150.0, -60.0), true, egui::Modifiers::ALT);
+                raw.events.push(egui::Event::PointerMoved(c + egui::vec2(-150.0, -60.0)));
                 next = 17;
             }
             17 => {
-                press_mod(raw, c + egui::vec2(150.0, -60.0), false, egui::Modifiers::ALT);
+                raw.events.push(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+                raw.events.push(egui::Event::PointerMoved(c + egui::vec2(-150.0, -60.0)));
                 next = 18;
             }
             18 => {
-                if self.brush.clone_src.is_none() {
-                    println!("PAINT TEST FAIL: alt-click did not set the clone source");
+                raw.events.push(egui::Event::PointerMoved(c + egui::vec2(150.0, -60.0)));
+                next = 170;
+            }
+            170 => next = 171, // settle
+            171 => {
+                let pin = self.brush.pin;
+                let off = self.brush.clone_off;
+                if pin.is_none() || !off.is_some_and(|o| o[0] > 0.0 && o[1].abs() < 0.02) {
+                    println!(
+                        "PAINT TEST FAIL: alt hold left pin {pin:?}, offset {off:?}; \
+                         wanted a pinned brush and a rightward offset"
+                    );
+                    std::process::exit(1);
+                }
+                press_mod(raw, c + egui::vec2(150.0, -60.0), true, egui::Modifiers::ALT);
+                next = 172;
+            }
+            172 => {
+                raw.events.push(egui::Event::PointerMoved(c + egui::vec2(170.0, -60.0)));
+                next = 173;
+            }
+            173 => {
+                // Let go back where the drag began: the 20px it added return.
+                press_mod(raw, c + egui::vec2(150.0, -60.0), false, egui::Modifiers::ALT);
+                next = 174;
+            }
+            174 => {
+                if strokes(self).len() != 2 {
+                    println!("PAINT TEST FAIL: an alt-held drag painted in clone mode");
+                    std::process::exit(1);
+                }
+                raw.events.push(egui::Event::ModifiersChanged(Default::default()));
+                next = 175;
+            }
+            175 => {
+                if self.brush.pin.is_some() {
+                    println!("PAINT TEST FAIL: letting go of alt left the brush pinned");
                     std::process::exit(1);
                 }
                 press(raw, c + egui::vec2(-150.0, -60.0), true);
                 next = 19;
             }
             19 => {
+                // The drag STARTS on this move (the stroke is just its press
+                // point), and the next one lands the end point.
+                raw.events
+                    .push(egui::Event::PointerMoved(c + egui::vec2(-120.0, -60.0)));
+                next = 190;
+            }
+            190 => {
                 raw.events
                     .push(egui::Event::PointerMoved(c + egui::vec2(-90.0, -60.0)));
                 next = 20;
@@ -213,13 +256,12 @@ impl Gfx {
                     println!("PAINT TEST FAIL: the clone stroke carries no offset");
                     std::process::exit(1);
                 };
-                // Source was 300px right of where the stroke started, so the
-                // offset is the source minus the stroke's FIRST point, in the
-                // node's own normalized space. (It used to be judged against
-                // `300 / image_rect.width()`, which is not the node's format
-                // width on screen, and failed at 0.8 of it.)
-                let want = match (self.brush.clone_src, ss.last().and_then(|s| s.points.first())) {
-                    (Some(src), Some(p0)) => src[0] - p0[0],
+                // The hold travelled 300px (the 20px drag inside it came
+                // back), the stroke 60px: so the offset is five times the
+                // stroke's own span, in the node's normalized space — no
+                // guessing at the format's width on screen.
+                let want = match ss.last().map(|s| (s.points.first(), s.points.last())) {
+                    Some((Some(a), Some(b))) => 5.0 * (b[0] - a[0]),
                     _ => f32::NAN,
                 };
                 if !(want > 0.0) || (off[0] - want).abs() > want * 0.02 || off[1].abs() > 0.02 {
@@ -276,6 +318,10 @@ impl Gfx {
                 next = 24;
             }
             24 => {
+                if self.brush.pin.is_none() {
+                    println!("PAINT TEST FAIL: held F let the brush ring follow the hand");
+                    std::process::exit(1);
+                }
                 raw.events.push(egui::Event::Key {
                     key: egui::Key::F,
                     physical_key: None,
@@ -485,8 +531,8 @@ impl Gfx {
                 println!(
                     "PAINT TEST PASS: a stroke captured and rendered live; [ / ] with \
                      shift and alt drove size/softness/opacity; a stroke authored on \
-                     frame 3 lives only there; alt-click set a clone source and the \
-                     next stroke took the offset; cloning is topology, painting is \
+                     frame 3 lives only there; an alt hold pinned the brush, moved the \
+                     clone source without painting, and the next stroke took the offset; cloning is topology, painting is \
                      not; held F + motion resized the brush without painting; a dodge \
                      stroke carried mode/stops/aspect/angle and its own topology bit; \
                      matte output recompiled and turned the socket into a mask; the \
