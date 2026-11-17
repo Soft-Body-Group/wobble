@@ -151,7 +151,8 @@ struct SetupSave<'a> {
     version: u32,
     fps: f32,
     pinned_dirs: &'a Vec<std::path::PathBuf>,
-    graph: &'a EditorGraph,
+    /// The COMP, whole: owned when a dive is open (`App::comp_folded`).
+    graph: std::borrow::Cow<'a, EditorGraph>,
     canvas: Option<(u32, u32)>,
     range: Option<(u64, u64)>,
     /// Extra frames either side of the script range, for retimes and filters
@@ -8824,12 +8825,96 @@ impl Gfx {
     }
 
     fn setup_save(&self) -> SetupSave<'_> {
-        self.setup_save_of(&self.egraph)
+        if self.dive.is_empty() {
+            return self.setup_save_of(&self.egraph);
+        }
+        // Inside a dive the open graph is a node's INSIDE: saving it (or
+        // autosaving it) as the comp wrote a file holding nothing but, say,
+        // a pipeline's steps. Save the comp with every open level folded
+        // back in, as stepping out would leave it.
+        SetupSave { graph: std::borrow::Cow::Owned(self.comp_folded()), ..self.setup_save_of(&self.egraph) }
+    }
+
+    /// The comp as `dive_out` all the way would leave it, without stepping
+    /// out: each open level written back into the graph it was opened
+    /// from (a library subwob's body is its file's, saved on the way out,
+    /// and is left alone here).
+    fn comp_folded(&self) -> EditorGraph {
+        let mut cur = self.egraph.clone();
+        // Local subwob bodies waiting for the level that defines them.
+        let mut bodies: Vec<(String, EditorGraph, usize, usize)> = Vec::new();
+        for d in self.dive.iter().rev() {
+            let body = std::mem::take(&mut cur);
+            let mut g = d.graph.clone();
+            g.node_status_min = body.node_status_min;
+            let owner = d.from.and_then(|id| g.node_mut(id));
+            match (d.kind, owner) {
+                (DiveKind::Geo, Some(e)) => {
+                    if let NodeKind::Geo(p) = &mut e.kind {
+                        p.graph = editor_to_geo(&body);
+                        geo_curves_out(&mut e.anim, &body);
+                    }
+                }
+                (DiveKind::Sdf, Some(e)) => {
+                    if let NodeKind::Sdf(p) = &mut e.kind {
+                        p.graph = sdfui::from_editor(&body);
+                    }
+                }
+                (DiveKind::Particles, Some(e)) => {
+                    if let NodeKind::Particles(p) = &mut e.kind {
+                        p.graph = nodes::particles::from_editor(&body);
+                    }
+                }
+                (DiveKind::GenAi, Some(e)) => {
+                    if let NodeKind::GenAi(p) = &mut e.kind {
+                        p.pipeline.steps = genaiui::from_editor(&body);
+                        p.pipeline.sync_inputs();
+                    }
+                }
+                (DiveKind::Roto, Some(e)) => {
+                    if let NodeKind::Spline(sp) = &e.kind {
+                        let (sp, anim) = rotodive::from_editor(&body, sp, &e.anim);
+                        e.kind = NodeKind::Spline(sp);
+                        e.anim = anim;
+                    }
+                }
+                (DiveKind::Noise, Some(e)) => match &mut e.kind {
+                    NodeKind::Noise(n) => n.graph = editor_to_field(&body),
+                    NodeKind::GeoNode(engine::geo::GeoNode::Noise { graph, .. }) => {
+                        *graph = editor_to_field(&body)
+                    }
+                    _ => {}
+                },
+                (DiveKind::Tool, _) => {
+                    let mut body = body;
+                    body.params.clear();
+                    bodies.push((d.type_id.clone(), body, d.tiles, d.tiles_h));
+                }
+                _ => {}
+            }
+            bodies.retain(|(key, body, tiles, tiles_h)| {
+                let Some(l) = g.subwobs.get(key).cloned() else { return true };
+                g.subwobs.insert(
+                    key.clone(),
+                    tools::SubwobRef::new(tools::LocalDef {
+                        label: l.label.clone(),
+                        color: l.color,
+                        tiles: *tiles,
+                        tiles_h: *tiles_h,
+                        body: body.clone(),
+                    }),
+                );
+                false
+            });
+            cur = g;
+        }
+        cur
     }
 
     /// The setup with `graph` in place of the open comp's (a collect saves
     /// a repointed copy of it).
     fn setup_save_of<'a>(&'a self, graph: &'a EditorGraph) -> SetupSave<'a> {
+        let graph = std::borrow::Cow::Borrowed(graph);
         SetupSave {
             // 3: frames are absolute comp frames. Before it, a shot whose
             // range started above zero stored its keys RELATIVE to that
@@ -9641,10 +9726,22 @@ impl Gfx {
     }
 
     /// The frames every loaded Read covers between them (placed, trimmed).
+    /// Always the COMP's: inside a dive (a GenAI pipeline, a subwob) the
+    /// open graph has no plates of its own, and reading its span snapped
+    /// the playhead to 1001 on the way in — past the end of a plate that
+    /// starts at 0, so everything inside showed black.
     fn media_union(&self) -> Option<(u64, u64)> {
-        let cx = self.range_ctx(Self::default_script_range());
+        let comp = self.dive.first().map_or(&self.egraph, |d| &d.graph);
+        let loaded = &self.loaded;
+        let cx = ranges::Ctx {
+            graph: comp,
+            script: Self::default_script_range(),
+            media: Box::new(move |n| {
+                loaded.get(&n).map(|l| (0u64, (l.seq.frames.len() as u64).max(1) - 1))
+            }),
+        };
         let mut memo = std::collections::BTreeMap::new();
-        self.egraph
+        comp
             .nodes
             .iter()
             .filter(|(id, n)| {
@@ -25242,7 +25339,7 @@ mod demo_tests {
             version: 2,
             fps: 24.0,
             pinned_dirs: &dirs,
-            graph: &g,
+            graph: std::borrow::Cow::Borrowed(&g),
             canvas: None,
             range: Some((0, 191)),
             handles: (0, 0),
@@ -25299,7 +25396,7 @@ mod demo_tests {
             version: 2,
             fps: 24.0,
             pinned_dirs: &empty_dirs,
-            graph: &g,
+            graph: std::borrow::Cow::Borrowed(&g),
             canvas: None,
             range: Some((0, 240)),
             handles: (0, 0),

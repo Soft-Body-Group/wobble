@@ -422,7 +422,7 @@ mod tests {
             version: 4,
             fps: 24.0,
             pinned_dirs: &empty_dirs,
-            graph: &g,
+            graph: std::borrow::Cow::Borrowed(&g),
             canvas: None,
             range: Some((1, 120)),
             handles: (0, 0),
