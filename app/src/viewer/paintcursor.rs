@@ -44,7 +44,9 @@ impl Gfx {
             };
             if let Some(p) = pointer_pos.filter(|p| rect.contains(*p)) {
                 use engine::graph::BrushMode;
-                let r = (self.brush.radius * rect.width() / owf).max(1.5);
+                // The radius is in FULL-res px; `owf` is the proxied
+                // canvas, so scale back or the ring doubles in proxy.
+                let r = (self.brush.radius * self.proxy.min(1.0) * rect.width() / owf).max(1.5);
                 let clone_mode = self.brush.mode == BrushMode::Clone;
                 // Clone armed with nowhere to clone FROM paints nothing.
                 // The ring goes faint rather than letting the brush look

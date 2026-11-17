@@ -1320,7 +1320,7 @@ impl Compositor {
         for (id, kind) in &graph.nodes {
             let NodeKind::Paint(p) = kind else { continue };
             live.insert(*id);
-            let stamps = crate::paint::stamps_for(p, w, h, frame);
+            let stamps = crate::paint::stamps_for(p, w, h, frame, graph.proxy_scale());
             let sync = |layers: &mut HashMap<crate::graph::NodeId, crate::paint::PaintLayer>,
                             set: &[crate::paint::Stamp],
                             tag: u8,

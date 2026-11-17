@@ -149,14 +149,18 @@ pub struct PaintStamps {
 }
 
 /// Resample strokes into stamps for a layer of `w`x`h` px, at `frame` (a
-/// stroke's lifetime decides whether it is there at all). Deterministic: the
+/// stroke's lifetime decides whether it is there at all). `scale` is layer
+/// px per AUTHORED px — the proxy factor: a stroke's radius, blur and smear
+/// are authored in full-res pixels, so at half res they halve with the
+/// canvas and the stroke looks the same in proxy. Deterministic: the
 /// stamp bytes are what the layer cache is keyed on, so a scrub across
 /// frames with no per-frame strokes never re-records a thing.
-pub fn stamps_for(params: &PaintParams, w: u32, h: u32, frame: u64) -> PaintStamps {
+pub fn stamps_for(params: &PaintParams, w: u32, h: u32, frame: u64, scale: f32) -> PaintStamps {
     let (wf, hf) = (w as f32, h as f32);
+    let scale = if scale > 0.0 { scale } else { 1.0 };
     let mut out = PaintStamps::default();
     for s in params.live_at(frame) {
-        let radius = s.radius.clamp(0.5, 4096.0);
+        let radius = s.radius.clamp(0.5, 4096.0) * scale;
         let shape = [s.aspect.clamp(0.02, 1.0), s.angle.to_radians()];
         let mode = s.mode();
         let alpha = s.color[3];
@@ -171,13 +175,13 @@ pub fn stamps_for(params: &PaintParams, w: u32, h: u32, frame: u64) -> PaintStam
                 [o[0] * wf, o[1] * hf, 0.0, alpha]
             }
             BrushMode::Smear => [0.0, 0.0, 0.0, alpha],
-            BrushMode::Blur => [0.0, s.strength.max(0.0), 1.0, alpha],
+            BrushMode::Blur => [0.0, s.strength.max(0.0) * scale, 1.0, alpha],
             BrushMode::Dodge => [s.strength.max(0.0), 0.0, 0.0, alpha],
             BrushMode::Burn => [-s.strength.max(0.0), 0.0, 0.0, alpha],
         };
         let class = mode.class();
         let blend = if class == BrushClass::Color { s.blend.id() as f32 } else { 0.0 };
-        let smear_px = if mode == BrushMode::Smear { s.strength.max(0.0) } else { 0.0 };
+        let smear_px = if mode == BrushMode::Smear { s.strength.max(0.0) * scale } else { 0.0 };
         // Pressure scales the radius and the opacity per stamp, through the
         // map the stroke was painted with. A stroke with no samples is at
         // full pressure, i.e. factors of exactly 1 — the stamps of every
@@ -589,14 +593,14 @@ mod tests {
             strokes: vec![one(vec![[0.0, 0.5], [1.0, 0.5]], 20.0, [1.0, 0.0, 0.0, 1.0])],
             ..Default::default()
         };
-        let stamps = stamps_for(&params, 1000, 1000, 0).color;
+        let stamps = stamps_for(&params, 1000, 1000, 0, 1.0).color;
         // 1000px stroke at spacing 7px -> ~143 stamps, endpoints included.
         assert!(stamps.len() > 100 && stamps.len() < 200, "{}", stamps.len());
         assert_eq!(stamps[0].center, [0.0, 500.0]);
         let last = stamps.last().unwrap().center;
         assert!((last[0] - 1000.0).abs() < 8.0, "end near stroke end: {last:?}");
         // Deterministic: same input, same bytes (the layer cache key).
-        let again = stamps_for(&params, 1000, 1000, 0).color;
+        let again = stamps_for(&params, 1000, 1000, 0, 1.0).color;
         assert_eq!(bytemuck::cast_slice::<_, u8>(&stamps), bytemuck::cast_slice::<_, u8>(&again));
     }
 
@@ -611,7 +615,7 @@ mod tests {
             )],
             ..Default::default()
         };
-        let stamps = stamps_for(&params, 200, 100, 0).color;
+        let stamps = stamps_for(&params, 200, 100, 0, 1.0).color;
         assert_eq!(stamps.len(), 1);
         assert_eq!(stamps[0].center, [100.0, 50.0]);
     }
@@ -631,7 +635,7 @@ mod tests {
             strokes: vec![always, single, ranged],
             ..Default::default()
         };
-        let at = |f: u64| stamps_for(&p, 100, 100, f).color.len();
+        let at = |f: u64| stamps_for(&p, 100, 100, f, 1.0).color.len();
         assert_eq!(at(0), 1, "only the all-frames stroke");
         assert_eq!(at(5), 2, "the range opens");
         assert_eq!(at(7), 3, "everything, on the single stroke's frame");
@@ -644,8 +648,8 @@ mod tests {
             strokes: vec![one(vec![[0.1, 0.1], [0.9, 0.9]], 8.0, [1.0; 4])],
             ..Default::default()
         };
-        let a = stamps_for(&plain, 100, 100, 0).color;
-        let b = stamps_for(&plain, 100, 100, 999).color;
+        let a = stamps_for(&plain, 100, 100, 0, 1.0).color;
+        let b = stamps_for(&plain, 100, 100, 999, 1.0).color;
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&a),
             bytemuck::cast_slice::<_, u8>(&b)
@@ -664,7 +668,7 @@ mod tests {
             ..Default::default()
         };
         assert!(p.has_source());
-        let st = stamps_for(&p, 200, 100, 0);
+        let st = stamps_for(&p, 200, 100, 0, 1.0);
         assert_eq!(st.color.len(), 1, "the colour stroke stays a colour stroke");
         assert_eq!(st.source.len(), 1);
         assert!(st.effect.is_empty());
@@ -678,7 +682,7 @@ mod tests {
             ..Default::default()
         };
         assert!(!plain.has_source());
-        assert!(stamps_for(&plain, 200, 100, 0).source.is_empty());
+        assert!(stamps_for(&plain, 200, 100, 0, 1.0).source.is_empty());
     }
 
     /// A smear is a clone whose offset points BACK along the stroke, per
@@ -690,7 +694,7 @@ mod tests {
         sm.strength = 30.0;
         let p = PaintParams { strokes: vec![sm], ..Default::default() };
         assert!(p.has_source(), "smear is a source read, like clone");
-        let st = stamps_for(&p, 1000, 1000, 0);
+        let st = stamps_for(&p, 1000, 1000, 0, 1.0);
         assert!(st.source.len() > 10 && st.color.is_empty() && st.effect.is_empty());
         // The stroke runs +x, so every stamp after the first pulls from -x
         // by the drag distance; the first has no direction yet and pulls
@@ -703,7 +707,7 @@ mod tests {
         let mut dot = one(vec![[0.5, 0.5]], 10.0, [0.0, 0.0, 0.0, 1.0]);
         dot.mode = BrushMode::Smear;
         dot.strength = 30.0;
-        let st = stamps_for(&PaintParams { strokes: vec![dot], ..Default::default() }, 100, 100, 0);
+        let st = stamps_for(&PaintParams { strokes: vec![dot], ..Default::default() }, 100, 100, 0, 1.0);
         assert_eq!(st.source[0].color[0], 0.0);
     }
 
@@ -726,7 +730,7 @@ mod tests {
             ..Default::default()
         };
         assert!(p.has_effect() && p.has_blur() && p.has_tone() && !p.has_source());
-        let st = stamps_for(&p, 100, 100, 0);
+        let st = stamps_for(&p, 100, 100, 0, 1.0);
         assert_eq!(st.effect.len(), 3);
         assert!(st.color.is_empty() && st.source.is_empty());
         assert_eq!(st.effect[0].color, [0.75, 0.0, 0.0, 0.5], "dodge: +stops");
@@ -739,6 +743,7 @@ mod tests {
             100,
             100,
             0,
+            1.0,
         );
         assert_eq!(st.effect[0].color[0], 0.0);
     }
@@ -752,8 +757,8 @@ mod tests {
         let mut thin = round.clone();
         thin.aspect = 0.25;
         thin.angle = 90.0;
-        let r = stamps_for(&PaintParams { strokes: vec![round], ..Default::default() }, 1000, 1000, 0);
-        let t = stamps_for(&PaintParams { strokes: vec![thin], ..Default::default() }, 1000, 1000, 0);
+        let r = stamps_for(&PaintParams { strokes: vec![round], ..Default::default() }, 1000, 1000, 0, 1.0);
+        let t = stamps_for(&PaintParams { strokes: vec![thin], ..Default::default() }, 1000, 1000, 0, 1.0);
         assert_eq!(r.color[0].shape, [1.0, 0.0]);
         assert!((t.color[0].shape[0] - 0.25).abs() < 1e-6);
         assert!((t.color[0].shape[1] - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
@@ -765,6 +770,18 @@ mod tests {
         );
     }
 
+    /// Radius, blur and smear are authored in full-res px: at a proxy
+    /// scale they shrink with the canvas, so a stroke looks the same.
+    #[test]
+    fn proxy_scale_shrinks_radius_with_the_canvas() {
+        let p = PaintParams { strokes: vec![one(vec![[0.5, 0.5]], 20.0, [1.0; 4])], ..Default::default() };
+        let full = stamps_for(&p, 1000, 1000, 0, 1.0).color;
+        let half = stamps_for(&p, 500, 500, 0, 0.5).color;
+        assert_eq!(full[0].rad_soft[0], 20.0);
+        assert_eq!(half[0].rad_soft[0], 10.0);
+        assert_eq!(half[0].center, [250.0, 250.0]);
+    }
+
     /// Pressure scales each stamp's radius and opacity through the
     /// stroke's map, interpolated along a segment; a stroke with no samples
     /// is byte-identical to one painted before pressure existed.
@@ -772,17 +789,17 @@ mod tests {
     fn pressure_tapers_radius_and_opacity() {
         use crate::graph::PressureMap;
         let mut s = one(vec![[0.0, 0.5], [1.0, 0.5]], 20.0, [1.0, 1.0, 1.0, 1.0]);
-        let plain = stamps_for(&PaintParams { strokes: vec![s.clone()], ..Default::default() }, 1000, 1000, 0).color;
+        let plain = stamps_for(&PaintParams { strokes: vec![s.clone()], ..Default::default() }, 1000, 1000, 0, 1.0).color;
         s.press = PressureMap { size: 1.0, opacity: 0.5, gamma: 1.0 };
         let mapped_no_samples =
-            stamps_for(&PaintParams { strokes: vec![s.clone()], ..Default::default() }, 1000, 1000, 0).color;
+            stamps_for(&PaintParams { strokes: vec![s.clone()], ..Default::default() }, 1000, 1000, 0, 1.0).color;
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&plain),
             bytemuck::cast_slice::<_, u8>(&mapped_no_samples),
             "no samples = full pressure, whatever the map"
         );
         s.pressure = vec![0.25, 1.0];
-        let st = stamps_for(&PaintParams { strokes: vec![s], ..Default::default() }, 1000, 1000, 0).color;
+        let st = stamps_for(&PaintParams { strokes: vec![s], ..Default::default() }, 1000, 1000, 0, 1.0).color;
         assert!((st[0].rad_soft[0] - 5.0).abs() < 1e-4, "{:?}", st[0]);
         assert!((st[0].color[3] - 0.625).abs() < 1e-4, "{:?}", st[0]);
         let last = st.last().unwrap();
