@@ -20,6 +20,8 @@ pub(crate) struct Cx<'a> {
     pub single: &'a mut engine::decode::SingleChannel,
     pub eight_bit: &'a mut bool,
     pub asset: &'a mut Option<assets::AssetRef>,
+    /// A Project Load: footage from a project only, no paths shown.
+    pub project_only: bool,
     pub node: u64,
     pub key: u64,
     pub comp0: i64,
@@ -68,6 +70,7 @@ pub(crate) fn panel(
         single,
         eight_bit,
         asset,
+        project_only,
         node,
         key,
         comp0,
@@ -96,7 +99,35 @@ pub(crate) fn panel(
     let reader_slot = *source;
     let mut load_clicked = false;
     let mut refresh_clicked = false;
-    if let Some(a) = asset.as_ref() {
+    if project_only {
+        // What it IS, never where; and nothing that leads to a folder.
+        match asset.as_ref() {
+            Some(a) => {
+                egui::Grid::new(("read-asset", key)).num_columns(2).show(ui, |ui| {
+                    ui.label("project");
+                    ui.strong(a.project_label());
+                    ui.end_row();
+                    ui.label("shot");
+                    ui.strong(a.shot_label());
+                    ui.end_row();
+                    ui.label("footage");
+                    ui.strong(a.asset_label());
+                    ui.end_row();
+                });
+            }
+            None => {
+                ui.weak("no footage yet — pick it from a project");
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui.button("pick from project…").on_hover_text("choose footage from a project's shots").clicked() {
+                *asset_act = Some(AssetAct::PickProject);
+            }
+            if asset.is_some() && ui.button("reload").on_hover_text("find it again (after a move) and load it").clicked() {
+                *asset_act = Some(AssetAct::Reload);
+            }
+        });
+    } else if let Some(a) = asset.as_ref() {
         // A project asset: what it IS, never where.
         egui::Grid::new(("read-asset", key)).num_columns(2).show(ui, |ui| {
             ui.label("project");

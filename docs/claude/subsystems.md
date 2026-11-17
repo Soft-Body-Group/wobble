@@ -1824,6 +1824,28 @@ and in prefs → "alpha testing + updates"; both are OFF until answered
 
 ## Project assets on a Load (`app/src/assets.rs`)
 
+**Two kinds of reference share `AssetRef`.** `id != 0` is the
+database-driven one below. `id == 0` is BY NAME (project, sequence/shot
+names, place under the shot), made by the project browser
+(`app/src/projectui.rs`) and resolved by `app/src/projects.rs` from each
+project's own `.organisicator/project.json` under THIS machine's managed
+root (`$WOBBLE_PROJECTS_ROOT`, else `~/.wobble/organisicator.json` "root" —
+shared with the addon — else the Dropbox defaults). It needs no API, and is
+how a comp saved on one OS opens on another. Keep the two apart: an id
+never falls back to names.
+
+- **Project Load** (`ENode::project_only`): a Load that never shows a path or
+  a file browser, only `pick from project…`. The add menu's "Project Load"
+  row makes `NodeKind::read(s, assets::PROJECT_LOAD)`; `ENode::new` turns
+  that marker path into the flag (every new node passes there). A new one
+  opens the browser by itself, once (`project_offered`).
+- **project ▸ open / save / version up** in the menubar: comps live in the
+  shot's comp folder by the addon's rule (`Project::comp_dir`, a port of
+  `shots.comp_dir`; no anatomy match = `<shot>/comp`, where a collect puts
+  it), named `<shot>_<task>_v001.wbl`. `save_to_project` first turns plain
+  Loads whose files lie inside a project into by-name references.
+- `--test-setup` covers it end to end on a temp managed root.
+
 A Load can name an organisicator ASSET instead of a path: `ENode::asset`
 (`AssetRef`: organisicator's database id for the indexed file/sequence, plus
 the names it had when last seen, for display only). The panel shows project

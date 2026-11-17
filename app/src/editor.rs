@@ -629,6 +629,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
     let mut v = vec![
         // --- source -----------------------------------------------------
         e(Source, "Load", true, |s| NodeKind::read(s, "")),
+        // A Load that only reads what a managed project tracks: no paths,
+        // no file browser (`ENode::project_only`).
+        e(Source, "Project Load", true, |s| NodeKind::read(s, crate::assets::PROJECT_LOAD)),
         e(Source, "Grid", false, |_| NodeKind::Grid(GridParams::default())),
         e(Source, "Gradient", false, |_| NodeKind::Gradient(Default::default())),
         e(Source, "Blank", false, |_| NodeKind::Blank(Default::default())),

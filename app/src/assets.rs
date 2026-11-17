@@ -20,6 +20,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+/// The path the "Project Load" menu entry gives its Load, so `ENode::new`
+/// can tell it from a plain one (see `ENode::project_only`).
+pub const PROJECT_LOAD: &str = "\u{0}project-load";
+
 /// A Load's asset, by id. Stored on the node (`ENode::asset`) and in the
 /// setup; never a path.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -198,7 +202,15 @@ pub fn resolve(client: &Client, r: &AssetRef) -> Result<Resolved, String> {
     Ok(Resolved { path, named })
 }
 
+/// Where `r` is now. An id asks organisicator (and only it: no fallback).
+/// A reference with NO id is a by-name one from the project browser
+/// (`crate::projectui`): its names are looked up in the projects under this
+/// machine's managed root (`crate::projects`), which is how a comp made on
+/// one OS finds its footage on another, organisicator running or not.
 pub fn resolve_now(r: &AssetRef) -> Result<Resolved, String> {
+    if r.id == 0 {
+        return crate::projects::resolve(r).map(|path| Resolved { path, named: r.clone() });
+    }
     resolve(&Client::discover()?, r)
 }
 

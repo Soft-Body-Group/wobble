@@ -71,6 +71,12 @@ pub struct ENode {
     /// managed root keeps loading. Absent for an ordinary Load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<crate::assets::AssetRef>,
+    /// Load only: a PROJECT Load, which reads only footage a managed project
+    /// tracks and never shows a path or a file browser (`crate::projectui`).
+    /// Made by the "Project Load" menu entry; presentation, like
+    /// `grade_sliders` — the engine sees a plain Load.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub project_only: bool,
     /// Which rgb rows this node has UNGANGED, by row label. Ganged is the
     /// default, so the common case stores nothing. It lives here rather than
     /// in `NodeKind` for the same reason `blend_res` does: it is how the
@@ -418,9 +424,20 @@ impl ENode {
     /// A node as the editor makes them. NOT a `Default` impl: `size` has to
     /// be 1.0, and a derived Default would quietly give 0 and render
     /// nothing.
-    pub fn new(kind: NodeKind, pos: Pos2) -> Self {
+    pub fn new(mut kind: NodeKind, pos: Pos2) -> Self {
+        // The add menus only make a NodeKind: "Project Load" marks its Load
+        // with a path no file has, turned into the flag here, where every
+        // new node passes.
+        let mut project_only = false;
+        if let NodeKind::Read { path, .. } = &mut kind {
+            if path == crate::assets::PROJECT_LOAD {
+                path.clear();
+                project_only = true;
+            }
+        }
         Self {
             kind,
+            project_only,
             pos,
             disabled: false,
             size: 1.0,

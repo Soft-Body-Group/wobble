@@ -11,6 +11,10 @@ pub mod hosted;
 mod appicon;
 mod assets;
 mod collect;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod projects;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod projectui;
 mod stress;
 mod doc;
 mod state;
@@ -4556,6 +4560,12 @@ struct Gfx {
     aov_dialog: Option<(u64, Vec<(String, String, bool)>)>,
     /// The project-asset picker, open on one Load (`assets`).
     asset_picker: Option<assets::Picker>,
+    /// The project browser (`projectui`): a Project Load's footage, or a
+    /// comp opened from / saved to a project.
+    project_browser: Option<projectui::Browser>,
+    /// Project Loads that have offered their browser once (a new one opens
+    /// it by itself; closing it is not asked again).
+    project_offered: std::collections::HashSet<u64>,
     /// The collect window, while it is up (`collect`).
     collect: Option<collect::Window>,
     /// A plain Load's footage being copied into organisicator (`assets::ingest`,
@@ -5365,6 +5375,8 @@ enum RotoAction {
 #[derive(Clone, Copy)]
 enum AssetAct {
     Pick,
+    /// A Project Load's footage, from the project browser.
+    PickProject,
     Reload,
     Forget,
     Ingest,
@@ -6676,6 +6688,8 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         recovery: if opts.headless() { None } else { report::take_recovery() },
         aov_dialog: None,
         asset_picker: None,
+        project_browser: None,
+        project_offered: Default::default(),
         collect: None,
         asset_ingest: None,
         asset_ingest_msg: None,
@@ -9137,6 +9151,95 @@ impl Gfx {
                     None => self.new_setup(),
                 }
             }
+        }
+    }
+
+    /// The project browser, opened onto where the open comp (or the
+    /// Load's footage) is.
+    fn open_project_browser(&mut self, mode: projectui::Mode) {
+        let here = match mode {
+            projectui::Mode::Media(node) => self.egraph.node(node).and_then(|n| n.asset.clone()),
+            _ => self.current_setup.as_deref().and_then(projects::locate_path),
+        };
+        self.project_browser = Some(projectui::Browser::new(mode, here.as_ref()));
+    }
+
+    /// The project browser, while it is up: what it answers is acted on here.
+    fn project_browser_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut b) = self.project_browser.take() else { return };
+        if let projectui::Mode::Media(node) = b.mode {
+            if self.egraph.node(node).is_none() {
+                return;
+            }
+        }
+        match b.ui(ctx) {
+            projectui::Act::None => {}
+            projectui::Act::Close => return,
+            projectui::Act::Open(p) => match self.load_setup(&p) {
+                Ok(()) => {
+                    self.setup_error = None;
+                    self.remember_setup(&p);
+                    return;
+                }
+                Err(e) => b.error = Some(format!("{e:#}")),
+            },
+            projectui::Act::Save(p) => match self.save_to_project(&p) {
+                Ok(()) => return,
+                Err(e) => b.error = Some(e),
+            },
+            projectui::Act::Media(node, r) => {
+                // A different clip: its own range.
+                if let Some(n) = self.egraph.node_mut(node) {
+                    n.asset = Some(r);
+                }
+                self.load_asset_fresh(node);
+                return;
+            }
+        }
+        self.project_browser = Some(b);
+    }
+
+    /// Saves the comp at `path` in a project. Loads reading files inside a
+    /// project first name them by project, shot and place instead of by
+    /// path, so the comp opens on any machine, whatever OS mounts it where.
+    fn save_to_project(&mut self, path: &Path) -> Result<(), String> {
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("couldn't make the comp folder: {e}"))?;
+        }
+        let plain: Vec<(u64, String)> = self
+            .egraph
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.asset.is_none())
+            .filter_map(|(id, n)| match &n.kind {
+                NodeKind::Read { path, .. } if !path.is_empty() => Some((*id, path.clone())),
+                _ => None,
+            })
+            .collect();
+        for (id, p) in plain {
+            if let Some(r) = projects::locate_path(&engine::paths::expand_home(&p)) {
+                if let Some(n) = self.egraph.node_mut(id) {
+                    n.asset = Some(r);
+                }
+            }
+        }
+        self.save_setup(path).map_err(|e| format!("{e:#}"))?;
+        self.setup_error = None;
+        self.remember_setup(path);
+        Ok(())
+    }
+
+    /// The open comp saved as its next version, beside it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn version_up_setup(&mut self) {
+        let Some(cur) = self.current_setup.clone() else { return };
+        let next = projects::version_up(&cur);
+        match self.save_setup(&next) {
+            Ok(()) => {
+                self.setup_error = None;
+                self.remember_setup(&next);
+            }
+            Err(e) => self.setup_error = Some(format!("{e:#}")),
         }
     }
 
@@ -14378,6 +14481,25 @@ impl Gfx {
                     self.save_setup_action(true);
                 }
                 #[cfg(not(target_arch = "wasm32"))]
+                ui.menu_button("project", |ui| {
+                    if ui.button("open from project…").on_hover_text("a comp from a project's shots — no folders").clicked() {
+                        self.open_project_browser(projectui::Mode::Open);
+                        ui.close();
+                    }
+                    if ui.button("save to project…").on_hover_text("save this comp in a shot's comp folder, named for the shot").clicked() {
+                        self.open_project_browser(projectui::Mode::Save);
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(self.current_setup.is_some(), egui::Button::new("version up"))
+                        .on_hover_text("save as the next version beside it: _v004 becomes _v005")
+                        .clicked()
+                    {
+                        self.version_up_setup();
+                        ui.close();
+                    }
+                });
+                #[cfg(not(target_arch = "wasm32"))]
                 if ui
                     .button("collect…")
                     .on_hover_text("copy every file this comp reads to a folder or an organisicator shot, and save the comp there")
@@ -15366,6 +15488,7 @@ impl Gfx {
         }
         self.setup_browser_ui(&ctx);
         self.new_setup_ask_ui(&ctx);
+        self.project_browser_ui(&ctx);
         self.track_import_ui(&ctx);
         if !fullscreen {
             self.prefs_window(&ctx);
@@ -23341,8 +23464,9 @@ impl Gfx {
                 let ekind = n.kind_at(cur_t);
                 let kind_before = n.kind.clone();
                 let editor::ENode {
-                    kind, blend_res, anim, ungang, grade_sliders, ui_label, asset, ..
+                    kind, blend_res, anim, ungang, grade_sliders, ui_label, asset, project_only, ..
                 } = n;
+                let project_only = *project_only;
                 let mut rcx = widgets::RowCtx {
                     node,
                     anim,
@@ -23458,6 +23582,7 @@ impl Gfx {
                                 single,
                                 eight_bit,
                                 asset,
+                                project_only,
                                 node,
                                 key,
                                 comp0,
@@ -24321,11 +24446,20 @@ impl Gfx {
                 if deferred_refresh {
                     self.refresh_read(key);
                 }
+                // A new Project Load opens its browser by itself, once.
+                if asset_act.is_none()
+                    && self.project_browser.is_none()
+                    && self.egraph.node(key).is_some_and(|n| n.project_only && n.asset.is_none())
+                    && self.project_offered.insert(key)
+                {
+                    asset_act = Some(AssetAct::PickProject);
+                }
                 match asset_act {
                     Some(AssetAct::Pick) => {
                         let current = self.egraph.node(key).and_then(|n| n.asset.clone());
                         self.asset_picker = Some(assets::Picker::new(key, current));
                     }
+                    Some(AssetAct::PickProject) => self.open_project_browser(projectui::Mode::Media(key)),
                     Some(AssetAct::Reload) => self.load_asset(key),
                     Some(AssetAct::Ingest) => {
                         self.asset_picker = Some(assets::Picker::for_ingest(key));
