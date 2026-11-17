@@ -96,7 +96,9 @@ fn offered(m: &catalog::RemoteModel) -> bool {
 
 /// The models this build adds as one-model nodes (`editor::node_catalog`).
 pub fn offered_models() -> impl Iterator<Item = &'static catalog::RemoteModel> {
-    catalog::CATALOG.iter().filter(|m| offered(m))
+    // A text model makes no picture: it is a step (`step_entries`), never
+    // a node.
+    catalog::CATALOG.iter().filter(|m| offered(m) && !m.task.is_text())
 }
 
 const NO_VIDEO: &str = "this build cannot play a video take: build with --features app/movie";
@@ -177,7 +179,13 @@ pub fn step_entries() -> Vec<(&'static str, Op)> {
     if clip_ok() {
         v.extend([Op::ClipIn { seconds: 5.0 }, Op::MatteClip]);
     }
-    v.extend(offered_models().map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }));
+    v.push(Op::Template { text: "{a}".into() });
+    v.extend(
+        catalog::CATALOG
+            .iter()
+            .filter(|m| offered(m))
+            .map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }),
+    );
     v.push(Op::Comfy { workflow: String::new(), seed: 1, commercial: false });
     v.push(Op::Output);
     v.into_iter().map(|op| (op.name(), op)).collect()
@@ -347,6 +355,9 @@ pub struct Run {
     /// its first prompt in place of the node's own. `pipeline` stays what
     /// the node holds, for the staleness check.
     pub lead: Option<Pipeline>,
+    /// What the run's text steps wrote (an enhanced prompt, a
+    /// description), per step: the words the next step was really sent.
+    pub texts: BTreeMap<usize, String>,
 }
 
 pub enum Phase {
@@ -387,6 +398,8 @@ pub struct View {
     pub take_missing: bool,
     /// The comp's frame rate, for a clip's frame count.
     pub fps: f32,
+    /// What the run's text steps wrote, per step.
+    pub texts: BTreeMap<usize, String>,
 }
 
 pub enum ViewState {
@@ -706,6 +719,17 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                 }
             }
         }
+        Op::Template { text } => {
+            ui.label(small("text with variables, filled when you run"));
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .id(id("template"))
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("{a}, in the style of {b}"),
+            );
+            ui.weak(small("{a} and {b} are the texts wired into its two inputs, {frame} the frame"));
+        }
         Op::Comfy { workflow, seed, commercial } => {
             ui.label(small(format!("a local ComfyUI at {}", v.comfy_url)));
             ui.horizontal(|ui| {
@@ -879,6 +903,14 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
             }
         }
     }
+    // What the text steps wrote: the prompt the model was really sent.
+    for (i, words) in &v.texts {
+        let name = p.pipeline.steps.get(*i).map(|s| s.op.label()).unwrap_or_default();
+        let short: String = words.chars().take(160).collect();
+        let more = if words.chars().count() > 160 { "…" } else { "" };
+        ui.add(egui::Label::new(small(format!("{name}: {short}{more}")).weak()).wrap())
+            .on_hover_text(words.as_str());
+    }
     if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("ok").clicked() {
         act = Some(Action::Dismiss);
     }
@@ -1032,6 +1064,7 @@ impl Gfx {
             comfy_url: cfg.comfy_url.clone(),
             state,
             steps: mine.map(|r| r.steps.clone()).unwrap_or_default(),
+            texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             has_input: self.egraph.input_of(node, 0).is_some(),
             has_matte: self.egraph.input_of(node, 1).is_some(),
@@ -1114,6 +1147,7 @@ impl Gfx {
             ticks: vec![],
             frames: vec![],
             lead: None,
+            texts: BTreeMap::new(),
         });
     }
 
@@ -1207,6 +1241,7 @@ impl Gfx {
             ticks,
             frames: vec![],
             lead: None,
+            texts: BTreeMap::new(),
         });
         self.genai_capture_next();
     }
@@ -1517,6 +1552,9 @@ impl Gfx {
                     match ev {
                         Event::Step(i, s) => {
                             r.steps.insert(i, s);
+                        }
+                        Event::Text(i, words) => {
+                            r.texts.insert(i, words);
                         }
                         // One of a fan-out's takes: it lands now, the
                         // run goes on, and the next variant's steps start
@@ -2440,6 +2478,7 @@ mod tests {
             prompt: None,
             take_missing: true,
             fps: 24.0,
+            texts: BTreeMap::new(),
         }
     }
 

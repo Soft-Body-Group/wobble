@@ -214,6 +214,13 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 let c = c.ok_or(format!("the pipeline reads the node's {what} as a clip, and none was captured"))?;
                 (h(&[tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
             }
+            Op::Template { text } => {
+                // `{frame}` makes the frame part of the words.
+                let tick = if text.contains("{frame}") { inputs.tick.to_string() } else { String::new() };
+                let mut parts = vec!["template", text.as_str(), tick.as_str()];
+                parts.extend(ins.iter().copied());
+                (h(&parts), 0.0)
+            }
             Op::Output => (keys[step.inputs[0].unwrap()].clone(), in_mp(0).unwrap_or(0.0)),
             Op::Generate { model, seed, opts } => {
                 let m = catalog::get(model).ok_or_else(|| format!("unknown model {model}"))?;
@@ -249,8 +256,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     // video price is billed on.
                     Task::VideoEdit | Task::VideoInpaint => in_mp(1).unwrap_or(0.0),
                     Task::VideoUpscale => in_mp(0).unwrap_or(0.0) * (opts.scale as f64).powi(2),
-                    // A splat has no megapixels.
-                    Task::ImageTo3D => 0.0,
+                    // A splat has no megapixels; nor have words.
+                    Task::ImageTo3D | Task::Enhance | Task::Describe => 0.0,
                 };
                 (h(&parts), out_mp)
             }
@@ -363,6 +370,7 @@ pub fn request_clip(
             .map(Value::String)
             .ok_or_else(|| anyhow!("{} needs an image", m.label))
     };
+    let prompt_text = prompt.unwrap_or("");
     let style = Dialect::lighting_style(prompt.unwrap_or(""));
     let prompt = || json!(m.dialect.instruct(prompt.unwrap_or("")));
     let mut v = match (m.task, m.dialect) {
@@ -406,6 +414,15 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (Task::Describe, Dialect::Llm { system }) => {
+            let ask = prompt_text.trim();
+            json!({
+                "prompt": if ask.is_empty() { "Describe this image." } else { ask },
+                "system_prompt": system,
+                "image_urls": [img(1)?],
+            })
+        }
+        (_, Dialect::Llm { system }) => json!({ "prompt": prompt(), "system_prompt": system }),
         (_, Dialect::Sam3d) => json!({
             "image_url": img(1)?, "prompt": prompt(), "seed": seed,
         }),
@@ -525,6 +542,9 @@ pub fn request_clip(
         (Task::Outpaint | Task::ImageTo3D, _) => {
             json!({ "prompt": prompt(), "image_url": img(1)?, "seed": seed })
         }
+        // A future text model in the plainest shape.
+        (Task::Enhance, _) => json!({ "prompt": prompt() }),
+        (Task::Describe, _) => json!({ "prompt": prompt(), "image_urls": [img(1)?] }),
         (Task::EditRef, _) => json!({
             "prompt": prompt(), "image_urls": [img(1)?, img(2)?], "seed": seed,
         }),
@@ -561,6 +581,12 @@ pub fn expand_canvas(req: &mut Value, (w, h): (u32, u32), scale: f32) {
     o.insert("canvas_size".into(), json!([cw, ch]));
     o.insert("original_image_size".into(), json!([w, h]));
     o.insert("original_image_location".into(), json!([(cw - w.min(cw)) / 2, (ch - h.min(ch)) / 2]));
+}
+
+/// A Template step's text with its variables filled: `{a}`, `{b}`,
+/// `{frame}`. Anything else in braces is left as typed.
+pub fn fill_template(text: &str, a: &str, b: &str, tick: i64) -> String {
+    text.replace("{a}", a).replace("{b}", b).replace("{frame}", &tick.to_string()).trim().to_string()
 }
 
 /// A PNG's size, from its header.
@@ -663,6 +689,9 @@ pub enum StepState {
 #[derive(Debug, Clone)]
 pub enum Event {
     Step(usize, StepState),
+    /// The words a text step made (an enhanced prompt, a description),
+    /// for the panel: they are what the next step was actually sent.
+    Text(usize, String),
     /// One variant of a batch landed, and more follow (`start_many`).
     Take(Take),
     Done(Take),
@@ -874,6 +903,13 @@ fn execute(
                 };
                 Val::Image(path)
             }
+            Op::Template { text } => {
+                let word = |port: usize| match get(&vals, i, port) {
+                    Some(Val::Text(t)) => t,
+                    _ => String::new(),
+                };
+                Val::Text(fill_template(text, &word(0), &word(1), inputs.tick))
+            }
             Op::Output => get(&vals, i, 0).ok_or_else(|| anyhow!("Output has no input"))?,
             Op::Generate { model, seed, opts } => {
                 let m = catalog::get(model).ok_or_else(|| anyhow!("unknown model {model}"))?;
@@ -882,7 +918,14 @@ fn execute(
                 }
                 if let Some(meta) = cached(dir, key) {
                     let _ = tx.send(Event::Step(i, StepState::Cached));
-                    Val::Image(dir.join(key).join(meta.file))
+                    let path = dir.join(key).join(meta.file);
+                    if m.task.is_text() {
+                        let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+                        let _ = tx.send(Event::Text(i, text.clone()));
+                        Val::Text(text)
+                    } else {
+                        Val::Image(path)
+                    }
                 } else {
                     let svc = svcs.remote.as_deref().ok_or_else(|| {
                         anyhow!("no way to bill this step: add a relay token or a fal key")
@@ -926,6 +969,34 @@ fn execute(
                     let cx = Cx { http: &web, cancel: stop, phase: &phase, deadline: Duration::from_secs(30 * 60) };
                     let max = approved.iter().find(|(s, _)| *s == i).map(|(_, u)| *u);
                     let ran = svc.run(m.endpoint, &req, max, Some(plan.mp[i]), &cx)?;
+                    if m.task.is_text() {
+                        // Words, not a file to fetch: kept as `result.txt`
+                        // so the step caches like any other.
+                        let text = service::output_text(&ran.output).map_err(|e| anyhow!("{}: {e}", m.label))?;
+                        let usd = ran.charged_usd.or(max);
+                        if let Some(u) = usd {
+                            *charged.get_or_insert(0.0) += u;
+                        }
+                        commit(
+                            dir,
+                            key,
+                            "result.txt",
+                            text.as_bytes(),
+                            &Meta {
+                                file: "result.txt".into(),
+                                model: m.id.into(),
+                                endpoint: m.endpoint.into(),
+                                service: svc.name().into(),
+                                usd,
+                                when: now(),
+                                nsfw_flagged: false,
+                            },
+                        )?;
+                        let _ = tx.send(Event::Text(i, text.clone()));
+                        let _ = tx.send(Event::Step(i, StepState::Done));
+                        vals[i] = Some(Val::Text(text));
+                        continue;
+                    }
                     let (url, nsfw) = if m.task.is_video() {
                         let url = service::output_video(&ran.output)
                             .ok_or_else(|| anyhow!("{} returned no video", m.label))?;
@@ -1150,6 +1221,47 @@ mod tests {
         let i = request(m("fal/gpt-image-2-inpaint"), &o, 7, (2048, 1080), Some("p"), &[None, img, mask]).unwrap();
         assert_eq!(i["image_urls"], json!(["data:x"]));
         assert_eq!(i["mask_url"], "data:m");
+    }
+
+    #[test]
+    fn text_models_ask_with_a_system_prompt_and_answer_in_words() {
+        let one = [None, Some("data:a".to_string())];
+        let r = request(m("fal/prompt-enhance"), &Opts::default(), 7, (1000, 500), Some("a moth"), &[None]).unwrap();
+        assert_eq!(r["prompt"], "a moth");
+        assert!(r["system_prompt"].as_str().unwrap().contains("rewrite prompts"));
+        assert!(r.get("seed").is_none());
+        let r = request(m("fal/describe"), &Opts::default(), 7, (1000, 500), Some(""), &one).unwrap();
+        assert_eq!((r["prompt"].as_str(), &r["image_urls"]), (Some("Describe this image."), &json!(["data:a"])));
+        let r = request(m("fal/describe"), &Opts::default(), 7, (1000, 500), Some("the light"), &one).unwrap();
+        assert_eq!(r["prompt"], "the light");
+        assert_eq!(service::output_text(&json!({"output": "  a moth at night \n"})), Ok("a moth at night".into()));
+        assert!(service::output_text(&json!({"output": "", "error": null})).is_err());
+        assert_eq!(service::output_text(&json!({"output": "x", "error": "rate limited"})), Err("rate limited".into()));
+    }
+
+    #[test]
+    fn a_template_fills_its_variables_and_keys_on_what_it_reads() {
+        assert_eq!(fill_template("{a}, {b} at frame {frame} {c}", "a moth", "", 1001), "a moth,  at frame 1001 {c}");
+        let dir = std::env::temp_dir().join("wobble-genai-template-none");
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        let a = p.push(Op::PromptIn, [0.0, 0.0]);
+        let t = p.push(Op::Template { text: "{a}, golden hour".into() }, [0.0, 0.0]);
+        let g = p.push(Op::Generate { model: "fal/flux-schnell".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let o = p.push(Op::Output, [0.0, 0.0]);
+        assert!(p.connect(a, t, 0) && p.connect(t, g, 0) && p.connect(g, o, 0));
+        let mut ins = Inputs { prompt: Some("a moth".into()), comp: (1920, 1080), tick: 5, ..Default::default() };
+        let k1 = plan(&p, &ins, &dir).unwrap().keys[g].clone();
+        // The frame is not in the words, so it is not in the key.
+        ins.tick = 6;
+        assert_eq!(plan(&p, &ins, &dir).unwrap().keys[g], k1);
+        // The variable is.
+        ins.prompt = Some("a lamp".into());
+        assert_ne!(plan(&p, &ins, &dir).unwrap().keys[g], k1);
+        // And with {frame} in the text, so is the frame.
+        p.steps[t].op = Op::Template { text: "{a}, frame {frame}".into() };
+        let k5 = plan(&p, &ins, &dir).unwrap().keys[g].clone();
+        ins.tick = 7;
+        assert_ne!(plan(&p, &ins, &dir).unwrap().keys[g], k5);
     }
 
     #[test]

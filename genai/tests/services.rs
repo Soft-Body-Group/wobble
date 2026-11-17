@@ -113,7 +113,7 @@ fn drain(job: &run::Job) -> Result<genai::Take, String> {
         match job.rx.recv_timeout(Duration::from_secs(20)).expect("run stalled") {
             Event::Done(t) => return Ok(t),
             Event::Failed(e) => return Err(e),
-            Event::Step(..) | Event::Take(_) => {}
+            Event::Step(..) | Event::Take(_) | Event::Text(..) => {}
         }
     }
 }
@@ -129,7 +129,7 @@ fn drain_all(job: &run::Job) -> Result<Vec<genai::Take>, String> {
                 return Ok(takes);
             }
             Event::Failed(e) => return Err(e),
-            Event::Step(..) => {}
+            Event::Step(..) | Event::Text(..) => {}
         }
     }
 }
@@ -145,6 +145,18 @@ fn fake_fal() -> (u16, Arc<Mutex<Vec<Req>>>) {
         let base = format!("http://127.0.0.1:{port}");
         let response_url = format!("{base}/fal-ai/flux-pro/requests/abc123");
         match (r.method.as_str(), r.path.as_str()) {
+            // A language model: its own request id, and words for a result.
+            ("POST", p) if p.contains("any-llm") && !p.contains("/requests/") => j(json!({
+                "request_id": "txt1",
+                "status_url": format!("{base}/fal-ai/any-llm/requests/txt1/status"),
+                "response_url": format!("{base}/fal-ai/any-llm/requests/txt1"),
+                "cancel_url": format!("{base}/fal-ai/any-llm/requests/txt1/cancel"),
+            })),
+            ("GET", "/fal-ai/any-llm/requests/txt1") => j(json!({
+                "output": "a moth on a lamp, night, rain on the glass, 85mm",
+                "partial": false,
+                "error": null
+            })),
             ("POST", p) if !p.contains("/requests/") => j(json!({
                 "request_id": "abc123",
                 // The APP id, not the full endpoint — fal's own shape for
@@ -711,6 +723,67 @@ fn a_fan_out_runs_each_model_once_and_lands_a_take_for_each() {
     assert!(planned.iter().all(|(_, plan)| plan.todo.is_empty()));
     let again = drain_all(&start(&planned, false)).unwrap();
     assert_eq!(again.iter().map(|t| &t.key).collect::<Vec<_>>(), takes.iter().map(|t| &t.key).collect::<Vec<_>>());
+    assert_eq!(log.lock().unwrap().len(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A prompt through the enhancer and on into a model: the model is sent
+/// the ENHANCED words, the panel is told what they were, and the text step
+/// caches like any other.
+#[test]
+fn an_enhanced_prompt_is_what_the_next_step_is_sent() {
+    let (port, log) = fake_fal();
+    let base = format!("http://127.0.0.1:{port}");
+    let dir = tmp("enhance");
+    let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+    let t = p.push(Op::Prompt { text: "a moth".into() }, [0.0, 0.0]);
+    let e = p.push(Op::Generate { model: "fal/prompt-enhance".into(), seed: 1, opts: Default::default() }, [0.0, 0.0]);
+    let g = p.push(Op::Generate { model: "fal/flux-schnell".into(), seed: 1, opts: Default::default() }, [0.0, 0.0]);
+    let o = p.push(Op::Output, [0.0, 0.0]);
+    assert!(p.connect(t, e, 0) && p.connect(e, g, 0) && p.connect(g, o, 0));
+    let plan = run::plan(&p, &inputs(), &dir).unwrap();
+    assert_eq!(plan.billed(&p), vec![e, g]);
+
+    let svcs = Services { remote: Some(Box::new(Fal::with_bases("test-key", &base, &base))), comfy: Comfy::new(&base) };
+    let job = run::start(p.clone(), plan, inputs(), svcs, dir.clone(), vec![]);
+    let mut words = None;
+    let take = loop {
+        match job.rx.recv_timeout(Duration::from_secs(20)).expect("run stalled") {
+            Event::Text(i, w) => {
+                assert_eq!(i, e);
+                words = Some(w);
+            }
+            Event::Done(t) => break t,
+            Event::Failed(why) => panic!("{why}"),
+            _ => {}
+        }
+    };
+    let enhanced = "a moth on a lamp, night, rain on the glass, 85mm";
+    assert_eq!(words.as_deref(), Some(enhanced));
+    assert!(take.path(&dir).exists());
+    {
+        let reqs = log.lock().unwrap();
+        let llm = reqs.iter().find(|r| r.method == "POST" && r.path == "/fal-ai/any-llm").expect("asked the llm");
+        assert_eq!(llm.json()["prompt"], "a moth");
+        assert!(llm.json()["system_prompt"].as_str().unwrap().contains("rewrite prompts"));
+        let gen = reqs.iter().find(|r| r.method == "POST" && r.path == "/fal-ai/flux/schnell").expect("generated");
+        assert_eq!(gen.json()["prompt"], enhanced);
+    }
+    // Unchanged: both steps cached, nothing sent, and the words are told again.
+    let before = log.lock().unwrap().len();
+    let plan = run::plan(&p, &inputs(), &dir).unwrap();
+    assert!(plan.todo.is_empty());
+    let job = run::start(p, plan, inputs(), Services { remote: None, comfy: Comfy::new(&base) }, dir.clone(), vec![]);
+    let mut again = None;
+    loop {
+        match job.rx.recv_timeout(Duration::from_secs(20)).expect("run stalled") {
+            Event::Text(_, w) => again = Some(w),
+            Event::Done(_) => break,
+            Event::Failed(why) => panic!("{why}"),
+            _ => {}
+        }
+    }
+    assert_eq!(again.as_deref(), Some(enhanced));
     assert_eq!(log.lock().unwrap().len(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }

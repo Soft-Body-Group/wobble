@@ -3622,6 +3622,16 @@ multiply each other and the fan-out, the line beneath says how many takes
 `run…` will make (64 at most in one go), and it is still one price and one
 confirm. Every take records its frame; hover it in the history.
 
+**Prompt tools.** Three steps inside a GenAI Pipeline make TEXT, and feed
+another step's prompt. **Prompt Enhancer** writes a short prompt out in
+full with a small language model. **Describe** looks at the picture and
+writes it up as a prompt (its own prompt says what to dwell on). **Text
+Template** is text with variables: `{a}` and `{b}` are whatever is wired
+into its two inputs (a String node through Prompt In, a description, a
+typed style), `{frame}` the frame. After a run the panel shows what each
+wrote, which is the prompt the model was really sent. The templates
+*Enhanced concept* and *Describe and reimagine* show them wired.
+
 **Templates.** A GenAI Pipeline's panel has a **templates…** menu: whole
 pipelines, ready-made (Clean plate, Restyle the plate, New background
 upscaled, Outpaint the plate, Match a look, Relight, Concept to clip,

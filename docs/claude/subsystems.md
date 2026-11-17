@@ -1446,6 +1446,13 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   when a prompt list displaces the node's own prompt; `Run::pipeline`
   stays the node's, for the staleness check. `vary::MAX_RUNS` (64) is
   refused in `genai_prepare`, before any capture.
+- **Text steps.** `Task::is_text()` models (Enhance, Describe:
+  `Dialect::Llm`, fal's any-llm) output `Pipe::Text`, are steps only
+  (`Pipeline::for_model` is `None`, `offered_models` skips them,
+  `step_entries` lists them), and cache as `result.txt`. `Op::Template`
+  is local text with `{a}` `{b}` `{frame}`; its ports are optional like
+  Comfy's, and `{frame}` enters the key only when the text uses it.
+  `Event::Text` carries the words to `Run::texts` for the panel.
 - **The history is the takes, as pictures (`app/src/genaihist.rs`, a child
   module of `genaiui`).** Thumbnails decode off the UI thread, once per
   file, as sRGB code values (no tone curve: a take is display-referred).

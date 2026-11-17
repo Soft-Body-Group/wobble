@@ -104,6 +104,12 @@ pub enum Op {
         #[serde(default)]
         commercial: bool,
     },
+    /// Text with VARIABLES, filled when the run starts: `{a}` and `{b}`
+    /// are the texts wired into its two ports (either may be left
+    /// unwired, and reads as nothing), `{frame}` the frame the run is
+    /// made at. Local and free: how a wired String, a typed style and a
+    /// model's description become one prompt.
+    Template { text: String },
     /// Where the node's picture comes from. One per pipeline.
     Output,
 }
@@ -176,6 +182,7 @@ impl Op {
             | Op::ClipIn { .. }
             | Op::MatteClip => vec![],
             Op::Output => vec![(Pipe::Image, "image")],
+            Op::Template { .. } => vec![(Pipe::Text, "a"), (Pipe::Text, "b")],
             Op::Comfy { .. } => {
                 vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
             }
@@ -192,7 +199,10 @@ impl Op {
     /// The output pipe, or `None` for the sink.
     pub fn output(&self) -> Option<Pipe> {
         match self {
-            Op::Prompt { .. } | Op::PromptIn => Some(Pipe::Text),
+            Op::Prompt { .. } | Op::PromptIn | Op::Template { .. } => Some(Pipe::Text),
+            Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_text()) => {
+                Some(Pipe::Text)
+            }
             Op::Output => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
             Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_3d()) => {
@@ -236,6 +246,7 @@ impl Op {
             Op::MatteClip => "Matte Clip",
             Op::Generate { model, .. } => catalog::get(model).map(|m| m.label).unwrap_or("Unknown Model"),
             Op::Comfy { .. } => "ComfyUI",
+            Op::Template { .. } => "Text Template",
             Op::Output => "Output",
         }
     }
@@ -264,6 +275,7 @@ impl Op {
                 None => "unknown".into(),
             },
             Op::Comfy { .. } => "comfy".into(),
+            Op::Template { .. } => "template".into(),
             Op::Output => "out".into(),
         }
     }
@@ -286,7 +298,10 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
             vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
         }
         Task::VideoUpscale => vec![(Pipe::Video, "video")],
-        Task::Outpaint | Task::ImageTo3D => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
+        Task::Outpaint | Task::ImageTo3D | Task::Describe => {
+            vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")]
+        }
+        Task::Enhance => vec![(Pipe::Text, "prompt")],
         Task::EditRef => {
             vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "reference")]
         }
@@ -397,7 +412,8 @@ impl Pipeline {
     /// node's matte), into the model, into Output. `None` for an id this
     /// build does not know.
     pub fn for_model(id: &str) -> Option<Self> {
-        let m = catalog::get(id)?;
+        // A text model makes no picture: it is a step, not a node.
+        let m = catalog::get(id).filter(|m| !m.task.is_text())?;
         let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
         let gen = p.push(Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
         let ports = task_ports(m.task);
@@ -589,7 +605,7 @@ impl Pipeline {
                 Some(src) => self.visit(src, state, order)?,
                 // Comfy's ports are all optional: a workflow uses the ones
                 // it has placeholders for.
-                None if matches!(step.op, Op::Comfy { .. }) => {}
+                None if matches!(step.op, Op::Comfy { .. } | Op::Template { .. }) => {}
                 None => {
                     return Err(format!("{} needs its {name} input wired", step.op.label()))
                 }
@@ -687,7 +703,10 @@ mod tests {
 
     #[test]
     fn every_model_has_a_one_model_pipeline_with_every_port_fed() {
-        for m in catalog::CATALOG {
+        for m in catalog::CATALOG.iter().filter(|m| m.task.is_text()) {
+            assert!(Pipeline::for_model(m.id).is_none(), "{}: text out is a step, not a node", m.id);
+        }
+        for m in catalog::CATALOG.iter().filter(|m| !m.task.is_text()) {
             let p = Pipeline::for_model(m.id).unwrap();
             let out = p.output().unwrap();
             let plan = p.plan(out).unwrap_or_else(|e| panic!("{}: {e}", m.id));
@@ -832,6 +851,26 @@ mod tests {
             Op::Generate { opts, .. } => assert_eq!(opts, Opts::default()),
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn text_steps_feed_prompts_and_a_template_s_ports_are_optional() {
+        // image -> describe -> template -> schnell -> out
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0 };
+        let img = p.push(Op::Reference, [0.0, 0.0]);
+        let ask = p.push(Op::Prompt { text: String::new() }, [0.0, 0.0]);
+        let d = p.push(Op::Generate { model: "fal/describe".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let t = p.push(Op::Template { text: "{a}, as a watercolour".into() }, [0.0, 0.0]);
+        let g = p.push(Op::Generate { model: "fal/flux-schnell".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let out = p.push(Op::Output, [0.0, 0.0]);
+        assert_eq!(p.steps[d].op.output(), Some(Pipe::Text));
+        assert!(p.connect(ask, d, 0) && p.connect(img, d, 1));
+        assert!(p.connect(d, t, 0), "a description is text");
+        assert!(p.connect(t, g, 0) && p.connect(g, out, 0));
+        // Port b is unwired, and that is fine.
+        assert_eq!(p.plan(out).unwrap().len(), 6);
+        assert!(!p.connect(d, out, 0), "words are not a picture");
+        assert!(p.all_commercial());
     }
 
     #[test]

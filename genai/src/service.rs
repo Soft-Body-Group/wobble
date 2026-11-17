@@ -173,6 +173,18 @@ pub fn output_image_at(out: &Value, key: Option<&str>) -> Option<(String, bool)>
     Some((url, nsfw))
 }
 
+/// The words in a language model's output (`output`), or why there are
+/// none (`error`).
+pub fn output_text(out: &Value) -> std::result::Result<String, String> {
+    if let Some(e) = out.get("error").and_then(|e| e.as_str()).filter(|e| !e.is_empty()) {
+        return Err(e.to_string());
+    }
+    match out.get("output").and_then(|o| o.as_str()).map(str::trim) {
+        Some(t) if !t.is_empty() => Ok(t.to_string()),
+        _ => Err("no text came back".into()),
+    }
+}
+
 /// The video in a fal-shaped output: `video.url`, else `videos[0].url`.
 pub fn output_video(out: &Value) -> Option<String> {
     out.get("video")

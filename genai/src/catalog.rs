@@ -71,6 +71,12 @@ pub enum Task {
     /// prompt (which object) + image -> that object in 3D, as a Gaussian
     /// splat (`.ply`). Not a picture: the take becomes a Splat node.
     ImageTo3D,
+    /// prompt -> a better prompt, by a language model. TEXT out: a step
+    /// inside a pipeline, never a node of its own.
+    Enhance,
+    /// prompt (what to dwell on) + image -> the picture described, as a
+    /// prompt. TEXT out, like Enhance.
+    Describe,
 }
 
 /// How a model's request is shaped, beyond its task. Most fal endpoints
@@ -155,7 +161,24 @@ pub enum Dialect {
     /// SAM 3D Objects: `image_url`, `prompt` (the object to lift, found by
     /// SAM 3), `seed`; the splat is `gaussian_splat`.
     Sam3d,
+    /// fal's any-llm (and its vision twin): `prompt`, `system_prompt`,
+    /// `image_urls` for the vision one; the answer is `output`, a string.
+    /// No seed: the authored seed keys the cache, so the same step gives
+    /// the same words until you ask for another.
+    Llm { system: &'static str },
 }
+
+/// What the Prompt Enhancer is told to be.
+pub const ENHANCE: &str = "You rewrite prompts for image and video generation models. Expand the \
+user's prompt into one vivid paragraph: subject, setting, composition, lighting, lens and mood. \
+Keep every element the user named and invent nothing that contradicts it. Answer with the prompt \
+only: no preamble, no quotation marks, no lists.";
+
+/// What Describe is told to be.
+pub const DESCRIBE: &str = "You describe images as prompts for image generation models. Write one \
+paragraph that would recreate the image: subject, setting, composition, lighting, colour and \
+style. Follow any instruction the user gives about what to focus on. Answer with the description \
+only: no preamble, no quotation marks, no lists.";
 
 /// What the Colour Transfer node asks for.
 pub const COLOUR_TRANSFER: &str = "Recolour the first image so its colour palette, contrast and \
@@ -548,6 +571,30 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "an object in the picture, named by the prompt (\"chair\"), as a 3D Gaussian splat: lands as a Splat node you can put a Camera on",
     },
     RemoteModel {
+        id: "fal/prompt-enhance",
+        label: "Prompt Enhancer",
+        short: "enhance",
+        service: Service::Fal,
+        endpoint: "fal-ai/any-llm",
+        dialect: Dialect::Llm { system: ENHANCE },
+        task: Task::Enhance,
+        commercial: true,
+        licence: "the language model's own terms, through fal (commercial use through the API)",
+        about: "rewrites a short prompt into a full one (subject, setting, light, lens) with a small language model; its text feeds the next step's prompt",
+    },
+    RemoteModel {
+        id: "fal/describe",
+        label: "Describe",
+        short: "describe",
+        service: Service::Fal,
+        endpoint: "fal-ai/any-llm/vision",
+        dialect: Dialect::Llm { system: DESCRIBE },
+        task: Task::Describe,
+        commercial: true,
+        licence: "the language model's own terms, through fal (commercial use through the API)",
+        about: "looks at the picture and writes it up as a prompt; its own prompt says what to dwell on (may be empty)",
+    },
+    RemoteModel {
         id: "fal/birefnet-v2",
         label: "BiRefNet v2",
         short: "cutout",
@@ -905,6 +952,8 @@ impl Task {
             Task::Outpaint => "outpaint",
             Task::EditRef => "edit with a second picture",
             Task::ImageTo3D => "image to 3D",
+            Task::Enhance => "prompt enhancer",
+            Task::Describe => "describe",
         }
     }
 
@@ -924,6 +973,13 @@ impl Task {
         matches!(self, Task::ImageTo3D)
     }
 
+    /// Does this task return TEXT? Such a model is a step inside a
+    /// pipeline (it feeds another step's prompt), never a one-model node:
+    /// a node's output is a picture.
+    pub fn is_text(self) -> bool {
+        matches!(self, Task::Enhance | Task::Describe)
+    }
+
     /// Does this task make its input BIGGER? The node then takes the
     /// result's own size as its format, instead of stretching the result
     /// back over its input's.
@@ -937,7 +993,7 @@ impl Task {
         matches!(self, Task::Depth | Task::Normals)
     }
 
-    pub const ALL: [Task; 16] = [
+    pub const ALL: [Task; 18] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -954,6 +1010,8 @@ impl Task {
         Task::Outpaint,
         Task::EditRef,
         Task::ImageTo3D,
+        Task::Enhance,
+        Task::Describe,
     ];
 }
 

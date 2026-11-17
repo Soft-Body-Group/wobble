@@ -225,6 +225,34 @@ pub const BUILTIN: &[Template] = &[
             b.out(v)
         },
     },
+    Template {
+        name: "Enhanced concept",
+        about: "a short prompt, written out in full by the Prompt Enhancer, then FLUX schnell",
+        build: || {
+            let mut b = B::new();
+            let t = b.prompt("", -0.4);
+            let e = b.model("fal/prompt-enhance", &[t]);
+            let g = b.model("fal/flux-schnell", &[e]);
+            b.out(g)
+        },
+    },
+    Template {
+        name: "Describe and reimagine",
+        about: "the plate described in words, a style of yours added ({a}, {b}), and a new picture made from that",
+        build: || {
+            let mut b = B::new();
+            let ask = b.prompt("", -0.6);
+            let i = b.src(Op::Reference, -0.2);
+            let style = b.prompt("as a watercolour painting", 0.5);
+            let d = b.model("fal/describe", &[ask, i]);
+            let t = b.p.push(Op::Template { text: "{a}, {b}".into() }, [0.3, b.row]);
+            b.row += 0.3;
+            b.p.connect(d, t, 0);
+            b.p.connect(style, t, 1);
+            let g = b.model("fal/flux-schnell", &[t]);
+            b.out(g)
+        },
+    },
 ];
 
 // ------------------------------------------------------------ yours
