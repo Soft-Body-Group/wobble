@@ -21078,7 +21078,11 @@ impl Gfx {
         if let Some(NodeKind::GenAi(p)) = self.egraph.node(node).map(|n| &n.kind).filter(|k| {
             matches!(k, NodeKind::GenAi(p) if p.model.is_none() && !p.app.on)
         }) {
-            let mut body = genaiui::to_editor(&p.pipeline);
+            // Synced on the way in: every input has its Input node, and
+            // one an earlier build left under the middle node is placed.
+            let mut pl = p.pipeline.clone();
+            pl.sync_inputs();
+            let mut body = genaiui::to_editor(&pl);
             body.node_status_min = self.egraph.node_status_min;
             let parked_graph = std::mem::replace(&mut self.egraph, body);
             let parked_last = std::mem::replace(&mut self.undo_last, self.egraph.clone());

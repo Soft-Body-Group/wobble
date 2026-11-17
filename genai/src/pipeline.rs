@@ -586,6 +586,31 @@ impl Pipeline {
             }
             i += 1;
         }
+        // Heal: an Input an earlier build dropped at the face's spot in a
+        // pipeline already in graph units (hidden behind the middle node)
+        // is placed again below.
+        let graph_units = self.steps.iter().any(|s| s.at[0].abs() > 1.0 || s.at[1].abs() > 1.0);
+        let mut lost = vec![];
+        if graph_units {
+            let mut i = 0;
+            while i < self.steps.len() {
+                let s = &self.steps[i];
+                if matches!(s.op, Op::Input { .. }) && s.at[0].abs() <= 1.0 && s.at[1].abs() <= 1.0 {
+                    let consumers: Vec<(usize, usize)> = self
+                        .steps
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(j, t)| t.inputs.iter().enumerate().filter(move |(_, x)| **x == Some(i)).map(move |(p, _)| (j, p)))
+                        .collect();
+                    if consumers.is_empty() {
+                        lost.push(self.steps[i].op.clone());
+                        self.remove_step(i);
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
         let n = self.ins.len();
         for k in 0..n {
             let kind = self.ins[k];
@@ -598,7 +623,29 @@ impl Pipeline {
                     }
                 }
                 None => {
-                    let x = -0.8 + 1.6 * (k as f32 + 0.5) / n as f32;
+                    // In the face's [-1, 1] square: along the top. Once
+                    // the pipeline has been opened its steps sit in graph
+                    // units, where that spot is ON the middle of the graph
+                    // (a new Input hid behind the model there): then it
+                    // goes beside the other Inputs, right of the last one.
+                    let face = self.steps.iter().all(|s| s.at[0].abs() <= 1.0 && s.at[1].abs() <= 1.0);
+                    let at = if face {
+                        [-0.8 + 1.6 * (k as f32 + 0.5) / n as f32, -0.85]
+                    } else {
+                        let ins = self.steps.iter().filter(|s| matches!(s.op, Op::Input { .. }));
+                        let right = ins.clone().map(|s| s.at[0]).fold(f32::MIN, f32::max);
+                        let top = self.steps.iter().map(|s| s.at[1]).fold(f32::MAX, f32::min);
+                        match ins.clone().next() {
+                            Some(_) => [right + 200.0, ins.map(|s| s.at[1]).fold(f32::MAX, f32::min)],
+                            None => [0.0, top - 200.0],
+                        }
+                    };
+                    let _ = n;
+                    // A healed Input keeps its clip setting.
+                    if let Some(op) = lost.iter().find(|o| matches!(o, Op::Input { input, .. } if *input == k)) {
+                        self.push(op.clone(), at);
+                        continue;
+                    }
                     self.push(
                         Op::Input {
                             input: k,
@@ -607,7 +654,7 @@ impl Pipeline {
                             clip: false,
                             seconds: default_clip_seconds(),
                         },
-                        [x, -0.85],
+                        at,
                     );
                 }
             }
@@ -1230,6 +1277,15 @@ mod tests {
         assert_eq!(k, 2);
         assert_eq!(p.steps[p.input_step(2).unwrap()].op.label(), "image 2");
         assert_eq!(p.steps[ed].inputs[1], Some(img), "nothing renumbered");
+        // In an opened pipeline (graph units) a new Input lands beside
+        // the others, not on the middle of the graph.
+        let mut q = Pipeline::default();
+        for s in &mut q.steps {
+            s.at = [s.at[0] * 260.0, s.at[1] * 260.0];
+        }
+        let k = q.add_input(InKind::Image);
+        let new = q.steps[q.input_step(k).unwrap()].at;
+        assert!(q.steps.iter().filter(|s| s.at != new).all(|s| (s.at[0] - new[0]).abs() > 100.0 || (s.at[1] - new[1]).abs() > 100.0), "{new:?}");
         // An Input is the node's: not removable as a step.
         assert!(!p.remove(img));
         // A pasted duplicate folds into the first.
