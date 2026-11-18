@@ -341,6 +341,7 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - Project assets on a Load (`app/src/assets.rs`)
 - Object storage reads (`engine/src/objstore.rs`)
 - Dockable panels (`app/src/dockui.rs`, imfram)
+- Scrub colour parity (`scrub/colour`): a wobble colour change is ported to Scrub in the same work
 
 ## Where things live
 

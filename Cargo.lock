@@ -887,8 +887,10 @@ dependencies = [
  "bytemuck",
  "log",
  "naga",
+ "pollster 1.0.1",
  "serde",
  "serde_json",
+ "wgpu",
 ]
 
 [[package]]

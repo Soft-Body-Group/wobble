@@ -1100,7 +1100,61 @@ impl Offscreen {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_macro;
+    use super::{expand_macro, Idt, Layer, Offscreen};
+    use colour::color::Colorspace;
+    use colour::viewtf::{Eotf, Gamut, ViewSettings, ViewTransform};
+
+    #[allow(dead_code, clippy::excessive_precision)]
+    mod ocio {
+        include!("../../../engine/tests/aces12_ref/tables.rs");
+    }
+
+    type Table = &'static [([f32; 3], [f32; 3])];
+
+    /// The real passes, convert then display, over a row of float pixels:
+    /// the worst difference from `want`, in 8-bit codes.
+    fn worst(input: Colorspace, eotf: Eotf, t: Table, want: impl Fn(usize) -> [f32; 3]) -> Option<i32> {
+        let n = t.len() as u32;
+        let mut off = Offscreen::new(n, 1)?;
+        let bytes: Vec<u8> = t
+            .iter()
+            .flat_map(|(c, _)| [c[0], c[1], c[2], 1.0])
+            .flat_map(|v| half::f16::from_f32(v).to_le_bytes())
+            .collect();
+        let frame = media::Frame::owned(n, 1, media::Layout::RgbaF16, vec![bytes]);
+        let idt = Idt::new(input, Colorspace::ACESCG);
+        let view = ViewSettings { transform: ViewTransform::Aces12, working: Gamut::AcesCg, display: Gamut::Rec709, eotf, ..Default::default() };
+        let px = off.frame(Some(Layer { frame: &frame, idt: &idt, xf: [0.0, 0.0, 1.0, 1.0] }), None, 0.0, &view);
+        let mut w = 0;
+        for i in 0..t.len() {
+            for k in 0..3 {
+                w = w.max((px[i * 4 + k] as i32 - (want(i)[k] * 255.0).round() as i32).abs());
+            }
+        }
+        Some(w)
+    }
+
+    /// `sRGB (ACES)` and `Rec.709 (ACES)` on screen are OCIO's numbers.
+    #[test]
+    fn the_aces12_views_match_ocio_through_the_viewer() {
+        for (eotf, t) in [(Eotf::Rec1886, ocio::ANALYTIC_FWD_REC709), (Eotf::Srgb, ocio::ANALYTIC_FWD_SRGB)] {
+            let Some(w) = worst(Colorspace::ACESCG, eotf, t, |i| t[i].1) else { return };
+            assert!(w <= 1, "{eotf:?}: {w}/255");
+        }
+    }
+
+    /// A plate read as an Output space and shown through that view is the
+    /// plate: the input transform in the convert pass, the view after it.
+    #[test]
+    fn an_output_input_comes_back_through_its_view() {
+        for (cs, eotf, t) in [
+            (Colorspace::ACES_OUTPUT_REC709, Eotf::Rec1886, ocio::ANALYTIC_INV_REC709),
+            (Colorspace::ACES_OUTPUT_SRGB, Eotf::Srgb, ocio::ANALYTIC_INV_SRGB),
+        ] {
+            let Some(w) = worst(cs, eotf, t, |i| t[i].0) else { return };
+            assert!(w <= 2, "{eotf:?}: {w}/255");
+        }
+    }
 
     #[test]
     fn a_macro_expands_with_nested_parentheses_and_skips_longer_names() {

@@ -2,7 +2,7 @@
 name = "colour"
 version = "0.1.0"
 edition = "2021"
-description = "Colour management copied from wobble's engine (color.rs, viewtf, lut.rs): colourspaces, input transforms as WGSL, view transforms (ACES 1.3, AgX, filmic, none). OpenDRT is wobble's GPLv3 feature and is not copied: its stub stands in."
+description = "Colour management copied from wobble's engine (color.rs, viewtf, lut.rs): colourspaces, input transforms as WGSL, view transforms (ACES 1.3 and 1.2, AgX, filmic, none). OpenDRT is wobble's GPLv3 feature and is not copied: its stub stands in."
 publish = false
 
 [features]
@@ -18,3 +18,5 @@ serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 naga = { version = "30", features = ["wgsl-in"] }
+wgpu.workspace = true
+pollster.workspace = true

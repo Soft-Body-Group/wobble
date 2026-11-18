@@ -1557,16 +1557,32 @@ impl Editor {
     /// display, curve, look, exposure, gamma) and the source clip's input.
     fn colour_menu(&mut self, ui: &mut egui::Ui) {
         use colour::color::Colorspace;
-        use colour::viewtf::{Eotf, Gamut, ViewTransform};
+        use colour::viewtf::{Eotf, Gamut, ViewPreset, ViewTransform};
         let mut c = self.rec.seq.colour.clone();
         ui.menu_button(format!("working space: {}", c.working.label()), |ui| {
-            for (name, cs) in [("Linear Rec.709", Colorspace::LINEAR_REC709), ("ACEScg", Colorspace::ACESCG), ("Linear P3-D65", Colorspace::LINEAR_P3D65), ("Linear Rec.2020", Colorspace::LINEAR_REC2020), ("ACES2065-1", Colorspace::ACES2065)] {
+            // wobble's list: every scene-linear preset.
+            for (name, cs) in Colorspace::PRESETS.into_iter().filter(|(_, cs)| cs.is_scene_linear()) {
                 if ui.radio(c.working == cs, name).clicked() {
                     c.working = cs;
                 }
             }
         });
         ui.separator();
+        // wobble's viewer menu: a transform on a display, by name.
+        ui.menu_button(format!("view preset: {}", c.view.preset().label()), |ui| {
+            let mut aces12 = false;
+            for (name, p) in ViewPreset::CATALOGUE {
+                let is_12 = p.transform == ViewTransform::Aces12;
+                if is_12 && !aces12 {
+                    ui.weak("ACES 1.2");
+                }
+                aces12 |= is_12;
+                let r = ui.add_enabled(p.transform.available(), egui::RadioButton::new(c.view.preset() == p, name));
+                if r.clicked() {
+                    c.view = c.view.with_preset(p);
+                }
+            }
+        });
         ui.menu_button(format!("view: {}", c.view.transform.label()), |ui| {
             for t in ViewTransform::ALL {
                 let r = ui.add_enabled(t.available(), egui::RadioButton::new(c.view.transform == t, t.label()));
@@ -1576,7 +1592,7 @@ impl Editor {
             }
         });
         ui.menu_button(format!("display: {}", c.view.display.label()), |ui| {
-            for g in Gamut::ALL {
+            for g in Gamut::DISPLAYS {
                 if ui.radio(c.view.display == g, g.label()).clicked() {
                     c.view.display = g;
                 }
