@@ -9949,6 +9949,20 @@ impl Gfx {
         Some(ViewedLoad { node: id, start: s0, files: n, inout: (f, la), full: (s0.min(f), (s0 + n - 1).max(la)) })
     }
 
+    /// Is there an in/out to clear? Viewing a Load the timeline always holds
+    /// one (the Load's), so there it counts only once it trims the clip.
+    fn has_inout(&self) -> bool {
+        self.play_range.is_some()
+            && self.viewed_load().is_none_or(|v| v.inout != (v.start, v.start + v.files - 1))
+    }
+
+    /// Drop the in/out: the bar's double-click and its clear button. Viewing
+    /// a Load, `sync_load_inout` turns this into the Load's whole clip.
+    fn clear_inout(&mut self) {
+        self.play_range = None;
+        self.track_edit = None;
+    }
+
     /// Keep the timeline's in/out and the viewed Load's in/out the same
     /// thing (see `load_mirror`). Called at the top of `ui()`, so an I / O
     /// or a track click lands on the Load the frame after it happened.
@@ -18277,8 +18291,7 @@ impl Gfx {
             let f = (if is_in { e } else { e - 1 }).clamp(span_a as i64, span_b as i64) as u64;
             self.play_range = Some(if is_in { (f.min(pb), pb) } else { (pa, f.max(pa)) });
         } else if resp.double_clicked() {
-            self.play_range = None;
-            self.track_edit = None;
+            self.clear_inout();
         } else if let Some(which) = resp
             .clicked()
             .then(|| resp.interact_pointer_pos())
@@ -18413,6 +18426,17 @@ impl Gfx {
                 seek = Some(span_b);
             }
             ui.separator();
+            let clear = ui
+                .add_enabled(
+                    self.has_inout(),
+                    egui::Button::new(egui::RichText::new("clear in/out").small()),
+                )
+                .on_hover_text("clear the in and out points (or double-click the bar)")
+                .on_disabled_hover_text("no in/out points set");
+            widgets::note_rect(ui, egui::Id::new("clear-inout"), clear.rect);
+            if clear.clicked() {
+                self.clear_inout();
+            }
             // The viewer range, the loop mode and the handles are not on the
             // row: the bar's in/out is what plays (by design: a second range
             // here fought the viewer in/out). The script range is in the

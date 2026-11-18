@@ -46,6 +46,13 @@ impl Gfx {
             let r = s.track_rect;
             r.min.x + ((f as i64 - ta) as f32 / total) * r.width() + r.width() / total * 0.5
         };
+        // The clear button's centre, if a hand could reach it.
+        let ctx = self.egui_ctx.clone();
+        let clear_button = || {
+            widgets::noted_rect(&ctx, egui::Id::new("clear-inout"))
+                .filter(|(r, clip)| clip.contains_rect(*r))
+                .map(|(r, _)| r.center())
+        };
         let mut next = stage;
         match stage {
             0 if frames >= 6 && self.track_rect.width() > 20.0 => {
@@ -280,12 +287,55 @@ impl Gfx {
                     );
                     std::process::exit(1);
                 }
+                next = 20;
+            }
+            // The clear button, still viewing the Load (which has an in/out
+            // from the stages above), then again on the comp's own in/out.
+            20 | 23 if since.elapsed().as_millis() > 400 => {
+                if !self.has_inout() {
+                    println!("IN/OUT TEST FAIL: nothing to clear at stage {stage} ({:?})", self.play_range);
+                    std::process::exit(1);
+                }
+                let Some(p) = clear_button() else {
+                    println!("IN/OUT TEST FAIL: the clear button is not on screen");
+                    std::process::exit(1);
+                };
+                click(raw, p, egui::Modifiers::NONE, true);
+                next = stage + 1;
+            }
+            21 | 24 if frames >= 2 => {
+                let Some(p) = clear_button() else {
+                    println!("IN/OUT TEST FAIL: the clear button went away");
+                    std::process::exit(1);
+                };
+                click(raw, p, egui::Modifiers::NONE, false);
+                next = stage + 1;
+            }
+            22 if since.elapsed().as_millis() > 300 => {
+                let Some(v) = self.viewed_load() else {
+                    println!("IN/OUT TEST FAIL: no longer viewing the Load");
+                    std::process::exit(1);
+                };
+                if v.inout != (v.start, v.start + v.files - 1) || self.has_inout() {
+                    println!("IN/OUT TEST FAIL: clear left the Load's in/out at {:?}", v.inout);
+                    std::process::exit(1);
+                }
+                // A pinned range leaves the Load: the comp's in/out comes back.
+                self.view_range = Some((0, 23));
+                next = 23;
+            }
+            25 if since.elapsed().as_millis() > 300 => {
+                if self.play_range.is_some() || self.has_inout() {
+                    println!("IN/OUT TEST FAIL: clear left the in/out at {:?}", self.play_range);
+                    std::process::exit(1);
+                }
                 println!(
                     "IN/OUT TEST PASS: ctrl-click set in, alt-click set out, the track spans \
                      the whole range with in/out on it, I at the playhead set in; loop modes select in/out, cut and \
                      handles; viewing a Load the track spans its clip and its in/out is the \
                      Load's, both ways; the pie's in–out zoom glides the bar onto it; the in \
-                     mark drags; a frame typed on the playhead lands"
+                     mark drags; a frame typed on the playhead lands; the clear button clears \
+                     a Load's in/out and the comp's"
                 );
                 std::process::exit(0);
             }
