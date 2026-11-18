@@ -127,10 +127,30 @@ pub fn find(path: &Path) -> Option<PathBuf> {
 /// (`record-target.json`, `marketing` field).
 pub fn record_target() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let p = home.join("Library/Application Support/com.alex.organisicator/record-target.json");
+    let p = record_target_file(&home.join("Library/Application Support"))?;
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).ok()?).ok()?;
     let m = PathBuf::from(v.get("marketing")?.as_str()?);
     is_marketing(&m).then_some(m)
+}
+
+/// organisicator's `record-target.json`: in `ing.wobble.organisicator`, or
+/// in the data folder of a build with another bundle id (any folder named
+/// `*.organisicator`, first by name).
+fn record_target_file(support: &Path) -> Option<PathBuf> {
+    const FILE: &str = "record-target.json";
+    let p = support.join("ing.wobble.organisicator").join(FILE);
+    if p.is_file() {
+        return Some(p);
+    }
+    let mut found: Vec<PathBuf> = std::fs::read_dir(support)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".organisicator"))
+        .map(|e| e.path().join(FILE))
+        .filter(|p| p.is_file())
+        .collect();
+    found.sort();
+    found.into_iter().next()
 }
 
 /// Every post in a marketing folder, sorted by name (a broken `post.json`
@@ -373,6 +393,24 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_target_is_found_under_either_bundle_id() {
+        let d = std::env::temp_dir().join(format!("scrub-mkt-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let other = d.join("com.example.organisicator");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(d.join("unrelated.app")).unwrap();
+        std::fs::write(d.join("unrelated.app/record-target.json"), b"{}").unwrap();
+        assert_eq!(record_target_file(&d), None);
+        std::fs::write(other.join("record-target.json"), b"{}").unwrap();
+        assert_eq!(record_target_file(&d), Some(other.join("record-target.json")));
+        let ours = d.join("ing.wobble.organisicator");
+        std::fs::create_dir_all(&ours).unwrap();
+        std::fs::write(ours.join("record-target.json"), b"{}").unwrap();
+        assert_eq!(record_target_file(&d), Some(ours.join("record-target.json")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn fixture(tag: &str) -> PathBuf {
         let m = std::env::temp_dir().join(format!("scrub-mkt-{tag}-{}", std::process::id())).join("marketing");
