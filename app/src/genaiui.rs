@@ -777,6 +777,9 @@ pub struct View {
     pub busy_elsewhere: bool,
     /// Per node input, whether something is wired into it, for the hints.
     pub wired: Vec<bool>,
+    /// The take on screen is at another frame rate than the comp's, and a
+    /// retime below the node conforms it: (the take's fps, it is RIFE).
+    pub conform: Option<(f32, bool)>,
     /// Seconds each step has been in its state, and the run in all.
     pub elapsed: BTreeMap<usize, f32>,
     pub run_secs: f32,
@@ -824,6 +827,9 @@ pub enum Action {
     /// Run ONE step (its index), from inside the pipeline: its inputs
     /// are captured and everything above it run or found cached.
     PrepareStep(usize),
+    /// Swap the conform Speed below the node for a Rifetime at the same
+    /// rate (real in-between frames; it renders on a click).
+    ConformRife,
     /// Cancel / dismiss the run of ONE step (several can be going).
     CancelStep(usize),
     DismissStep(usize),
@@ -1436,6 +1442,21 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
     if let Some(a) = hist::takes(ui, node, p, v) {
         act = Some(a);
     }
+    // The model's own frame rate, and what is done about it.
+    if let Some((fps, rife)) = v.conform {
+        ui.horizontal_wrapped(|ui| {
+            if rife {
+                ui.weak(small(format!("the take is {fps:.0} fps: the Rifetime below conforms it (render it there)")));
+            } else {
+                ui.weak(small(format!("the take is {fps:.0} fps: the Speed node below conforms it (frames are skipped or held)")));
+                let r = ui.small_button("use RIFE");
+                crate::widgets::note_rect(ui, egui::Id::new(("genai-conform-rife", node)), r.rect);
+                if r.on_hover_text("swap it for a Rifetime at the same rate: real in-between frames, rendered on a click").clicked() {
+                    act = Some(Action::ConformRife);
+                }
+            }
+        });
+    }
     if !p.commercial() {
         ui.colored_label(theme::cost_nc(), small("non-commercial pixels: tagged downstream"));
     }
@@ -1543,6 +1564,62 @@ pub fn migrate_inputs(g: &mut crate::editor::EditorGraph) -> usize {
         }
     }
     ids.len()
+}
+
+/// The label of the retime a video take's wrong frame rate is fixed with
+/// (`conform_node`): how it is found again.
+pub const CONFORM: &str = "conform fps";
+
+/// The conform retime below GenAI node `node`, if it has one: a Speed (or
+/// the Rifetime it was switched to) reading the node, wearing [`CONFORM`].
+pub fn conform_of(g: &crate::editor::EditorGraph, node: u64) -> Option<u64> {
+    g.nodes
+        .iter()
+        .find(|(id, n)| {
+            n.ui_label == CONFORM
+                && matches!(n.kind, NodeKind::Speed(_) | NodeKind::Rifetime(_))
+                && g.input_of(**id, 0) == Some(node)
+        })
+        .map(|(id, _)| *id)
+}
+
+/// A model handed back a clip at its own frame rate: `rate` take frames
+/// for every comp frame (30 fps in a 24 fps comp = 1.25). Left alone it
+/// plays long and drifts off the plate, so it is fixed IN THE GRAPH, where
+/// it can be seen and changed: a Speed node below the GenAI node, anchored
+/// on the frame the take starts at, everything that read the node now
+/// reading it. One already there is updated, never doubled; at a rate of 1
+/// it is set to do nothing. Returns the retime, if there is one.
+pub fn conform_node(g: &mut crate::editor::EditorGraph, node: u64, rate: f32, tick: i64) -> Option<u64> {
+    let have = conform_of(g, node);
+    if let Some(c) = have {
+        match g.node_mut(c).map(|n| &mut n.kind) {
+            Some(NodeKind::Speed(p)) => (p.speed, p.anchor) = (rate, tick as f32),
+            Some(NodeKind::Rifetime(p)) => p.speed = rate,
+            _ => {}
+        }
+        return have;
+    }
+    if (rate - 1.0).abs() < 0.005 {
+        return None;
+    }
+    let at = g.node(node)?.pos + egui::vec2(0.0, 120.0);
+    let kind = NodeKind::Speed(engine::graph::SpeedParams { speed: rate, anchor: tick as f32, ..Default::default() });
+    let id = g.add(kind, at);
+    if let Some(n) = g.node_mut(id) {
+        n.ui_label = CONFORM.into();
+    }
+    for e in g.edges.iter_mut().filter(|e| e.2 == node) {
+        e.2 = id;
+    }
+    g.edges.push((id, 0, node));
+    // What was on screen stays on screen, conformed.
+    for v in [&mut g.view, &mut g.view_b] {
+        if *v == Some(node) {
+            *v = Some(id);
+        }
+    }
+    Some(id)
 }
 
 /// Remove input `k` of GenAI node `node` (its Input step goes with it),
@@ -1727,6 +1804,11 @@ impl Gfx {
             // shared); paid ones go on beside it.
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
+            conform: conform_of(&self.egraph, node).and_then(|c| {
+                let fps = self.loaded.get(&node).and_then(|l| l.movie_fps)? as f32;
+                ((fps - self.fps).abs() > 0.01)
+                    .then(|| (fps, matches!(self.egraph.node(c).map(|n| &n.kind), Some(NodeKind::Rifetime(_)))))
+            }),
             elapsed: mine.map(|r| r.since.iter().map(|(i, t)| (*i, t.elapsed().as_secs_f32())).collect()).unwrap_or_default(),
             run_secs: mine.map_or(0.0, |r| r.t0.elapsed().as_secs_f32()),
             to_step: mine.and_then(|r| r.to_step),
@@ -1771,7 +1853,30 @@ impl Gfx {
                 };
                 let _ = self.genai_take_run(node, step, true);
             }
-            Action::Show => self.genai_show(node),
+            Action::Show => {
+                self.genai_show(node);
+                self.genai_conform(node);
+            }
+            Action::ConformRife => {
+                if let Some(c) = conform_of(&self.egraph, node) {
+                    let rate = match self.egraph.node(c).map(|n| &n.kind) {
+                        Some(NodeKind::Speed(p)) => Some(p.speed),
+                        _ => None,
+                    };
+                    if let Some(rate) = rate {
+                        let slot = self.next_read_slot;
+                        self.next_read_slot += 1;
+                        if let Some(n) = self.egraph.node_mut(c) {
+                            n.kind = NodeKind::Rifetime(engine::graph::RifetimeParams {
+                                speed: rate,
+                                ..engine::graph::RifetimeParams::new(slot)
+                            });
+                        }
+                        self.selected = vec![c];
+                        self.playback_dirty = true;
+                    }
+                }
+            }
             Action::TakeToLoad { take, wire } => self.genai_take_to_load(node, take, wire),
             Action::SetRoute(route) => {
                 let _ = config::update(|f| f.route = route);
@@ -2483,6 +2588,9 @@ impl Gfx {
                 }
             }
             self.genai_show(node);
+            // A video at another frame rate than the comp's is retimed, in
+            // the graph, in the same undo step.
+            self.genai_conform(node);
             // A 3D take is nothing this node can draw: it lands as a Splat
             // node beside it, in the same undo step.
             let k = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.pipeline.take);
@@ -2609,6 +2717,26 @@ impl Gfx {
             if let Some(words) = words {
                 out.insert(r.node, (words, all));
             }
+        }
+    }
+
+    /// The picked take is a video at its own frame rate: conform it to
+    /// the comp's with a retime below the node (`conform_node`).
+    pub(crate) fn genai_conform(&mut self, node: u64) {
+        let Some(tick) = self
+            .egraph
+            .node(node)
+            .and_then(|n| params(&n.kind))
+            .and_then(|p| p.pipeline.picked())
+            .filter(|t| t.is_video())
+            .map(|t| t.tick)
+        else {
+            return;
+        };
+        let Some(fps) = self.loaded.get(&node).and_then(|l| l.movie_fps) else { return };
+        let rate = fps as f32 / self.fps.max(1.0);
+        if conform_node(&mut self.egraph, node, rate, tick).is_some() {
+            self.playback_dirty = true;
         }
     }
 
@@ -3037,7 +3165,11 @@ impl crate::Gfx {
                 let g = self.egraph.add(NodeKind::GenAi(p), egui::pos2(360.0, 200.0));
                 self.egraph.connect(g, 0, read);
                 self.egraph.view = Some(read);
+                // Always the shot's first frame: the same clip every run,
+                // so a second live run finds Wan's result cached.
                 self.playing = false;
+                let first = self.script_range().0;
+                self.seek_to(first);
                 t.node = g;
                 t.pipe = g;
                 next(t, 1);
@@ -3061,6 +3193,12 @@ impl crate::Gfx {
                 let key = match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                     Some(Phase::Failed(e)) => fail(format!("dry: {e}")),
                     Some(Phase::Ready { plan, .. }) => Some(plan.keys[plan.target].clone()),
+                    // Found cached from an earlier live run: the clip keyed
+                    // the same ACROSS runs, which is the whole point.
+                    Some(Phase::Done(_)) => {
+                        println!("GENAI LIVE DRY PASS: the clip keys as it did in an earlier run (Wan's result was found cached)");
+                        std::process::exit(0);
+                    }
                     _ => None,
                 };
                 if let Some(key) = key {
@@ -3081,12 +3219,26 @@ impl crate::Gfx {
                     }
                 }
             }
-            // Wan: captured, quoted, paid from its own node.
+            // Wan: captured, quoted, paid from its own node. (Or found
+            // cached from an earlier live run in the same results folder:
+            // free, and the rest of the workflow is still exercised.)
             2 => {
-                if let Some(usd) = pay(self, t.pipe, "Wan 2.7 video edit") {
+                if matches!(self.jobs.genai.run.as_ref().map(|r| &r.phase), Some(Phase::Done(_))) {
+                    println!("GENAI LIVE: Wan 2.7 video edit was cached from an earlier live run (free)");
+                    t.kept = Some(vec![]);
+                    next(t, 3);
+                } else if let Some(usd) = pay(self, t.pipe, "Wan 2.7 video edit") {
                     println!("GENAI LIVE: Wan 2.7 video edit quoted ${usd:.3}, paid, running");
                     next(t, 3);
                 }
+            }
+            // Wan was cached: nothing to run beside. The still on its own.
+            3 if t.kept.is_some() => {
+                let (owner, i) = (t.pipe, step_of(self, "fal/flux-schnell"));
+                let wan = step_of(self, "fal/wan-2.7-video-edit");
+                self.genai_in_comp(|g| g.genai_action(owner, Action::DismissStep(wan)));
+                self.genai_in_comp(|g| g.genai_action(owner, Action::PrepareStep(i)));
+                next(t, 4);
             }
             // A still beside it, as soon as Wan has left the front.
             3 => {
@@ -3112,7 +3264,7 @@ impl crate::Gfx {
                 } else if let Some(usd) = pay(self, t.pipe, "FLUX schnell") {
                     let both = self.jobs.genai.run.iter().chain(self.jobs.genai.background.iter()).filter(|r| r.active()).count();
                     println!("GENAI LIVE: FLUX schnell quoted ${usd:.3}, paid; {both} run(s) going at once");
-                    if both < 2 {
+                    if both < 2 && t.kept.is_none() {
                         fail(format!("{both} run(s) going after paying for the second: they are not side by side"));
                     }
                     next(t, 5);
@@ -3161,10 +3313,31 @@ impl crate::Gfx {
                         fail(format!("the take is not loaded in the node's reader ({:?})", self.loaded.get(&t.pipe).map(|l| &l.path)));
                     }
                     println!("GENAI LIVE: take {} loaded, {} frames", path.display(), self.loaded[&t.pipe].seq.frames.len());
+                    // A model that answers at its own frame rate (Wan: 30
+                    // fps) is conformed by a retime below the node.
+                    let fps = self.loaded[&t.pipe].movie_fps.unwrap_or(self.fps as f64) as f32;
+                    let conform = conform_of(&self.egraph, t.pipe).and_then(|c| match self.egraph.node(c).map(|n| &n.kind) {
+                        Some(NodeKind::Speed(p)) => Some((p.speed, p.anchor)),
+                        _ => None,
+                    });
+                    if (fps - self.fps).abs() > 0.01 {
+                        match conform {
+                            Some((speed, anchor)) if (speed - fps / self.fps).abs() < 1e-3 && anchor == take.tick as f32 => {
+                                let range = self.range_of(conform_of(&self.egraph, t.pipe).unwrap()).0;
+                                println!(
+                                    "GENAI LIVE: the take is {fps} fps in a {} fps comp: a Speed at {speed:.3} below the node conforms it; node range {:?}, conformed {range:?}",
+                                    self.fps,
+                                    self.range_of(t.pipe).0
+                                );
+                            }
+                            other => fail(format!("a {fps} fps take in a {} fps comp was not conformed (retime: {other:?})", self.fps)),
+                        }
+                    }
                     // Out to the outer graph: a node downstream of it.
                     let after = NodeKind::Mult(engine::graph::MultParams { value: [1.0; 3], ..Default::default() });
                     let m = self.egraph.add(after, egui::pos2(360.0, 400.0));
                     self.egraph.connect(m, 0, t.pipe);
+                    self.egraph.view_b = None;
                     self.egraph.view = Some(t.pipe);
                     t.node = m;
                     self.playback_dirty = true;
@@ -4134,6 +4307,31 @@ mod tests {
     }
 
     #[test]
+    fn a_take_at_another_frame_rate_gets_one_retime_below_the_node() {
+        use crate::editor::EditorGraph;
+        let mut g = EditorGraph::default();
+        let gen = g.add(kind(), egui::pos2(0.0, 0.0));
+        let below = g.add(NodeKind::Mask, egui::pos2(0.0, 300.0));
+        g.edges.push((below, 0, gen));
+        g.view = Some(gen);
+        // 24 fps back in a 24 fps comp: nothing to fix, nothing added.
+        assert_eq!(conform_node(&mut g, gen, 1.0, 1231), None);
+        // 30 fps in a 24 fps comp: a Speed at 1.25, anchored where the
+        // take starts, between the node and what read it.
+        let c = conform_node(&mut g, gen, 1.25, 1231).unwrap();
+        assert!(matches!(&g.node(c).unwrap().kind, NodeKind::Speed(p) if p.speed == 1.25 && p.anchor == 1231.0));
+        assert_eq!((g.input_of(c, 0), g.input_of(below, 0), g.view), (Some(gen), Some(c), Some(c)));
+        assert_eq!(crate::ranges::time_shift(&g.node(c).unwrap().kind, (1231, 1380)), Some((1231, 1350)), "150 frames at 30 fps are 120 at 24");
+        // The next take updates it; it is never doubled.
+        assert_eq!(conform_node(&mut g, gen, 1.25, 1001), Some(c));
+        assert!(matches!(&g.node(c).unwrap().kind, NodeKind::Speed(p) if p.anchor == 1001.0));
+        assert_eq!(g.nodes.len(), 3);
+        // A take at the comp's rate sets it to do nothing.
+        conform_node(&mut g, gen, 1.0, 1001);
+        assert!(matches!(&g.node(c).unwrap().kind, NodeKind::Speed(p) if p.speed == 1.0));
+    }
+
+    #[test]
     fn every_step_kind_is_in_the_dive_menu_and_no_model_twice() {
         let e = step_entries();
         for want in ["Prompt", "Text Template", "ComfyUI", "Output"] {
@@ -4161,6 +4359,7 @@ mod tests {
             steps: BTreeMap::new(),
             busy_elsewhere: false,
             wired: vec![true, false],
+            conform: None,
             elapsed: BTreeMap::new(),
             run_secs: 0.0,
             to_step: None,

@@ -1614,6 +1614,16 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
 - **A clip keys on its FRAMES** (`Clip::key` = `run::frames_key`), not on
   the mp4's bytes: an encoder never writes the same file twice, and the
   bytes re-billed every re-capture (found by the live run, $0.20 a time).
+- **A take at another frame rate is conformed IN THE GRAPH**
+  (`genaiui::conform_node`, on landing and on picking a take): a Speed
+  node below the GenAI node, labelled `CONFORM`, at `take fps / comp fps`
+  anchored on the take's tick, everything that read the node re-pointed
+  at it; updated, never doubled. The panel's "use RIFE" swaps it for a
+  Rifetime at the same rate (`Action::ConformRife`). Models that can be
+  ASKED for the comp's rate are (LTX `frames_per_second`, Wan VACE
+  `match_input_frames_per_second`); Wan 2.7 and Seedance answer at their
+  own. A video take's range is its own frames from its tick (`ranges`),
+  and a step's video shown inside is placed by `GenAiParams::shown_tick`.
 - **Runs go side by side once PAID.** `Runs::run` is the one being
   prepared (capture, quote, waiting for pay & run: one at a time, they
   share the capture bake) or the last that ended; a run that reaches
