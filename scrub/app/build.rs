@@ -3,7 +3,8 @@
 //! - Windows: scrub.exe carries its icon (`icons/scrub.ico`).
 //! - Linux: a dev build against FFmpeg in a private prefix (pop-os's
 //!   `~/.local/ffmpeg`, because the distro's 4.4 is too old) gets that
-//!   prefix's lib dir as RUNPATH, so `./target/release/scrub` starts with no
+//!   prefix's lib dir on the link search path and as RUNPATH, so it links
+//!   with a plain `cargo build` and `./target/release/scrub` starts with no
 //!   `LD_LIBRARY_PATH`. A release build already passes
 //!   `-rpath,$ORIGIN/lib` (tools/release_public_linux.sh) and is left alone,
 //!   so no build machine path ever ships; so is FFmpeg in a system dir.
@@ -47,6 +48,9 @@ fn linux_rpath() {
         return;
     }
     if std::path::Path::new(&dir).is_dir() {
+        // Search it first too: ffmpeg-sys-next's pkg-config route leaves the
+        // linker to find the libraries, and it would take the distro's.
+        println!("cargo:rustc-link-search=native={dir}");
         println!("cargo:rustc-link-arg-bins=-Wl,-rpath,{dir}");
     }
 }
