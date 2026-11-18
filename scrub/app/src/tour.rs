@@ -46,14 +46,14 @@ enum Anim {
 
 const STEPS: &[Step] = &[
     Step { title: "Scrub is driven from the keyboard", line: "your left hand stays on the keys, your right on the mouse. here are the ones that matter.", keys: &[], shift: false, cmd: false, anim: Anim::Intro },
+    Step { title: "hold A or D, drag a clip   trim", line: "hold the key, press anywhere on a clip and drag: A trims its in, D its out. no aiming for edges.", keys: &["A", "D"], shift: false, cmd: false, anim: Anim::Trim },
+    Step { title: "hold S, drag a clip   slip", line: "the clip stays put and shows other source: its in and out move together.", keys: &["S"], shift: false, cmd: false, anim: Anim::Slip },
+    Step { title: "hold Z or C, drag a clip   ripple trim", line: "like A and D, but everything after the clip follows, so no gap opens.", keys: &["Z", "C"], shift: false, cmd: false, anim: Anim::Ripple },
+    Step { title: "hold shift S, drag a clip   speed", line: "the clip's speed, scaled about the playhead. cmd R types a speed in.", keys: &["S"], shift: true, cmd: false, anim: Anim::Speed },
     Step { title: "J  K  L   shuttle", line: "back, stop, forward. tap again to go faster. space plays and stops.", keys: &["J", "K", "L", "space"], shift: false, cmd: false, anim: Anim::Shuttle },
     Step { title: "I  O   mark in and out", line: "on the source or the record side, whichever has focus (or is under the pointer).", keys: &["I", "O"], shift: false, cmd: false, anim: Anim::Marks },
     Step { title: ",  .   insert and overwrite", line: "the source in..out goes into the timeline at the record marks, on the targeted tracks.", keys: &[",", "."], shift: false, cmd: false, anim: Anim::Edit },
     Step { title: "1  2  3   target tracks", line: "V1 V2 V3 (again: off). the sound target follows. 4-7 target the audio tracks.", keys: &["1", "2", "3"], shift: false, cmd: false, anim: Anim::Targets },
-    Step { title: "hold A or D, drag a clip   trim", line: "hold the key, press anywhere on a clip and drag: A trims its in, D its out. no aiming for edges.", keys: &["A", "D"], shift: false, cmd: false, anim: Anim::Trim },
-    Step { title: "hold Z or C, drag a clip   ripple trim", line: "the same, but everything after the clip follows, so no gap opens.", keys: &["Z", "C"], shift: false, cmd: false, anim: Anim::Ripple },
-    Step { title: "hold S, drag a clip   slip", line: "the clip stays put and shows other source: its in and out move together.", keys: &["S"], shift: false, cmd: false, anim: Anim::Slip },
-    Step { title: "hold shift S, drag a clip   speed", line: "the clip's speed, scaled about the playhead. cmd R types a speed in.", keys: &["S"], shift: true, cmd: false, anim: Anim::Speed },
     Step { title: "cmd D   dissolve", line: "on the selected edit, or the cut nearest the playhead. alt = and alt - make it longer or shorter.", keys: &["D"], shift: false, cmd: true, anim: Anim::Dissolve },
     Step { title: "drag the picture   scrub", line: "press on either viewer and drag sideways: frame by frame, relative, no playhead to find.", keys: &[], shift: false, cmd: false, anim: Anim::Scrub },
     Step { title: "Q  W  H   panels", line: "Q: the panel under the pointer alone. W closes it, shift W brings them all back. H hides the key hints.", keys: &["Q", "W", "H"], shift: false, cmd: false, anim: Anim::Panels },
@@ -61,16 +61,23 @@ const STEPS: &[Step] = &[
 ];
 
 /// Seconds one pass of an animation takes (one key of a pair).
-const PASS: f64 = 3.2;
+const PASS: f64 = 3.2 / SPEED;
+/// How much faster than first drawn the animations run.
+const SPEED: f64 = 3.0;
+/// Loops of its animation a step plays before the tour moves on.
+const LOOPS: f64 = 4.0;
 
-/// How long a step stays before the tour moves on by itself.
+/// How long a step stays before the tour moves on by itself: four loops
+/// of its animation (a pair of keys loops once both have had a pass).
 fn dwell(s: &Step) -> f64 {
-    match s.anim {
-        Anim::Intro => 4.5,
-        Anim::Done => f64::INFINITY,
+    let one = match s.anim {
+        Anim::Done => return f64::INFINITY,
         Anim::Trim | Anim::Ripple | Anim::Shuttle | Anim::Marks | Anim::Edit => 2.0 * PASS,
-        _ => PASS * 1.5,
-    }
+        Anim::Targets => 3.0 * 0.9 / SPEED,
+        Anim::Panels => 3.0 * 1.6 / SPEED,
+        _ => PASS,
+    };
+    LOOPS * one
 }
 
 pub struct Tour {
@@ -88,7 +95,7 @@ impl Tour {
     /// (headless too, for shots); `SCRUB_NO_TOUR` keeps it shut.
     pub fn new(seen: bool, headless: bool) -> Self {
         if let Some(n) = std::env::var("SCRUB_TOUR").ok().and_then(|s| s.parse::<usize>().ok()) {
-            return Tour { open: true, step: n.min(STEPS.len() - 1), t0: None, manual: true };
+            return Tour { open: true, step: n.min(STEPS.len() - 1), t0: None, manual: false };
         }
         let off = seen || headless || std::env::var_os("SCRUB_NO_TOUR").is_some();
         Tour { open: !off, step: 0, t0: None, manual: false }
@@ -257,8 +264,8 @@ fn pressed_now(step: &Step, t: f64) -> Vec<&'static str> {
             }
         }
         Anim::Targets => {
-            let i = ((t / 0.9) as usize) % 3;
-            if (t / 0.9).fract() < 0.3 {
+            let i = ((t * SPEED / 0.9) as usize) % 3;
+            if (t * SPEED / 0.9).fract() < 0.3 {
                 v.push(step.keys[i]);
             }
         }
@@ -268,8 +275,8 @@ fn pressed_now(step: &Step, t: f64) -> Vec<&'static str> {
             }
         }
         Anim::Panels => {
-            let i = ((t / 1.6) as usize) % 3;
-            if (t / 1.6).fract() < 0.25 {
+            let i = ((t * SPEED / 1.6) as usize) % 3;
+            if (t * SPEED / 1.6).fract() < 0.25 {
                 v.push(step.keys[i]);
             }
         }
@@ -482,9 +489,9 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             let seg_len = 2.0 * PASS / 5.0;
             let mut x = 50.0f32;
             for s in speeds.iter().take(i) {
-                x += s * seg_len as f32 * 8.0;
+                x += s * seg_len as f32 * 8.0 * SPEED as f32;
             }
-            x += speed * (seg.fract() * seg_len) as f32 * 8.0;
+            x += speed * (seg.fract() * seg_len) as f32 * 8.0 * SPEED as f32;
             playhead(p, at(x.clamp(0.0, 100.0)));
             p.text(pos2(lane.center().x, lane.bottom() + 22.0), Align2::CENTER_CENTER, word, FontId::proportional(14.0), accent());
         }
@@ -535,7 +542,7 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             p.text(pos2(lane.center().x, lane.bottom() + 22.0), Align2::CENTER_CENTER, if ins { ",  insert" } else { ".  overwrite" }, FontId::proportional(14.0), accent());
         }
         Anim::Targets => {
-            let i = ((t / 0.9) as usize) % 3;
+            let i = ((t * SPEED / 0.9) as usize) % 3;
             for (row, name) in ["V3", "V2", "V1"].iter().enumerate() {
                 let tr = 2 - row;
                 let y = area.top() + 14.0 + row as f32 * 38.0;
@@ -589,8 +596,8 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
         }
         Anim::Panels => {
             // Four panels; Q solos the hovered one, W closes it, H the hints.
-            let i = ((t / 1.6) as usize) % 3;
-            let f = (t / 1.6).fract() as f32;
+            let i = ((t * SPEED / 1.6) as usize) % 3;
+            let f = (t * SPEED / 1.6).fract() as f32;
             let r = area.shrink(4.0);
             let half = r.width() * 0.5;
             let panes = [
@@ -690,5 +697,35 @@ mod tests {
     fn steps_end_on_done() {
         assert!(STEPS.last().is_some_and(|s| s.anim == Anim::Done));
         assert!(dwell(STEPS.last().unwrap()).is_infinite());
+    }
+
+    fn frame(ctx: &egui::Context, tour: &mut Tour, time: f64) {
+        let input = egui::RawInput { time: Some(time), ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| {
+            tour.show(ui.ctx());
+        });
+    }
+
+    #[test]
+    fn an_untouched_step_moves_on_when_its_loops_are_done() {
+        for from in 0..STEPS.len() - 1 {
+            let ctx = egui::Context::default();
+            let mut tour = Tour { open: true, step: from, t0: None, manual: false };
+            let end = dwell(&STEPS[from]);
+            frame(&ctx, &mut tour, 0.0);
+            frame(&ctx, &mut tour, end - 0.01);
+            assert_eq!(tour.step, from, "left early");
+            frame(&ctx, &mut tour, end + 0.01);
+            assert_eq!(tour.step, from + 1, "did not move on");
+        }
+    }
+
+    #[test]
+    fn a_step_chosen_by_hand_stays() {
+        let ctx = egui::Context::default();
+        let mut tour = Tour { open: true, step: 1, t0: None, manual: true };
+        frame(&ctx, &mut tour, 0.0);
+        frame(&ctx, &mut tour, 100.0);
+        assert_eq!(tour.step, 1);
     }
 }
