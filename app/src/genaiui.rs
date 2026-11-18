@@ -1872,9 +1872,21 @@ fn run_ui(
                 }
             }
             if *stale {
-                ui.colored_label(theme::warn(), small("something changed since this price: get the price again"));
+                ui.colored_label(theme::warn(), small("the network changed since this price, so it no longer applies"));
             }
             ui.horizontal(|ui| {
+                // A price for something since changed cannot be paid: the
+                // one thing to do is ask again, so that is the button.
+                if *stale {
+                    let b = ui.add(egui::Button::new(egui::RichText::new("get price again").strong()));
+                    if b.on_hover_text("free: nothing is sent to a model, nothing is charged").clicked() {
+                        act = Some(prepare());
+                    }
+                    if ui.small_button("cancel").clicked() {
+                        act = Some(cancel());
+                    }
+                    return;
+                }
                 let label = match &price {
                     Some(p) => format!("pay {p} & run"),
                     None => "run without a price".to_string(),
@@ -2555,6 +2567,11 @@ impl Gfx {
         if self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Running { .. })) {
             let r = self.jobs.genai.run.take().unwrap();
             self.jobs.genai.background.push(r);
+        }
+        // A price that is waiting to be paid has sent nothing: asking
+        // again (the network changed under it) replaces it.
+        if self.jobs.genai.run.as_ref().is_some_and(|r| r.node == node && matches!(r.phase, Phase::Ready { .. })) {
+            self.jobs.genai.run = None;
         }
         // One run is PREPARED at a time; and the same one is not started
         // twice while it is going.
