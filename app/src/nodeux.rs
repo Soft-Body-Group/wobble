@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn a_chain_lays_out_straight_and_in_flow_order() {
         let mut g = EditorGraph::default();
-        let r = g.add(NodeKind::Read { source: 0, path: String::new(), range: None, ram_cache: false, nvme_cache: true, layer: None, input: Default::default(), multi: false, start: None, first: None, last: None, edges: Default::default(), cache_on_play: true, single: Default::default(), eight_bit: false }, Pos2::new(300.0, -80.0));
+        let r = g.add(NodeKind::Read { source: 0, path: String::new(), range: None, ram_cache: false, nvme_cache: true, layer: None, input: Default::default(), multi: false, start: None, first: None, last: None, edges: Default::default(), cache_on_play: true, single: Default::default(), eight_bit: false, scale: Default::default() }, Pos2::new(300.0, -80.0));
         let a = g.add(grade(), Pos2::new(-90.0, 400.0));
         let b = g.add(grade(), Pos2::new(700.0, 20.0));
         let c = g.add(grade(), Pos2::new(0.0, -300.0));

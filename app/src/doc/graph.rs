@@ -1160,7 +1160,7 @@ impl EditorGraph {
                     {
                         if let NodeKind::Read {
                             path, range, ram_cache, nvme_cache, input, start, first, last,
-                            edges, cache_on_play, ..
+                            edges, cache_on_play, scale, ..
                         } = &read.kind
                         {
                             kind = NodeKind::Read {
@@ -1187,6 +1187,7 @@ impl EditorGraph {
                                 // Load's own packing is for its own pixels.
                                 single: Default::default(),
                                 eight_bit: false,
+                                scale: *scale,
                             };
                         }
                     }

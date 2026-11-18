@@ -754,6 +754,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A Load's own scale is part of what an entry IS: the same file at two
+    /// scales is two entries, and neither answers for the other or for the
+    /// full-size frame.
+    #[test]
+    fn a_load_scale_has_its_own_entry() {
+        use crate::decode::{LoadScale, Pack};
+        let dir = std::env::temp_dir().join(format!("gcf-scale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dc = DiskCache::new(&dir, u64::MAX).unwrap();
+        let src = dir.join("plate.0001.exr");
+        std::fs::write(&src, b"not really an exr").unwrap();
+        let tag = |scale| Pack { scale, ..Default::default() }.tag();
+        let mut seen = std::collections::HashSet::new();
+        for s in LoadScale::ALL {
+            let file = dc.frame_file_packed(&src, None, 0, 1, tag(s)).unwrap();
+            assert!(seen.insert(file), "{s:?} shares an entry");
+        }
+        assert_eq!(dc.frame_file_packed(&src, None, 0, 1, tag(LoadScale::Full)), dc.frame_file(&src));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn magic_of(file: &Path) -> u32 {
         let mut f = std::fs::File::open(file).unwrap();
         let mut b = [0u8; 4];

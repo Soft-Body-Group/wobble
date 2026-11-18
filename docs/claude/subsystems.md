@@ -1027,6 +1027,21 @@ What must stay true:
   the other pane's. The bake loops used to stamp nothing, and a Bake or
   Render of a Layer stacking one plate came out BLACK; `--test-stress`
   holds the bake to the live picture.
+- **A Load's own proxy is part of the pack** (`Read.scale`,
+  `decode::LoadScale`, `Pack::scale`). `seq.info` stays the plate, so format
+  resolution, Transforms, trackers and the panel never see it; `Pack::dims`,
+  `frame_bytes`, the NVMe tag and the RAM tier's `adopt_ram` key all do.
+  `Pack::pack` area-averages on the way into the caches (CPU, because the
+  tiers are CPU buffers; once per frame, then every hit is the small frame).
+  It averages decoder CODE VALUES, before the input transform, as the
+  comp-wide `ProxyDecoder` does: a small approximation on log plates.
+  `Pack.window` stays in plate pixels (`rig_windows` compares against it);
+  `stored_window` is the box in the texture. The leaf samples at
+  `position * k - xy` from `Pack::placement`, one `window_slot` per instance,
+  so a scaled reader is structural and the numbers are uniforms. A Load's
+  ChannelSelect layers follow its scale; Cryptomatte readers do not (an id
+  cannot be averaged). Shared full decodes are unscaled, so Loads of one file
+  at different scales still decode it once.
 - **One decode feeds every reader of the file** (`shared_full`): a packed
   or windowed reader packs from the full frame in a small shared store
   keyed by file, frame, layer, proxy and the file's stamp; a second ask

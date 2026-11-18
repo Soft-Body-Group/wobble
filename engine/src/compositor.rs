@@ -899,6 +899,7 @@ impl Compositor {
             Some(old)
                 if old.plate == plate
                     && reader_format(old.pack) == reader_format(pack)
+                    && old.pack.scale == pack.scale
                     && (old.pack.window.is_some() || pack.window.is_some()) =>
             {
                 Some(old)
@@ -924,7 +925,7 @@ impl Compositor {
         let mut tex = tex;
         tex.plate = plate;
         if let Some(old) = carry {
-            let rect = |p: &crate::decode::Pack, i: ImageInfo| match p.window.and_then(|w| w.fit(plate)) {
+            let rect = |p: &crate::decode::Pack, i: ImageInfo| match p.stored_window(plate) {
                 Some(w) => (w.x, w.y, w.w, w.h),
                 None => (0, 0, i.width, i.height),
             };

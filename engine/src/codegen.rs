@@ -34,10 +34,11 @@ pub struct ParamLayout {
     /// params after the inverse rows (`MOD_XFORM_SLOTS` more), which is
     /// what a per-pixel partial transform is rebuilt from.
     pub modulated: std::collections::HashSet<NodeId>,
-    /// One slot per WINDOWED reader instance (`Graph::reader_windows`): the
-    /// corner of the window its texture holds, which the leaf subtracts
-    /// from the sample position. Per instance, not per node — one Load
-    /// reached on four time paths is four textures with four windows.
+    /// One slot per reader instance whose texture is not simply the plate
+    /// (`Graph::reader_windows`): xy is the corner of the window it holds,
+    /// zw the scale it is stored at, and the leaf samples at
+    /// `position * zw - xy`. Per instance, not per node — one Load reached
+    /// on four time paths is four textures with four windows.
     pub window_slot: HashMap<(NodeId, TimeKey), usize>,
 }
 
@@ -1899,9 +1900,14 @@ fn emit(
             // each holding its own frame.
             let idx = cx.bind(SourceBinding::Reader(cx.graph.slot_for(node, tkey, *source)));
             let v = fresh(tmp);
-            // A windowed reader's texture holds one box of the plate: step
-            // back by the box's corner (sample_px is black outside it).
-            let at = cx.layout.window_slot.get(&(node, tkey)).map(|s| format!("({pos} - P.v[{s}].xy)"));
+            // The texture may be a smaller copy of the plate and may hold
+            // one box of it: scale into its pixels, then step back by the
+            // box's corner (sample_px is black outside it).
+            let at = cx
+                .layout
+                .window_slot
+                .get(&(node, tkey))
+                .map(|s| format!("({pos} * P.v[{s}].zw - P.v[{s}].xy)"));
             let pos = at.as_deref().unwrap_or(pos);
             if single.is_on() {
                 // One stored channel (an R texture, `decode::Pack`): the
@@ -4052,10 +4058,10 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
     v[0] = out_size[0];
     v[1] = out_size[1];
     for (inst, slot) in &layout.window_slot {
-        if let Some(o) = graph.reader_windows.get(inst) {
-            v[slot * 4] = o[0];
-            v[slot * 4 + 1] = o[1];
-        }
+        // Absent (a layout a moment older than the graph): the plate as it
+        // is, not a scale of zero.
+        let o = graph.reader_windows.get(inst).copied().unwrap_or([0.0, 0.0, 1.0, 1.0]);
+        v[slot * 4..slot * 4 + 4].copy_from_slice(&o);
     }
     for (id, slot) in &layout.node_slot {
         let base = slot * 4;
@@ -4977,6 +4983,23 @@ mod tests {
 
     /// No shear and no taper is the plain affine, bit for bit: every older
     /// setup renders what it always did.
+    /// A leaf whose texture is a smaller copy of the plate scales the
+    /// position into it, from a uniform: the size changes no shader.
+    #[test]
+    fn a_scaled_reader_samples_through_its_slot() {
+        let mut g = Graph::default_poc();
+        let read = *g.nodes.iter().find(|(_, k)| matches!(k, NodeKind::Read { .. })).unwrap().0;
+        g.reader_windows.insert((read, TIME_KEY_ROOT), [3.0, 4.0, 0.5, 0.25]);
+        let plan = generate(&g);
+        let slot = plan.layout.window_slot[&(read, TIME_KEY_ROOT)];
+        assert!(plan.main.wgsl.contains(&format!("* P.v[{slot}].zw - P.v[{slot}].xy")));
+        let v = pack_params(&g, &plan.layout, [64.0, 64.0]);
+        assert_eq!(v[slot * 4..slot * 4 + 4], [3.0, 4.0, 0.5, 0.25]);
+        g.reader_windows.clear();
+        let v = pack_params(&g, &plan.layout, [64.0, 64.0]);
+        assert_eq!(v[slot * 4..slot * 4 + 4], [0.0, 0.0, 1.0, 1.0], "a stale layout samples the plate");
+    }
+
     #[test]
     fn an_unbent_transform_is_the_affine_it_always_was() {
         let t = crate::graph::TransformParams { rotate: 30.0, scale: [1.5, 0.5], ..Default::default() };
@@ -6616,6 +6639,7 @@ mod plugin_codegen_tests {
                 cache_on_play: true,
                 single: Default::default(),
                 eight_bit: false,
+                scale: Default::default(),
             },
         );
         g.nodes.insert(

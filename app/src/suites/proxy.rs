@@ -154,8 +154,69 @@ impl Gfx {
                         pt.toggles, pt.pre, pt.sharp
                     ));
                 }
-                pt.stage = if pt.toggles < 6 { 3 } else { 9 };
+                pt.stage = if pt.toggles < 6 { 3 } else { 30 };
                 pt.clock = now;
+            }
+            // A Load's own scale: the plain plate, then the same plate kept
+            // at half size. Everything downstream must see the same picture
+            // in the same place on the same canvas, from a smaller texture.
+            30 => {
+                if let Some(n) = self.egraph.node_mut(pt.blur) {
+                    n.disabled = true;
+                }
+                pt.stage = 31;
+                pt.clock = now;
+            }
+            31 if el > 1.0 => {
+                pt.blocks = self.output_blocks().unwrap_or_default();
+                pt.canvas = self.comp.output_size();
+                self.set_test_load_scale(pt.blur, engine::decode::LoadScale::Half);
+                pt.shown_at_toggle = self.displayed_total;
+                pt.stage = 32;
+                pt.clock = now;
+            }
+            // Half of the plate; then the comp proxy on top: a quarter.
+            32 | 33 => {
+                let quarter = pt.stage == 33;
+                let tex = self.test_load_texture(pt.blur);
+                let want = tex.map(|(plate, _)| engine::decode::LoadScale::Half.frame(plate));
+                let good = tex.is_some_and(|(_, have)| Some(have) == want);
+                if good && self.displayed_total > pt.shown_at_toggle && el > 0.8 {
+                    let now_blocks = self.output_blocks().unwrap_or_default();
+                    let off = pt
+                        .blocks
+                        .iter()
+                        .zip(&now_blocks)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0f32, f32::max);
+                    println!(
+                        "PROXY: Load scale 0.5{}: texture {:?}, worst block off by {off:.2}/255",
+                        if quarter { " + comp proxy" } else { "" },
+                        tex.map(|t| t.1),
+                    );
+                    if now_blocks.len() != pt.blocks.len() || off > 4.0 {
+                        pt.fails.push(format!("Load scale moved the picture (off by {off:.2})"));
+                    }
+                    if !quarter {
+                        if self.comp.output_size() != pt.canvas {
+                            pt.fails.push(format!(
+                                "Load scale changed the canvas: {:?} -> {:?}",
+                                pt.canvas,
+                                self.comp.output_size()
+                            ));
+                        }
+                        self.proxy = 0.5;
+                        self.playback_dirty = true;
+                        self.last_engine_graph = None;
+                        pt.shown_at_toggle = self.displayed_total;
+                        pt.stage = 33;
+                    } else {
+                        pt.stage = 9;
+                    }
+                    pt.clock = now;
+                } else if el > 15.0 {
+                    fail_now(format!("Load scale: texture {tex:?} wanted {want:?}"));
+                }
             }
             9 => {
                 for f in &pt.fails {
@@ -164,7 +225,8 @@ impl Gfx {
                 if pt.fails.is_empty() {
                     println!(
                         "PROXY TEST PASS: 6 toggles, the comp re-rendered at the new size with \
-                         its effects every time, no edit needed"
+                         its effects every time, no edit needed; a Load kept at half size \
+                         stays in place, alone and under proxy"
                     );
                     std::process::exit(0);
                 }
@@ -174,5 +236,25 @@ impl Gfx {
             _ => {}
         }
         self.test.proxy = Some(pt);
+    }
+
+    /// Set the scale of the Load feeding `node`, as the panel's menu does.
+    fn set_test_load_scale(&mut self, node: u64, to: engine::decode::LoadScale) {
+        let Some(read) = self.egraph.input_of(node, 0) else { return };
+        if let Some(NodeKind::Read { scale, .. }) = self.egraph.node_mut(read).map(|n| &mut n.kind) {
+            *scale = to;
+        }
+        self.playback_dirty = true;
+    }
+
+    /// The (plate, stored size) of the Load feeding `node`.
+    fn test_load_texture(
+        &self,
+        node: u64,
+    ) -> Option<(engine::decode::ImageInfo, engine::decode::ImageInfo)> {
+        let read = self.egraph.input_of(node, 0)?;
+        let slot = self.reader_slots.iter().find(|(i, _)| i.node == read)?.1;
+        let t = self.comp.reader_texture(slot)?;
+        Some((t.plate, t.info))
     }
 }

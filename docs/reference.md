@@ -2866,6 +2866,16 @@ Load's **RAM cache** on makes a second pass over the same range immediate.
   of serving stale pixels); eviction is oldest-first under the budget.
   Every Load node has **RAM cache / NVMe cache** toggles and a **frame
   range** (in/out) in its properties.
+- **A Load's own proxy** (its panel's **proxy** menu: 1, 0.75, 0.5, 0.25;
+  the panel shows the size kept, e.g. `3072x1620 cached`). The frames are
+  area-averaged once, right after the decode, so RAM, NVMe, the staging ring
+  and the GPU all hold the small frame: a 6K plate at 0.5 takes a quarter of
+  the space and loads that much faster, and the rest of the comp keeps its
+  resolution. The Load stays the size it was: its format, the canvas, and
+  every Transform, roto shape and tracker in pixels are unchanged, only
+  softer. It multiplies with the comp-wide proxy, each scale has its own cache
+  entries, and it is saved with the comp. **Renders use it too**, so set it
+  back to 1 before a final Write that needs the plate's full detail.
 
 **A Load's range can run past its source, so you can watch a render arrive.**
 Set OUT beyond the frames that exist and the timeline covers them anyway:

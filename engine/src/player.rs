@@ -2252,6 +2252,7 @@ impl Player {
                         && u.seq.frames == seq.frames
                         && u.seq.offset == seq.offset
                         && u.seq.proxy == seq.proxy
+                        && u.seq.pack == seq.pack
                 }) {
                     u.readers.push(r);
                 } else {

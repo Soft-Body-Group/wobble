@@ -4165,9 +4165,10 @@ struct Playback {
     player: Player,
     /// player reader index -> compositor reader slot
     slots: Vec<usize>,
-    /// player reader index -> the WINDOW of the plate its frames hold, in
-    /// the reader's own (proxy) pixels; `None` = the whole frame.
-    windows: Vec<Option<engine::decode::Window>>,
+    /// player reader index -> where its stored pixels sit in the plate
+    /// (`Pack::placement`: a window's corner and the Load's own scale);
+    /// `None` = the texture IS the plate.
+    windows: Vec<Option<[f32; 4]>>,
 }
 
 /// Padding round a reader window, in plate pixels: a consumer may sample
@@ -4202,23 +4203,22 @@ fn window_for(roi: [f32; 4], info: engine::decode::ImageInfo) -> Option<engine::
 }
 
 /// Stamp what the rig knows into a graph about to be compiled or packed:
-/// which reader slot each time path samples, and where each windowed
-/// reader's box sits. EVERY graph handed to a compositor fed by the rig
-/// needs this — the display's, a bake's, the other pane's — or its leaves
+/// which reader slot each time path samples, and where each windowed or
+/// scaled reader's pixels sit. EVERY graph handed to a compositor fed by the
+/// rig needs this — the display's, a bake's, the other pane's — or its leaves
 /// bind the wrong slot and sample a window as if it were the frame.
 fn stamp_readers(
     g: &mut engine::graph::Graph,
     instances: &[(engine::graph::ReaderInstance, usize)],
     slots: &[usize],
-    windows: &[Option<engine::decode::Window>],
+    windows: &[Option<[f32; 4]>],
 ) {
     g.time_slots = instances.iter().map(|(i, slot)| ((i.node, i.key), *slot)).collect();
     g.reader_windows = instances
         .iter()
         .filter_map(|(i, slot)| {
             let r = slots.iter().position(|s| s == slot)?;
-            let w = (*windows.get(r)?)?;
-            Some(((i.node, i.key), [w.x as f32, w.y as f32]))
+            Some(((i.node, i.key), (*windows.get(r)?)?))
         })
         .collect();
 }
@@ -6054,6 +6054,10 @@ struct ProxyTest {
     shown_at_toggle: u64,
     toggles: u32,
     fails: Vec<String>,
+    /// The plain plate's coarse picture, for the Load scale stages.
+    blocks: Vec<f32>,
+    /// The canvas those were taken on.
+    canvas: Option<(u32, u32)>,
 }
 
 impl ProxyTest {
@@ -6070,6 +6074,8 @@ impl ProxyTest {
             shown_at_toggle: 0,
             toggles: 0,
             fails: Vec::new(),
+            blocks: Vec::new(),
+            canvas: None,
         }
     }
 }
@@ -7249,7 +7255,7 @@ impl Gfx {
         else {
             return;
         };
-        let pack = self.read_pack(node).tag();
+        let pack = self.read_pack(node);
         if let Some(pb) = &self.playback {
             if let Some(i) = pb.slots.iter().position(|s| *s == source) {
                 pb.player.drop_ram(i);
@@ -7264,10 +7270,13 @@ impl Gfx {
                 let (p, f) = (&seq.frames[i as usize], seq.file_frame(i));
                 for proxy in [seq.proxy, seq.proxy * 2] {
                     // The pack it has now, and the whole frame it may have
-                    // been stored as before.
-                    for tag in [pack, 0] {
-                        if let Some(file) = disk.frame_file_packed(p, layer.as_deref(), f, proxy, tag) {
-                            let _ = std::fs::remove_file(file);
+                    // been stored as before, at every scale it may have had.
+                    for base in [pack, Default::default()] {
+                        for scale in engine::decode::LoadScale::ALL {
+                            let tag = engine::decode::Pack { scale, ..base }.tag();
+                            if let Some(file) = disk.frame_file_packed(p, layer.as_deref(), f, proxy, tag) {
+                                let _ = std::fs::remove_file(file);
+                            }
                         }
                     }
                 }
@@ -7339,11 +7348,12 @@ impl Gfx {
     /// RG when its layer has two channels.
     fn read_pack(&self, read: u64) -> engine::decode::Pack {
         match self.egraph.node(read).map(|n| &n.kind) {
-            Some(NodeKind::Read { single, eight_bit, layer, .. }) => engine::decode::Pack {
+            Some(NodeKind::Read { single, eight_bit, layer, scale, .. }) => engine::decode::Pack {
                 single: *single,
                 eight: *eight_bit,
                 rg: self.two_channels(read, layer.as_deref()),
                 window: None,
+                scale: *scale,
             },
             _ => Default::default(),
         }
@@ -7353,17 +7363,17 @@ impl Gfx {
         use engine::decode::{Pack, SingleChannel};
         match self.egraph.node(id).map(|n| &n.kind) {
             Some(NodeKind::GraphBake { mask: true, matte_half, .. }) => {
-                Pack { single: SingleChannel::Red, eight: !*matte_half, rg: false, window: None }
+                Pack { single: SingleChannel::Red, eight: !*matte_half, ..Default::default() }
             }
             // A Crop's own bake: what the crop passes on, which is its input's.
             Some(NodeKind::SoftCrop(p)) if p.bake.is_some() && p.matte => {
-                Pack { single: SingleChannel::Red, eight: true, rg: false, window: None }
+                Pack { single: SingleChannel::Red, eight: true, ..Default::default() }
             }
             Some(NodeKind::SoftCrop(p)) if p.bake.is_some() => editor::Reduced::of(&self.egraph, id)
                 .map_or(Pack::default(), |r| Pack {
                     single: if r.single.is_on() { SingleChannel::Red } else { SingleChannel::Off },
                     eight: r.eight && r.coded,
-                    rg: false, window: None,
+                    ..Default::default()
                 }),
             Some(NodeKind::GraphBake { .. }) => self
                 .egraph
@@ -7372,7 +7382,7 @@ impl Gfx {
                 .map_or(Pack::default(), |r| Pack {
                     single: if r.single.is_on() { SingleChannel::Red } else { SingleChannel::Off },
                     eight: r.eight && r.coded,
-                    rg: false, window: None,
+                    ..Default::default()
                 }),
             _ => Pack::default(),
         }
@@ -9742,11 +9752,13 @@ impl Gfx {
                         let opts = ReaderCacheOpts { ram, disk, write: true };
                         let layer =
                             (!p.layer.is_empty()).then(|| p.layer.clone());
-                        let seq = if self.two_channels(rid, layer.as_deref()) {
-                            Arc::new(seq.packed(engine::decode::Pack { rg: true, ..Default::default() }))
-                        } else {
-                            seq
+                        // A layer of the Load is kept at the Load's scale.
+                        let pack = engine::decode::Pack {
+                            rg: self.two_channels(rid, layer.as_deref()),
+                            scale: self.read_pack(rid).scale,
+                            ..Default::default()
                         };
+                        let seq = if pack.is_default() { seq } else { Arc::new(seq.packed(pack)) };
                         (slot, seq, opts, map.clone(), layer)
                     })
                 }
@@ -9793,8 +9805,8 @@ impl Gfx {
                 }
             }
         }
-        let windows: Vec<Option<engine::decode::Window>> =
-            entries.iter().map(|(_, s, _, _, _)| s.pack.window.and_then(|w| w.fit(s.info))).collect();
+        let windows: Vec<Option<[f32; 4]>> =
+            entries.iter().map(|(_, s, _, _, _)| s.pack.placement(s.info)).collect();
         let mut refused = 0;
         for (slot, seq, _, _, _) in &entries {
             if !self.comp.ensure_reader_packed(*slot, seq.info, seq.pack) {
@@ -13722,6 +13734,23 @@ impl Gfx {
             }
         }
         Some((sum / n.max(1) as f64) as f32 * w as f32 / w_full.max(1) as f32)
+    }
+
+    /// The output as 16x9 block means (0..255). Coarse on purpose: a softer
+    /// picture matches, a moved or rescaled one does not.
+    fn output_blocks(&self) -> Option<Vec<f32>> {
+        let (w, h, rgba) = self.read_output_rgba8().ok()?;
+        let (w, h) = (w as usize, h as usize);
+        let mut sum = vec![(0.0f64, 0u32); 16 * 9];
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y * w + x) * 4;
+                let b = &mut sum[(y * 9 / h) * 16 + x * 16 / w];
+                b.0 += (rgba[i] as f64 + rgba[i + 1] as f64 + rgba[i + 2] as f64) / 3.0;
+                b.1 += 1;
+            }
+        }
+        Some(sum.iter().map(|(s, n)| (*s / (*n).max(1) as f64) as f32).collect())
     }
 
     /// Write what a suite currently has on screen to `$WOBBLE_DUMP_DIR`, so
@@ -23664,6 +23693,7 @@ impl Gfx {
                         cache_on_play,
                         single,
                         eight_bit,
+                        scale,
                         ..
                     } => {
                         nodes::read::panel(ui, nodes::read::Cx {
@@ -23681,6 +23711,7 @@ impl Gfx {
                                 cache_on_play,
                                 single,
                                 eight_bit,
+                                scale,
                                 asset,
                                 project_only,
                                 node,

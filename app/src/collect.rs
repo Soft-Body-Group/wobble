@@ -689,7 +689,7 @@ mod tests {
         use engine::graph::NodeKind;
         let mut g = crate::editor::EditorGraph::default();
         let id = g.add(
-            NodeKind::Read { source: 0, path: "/p/bg.####.exr".into(), range: None, ram_cache: false, nvme_cache: true, layer: None, input: Default::default(), multi: false, start: None, first: None, last: None, edges: Default::default(), cache_on_play: true, single: Default::default(), eight_bit: false },
+            NodeKind::Read { source: 0, path: "/p/bg.####.exr".into(), range: None, ram_cache: false, nvme_cache: true, layer: None, input: Default::default(), multi: false, start: None, first: None, last: None, edges: Default::default(), cache_on_play: true, single: Default::default(), eight_bit: false, scale: Default::default() },
             egui::Pos2::ZERO,
         );
         g.nodes.get_mut(&id).unwrap().asset = Some(AssetRef { id: 4, ..Default::default() });

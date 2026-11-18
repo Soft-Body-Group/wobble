@@ -14307,7 +14307,7 @@ mod placement_tests {
                 first: None,
                 last: None,
                 edges: Default::default(), cache_on_play: true,
-                single: Default::default(), eight_bit: false,
+                single: Default::default(), eight_bit: false, scale: Default::default(),
             },
             Pos2::ZERO,
         );

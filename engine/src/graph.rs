@@ -165,6 +165,14 @@ pub enum NodeKind {
         /// again. Lossless for an 8-bit source. Not topology at all.
         #[cfg_attr(feature = "serde", serde(default))]
         eight_bit: bool,
+        /// This Load's own proxy: its frames are kept at this resolution in
+        /// every cache tier, the ring and VRAM. The format stays the plate's.
+        /// Skipped at the default so an old setup's bakes keep their keys.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "crate::decode::LoadScale::is_full")
+        )]
+        scale: crate::decode::LoadScale,
     },
     Transform(TransformParams),
     Grade(GradeParams),
@@ -6002,6 +6010,7 @@ impl NodeKind {
             cache_on_play: true,
             single: crate::decode::SingleChannel::Off,
             eight_bit: false,
+            scale: Default::default(),
         }
     }
 
@@ -8051,12 +8060,12 @@ pub struct Graph {
     /// only when the time-path structure does, never when a time param is
     /// dragged. Empty falls back to each node's own `source`.
     pub time_slots: HashMap<(NodeId, TimeKey), usize>,
-    /// Reader instances whose texture holds only a WINDOW of the plate
-    /// (`decode::Window`): where that window's corner sits, in the reader's
-    /// own pixels. Filled by the app from the rig it built. WHICH instances
-    /// are windowed is structural (the leaf samples at an offset); the
-    /// corner itself is a uniform.
-    pub reader_windows: HashMap<(NodeId, TimeKey), [f32; 2]>,
+    /// Reader instances whose texture is not simply the plate: it holds a
+    /// WINDOW of it (`decode::Window`), a smaller copy (`decode::LoadScale`),
+    /// or both. `[x, y, kx, ky]` from `Pack::placement`: the leaf samples at
+    /// `position * k - xy`. Filled by the app from the rig it built. WHICH
+    /// instances have one is structural; the numbers are a uniform.
+    pub reader_windows: HashMap<(NodeId, TimeKey), [f32; 4]>,
     /// The space every node's pixels are in between the input transforms and
     /// the Write. STRUCTURAL: it picks the matrix compiled into every input
     /// transform, and it sets the luma weights and the keyer's Oklab frame,
@@ -8746,14 +8755,28 @@ mod reader_roi_tests {
         assert_eq!(nest.reader_rois().values().next(), Some(&Some([0.5, 0.25, 0.75, 0.75])));
     }
 
+    /// A setup from before Load scales loads at full size, and a Load left
+    /// at full size saves (and so keys its bakes) exactly as it did.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_load_scale_is_absent_until_set() {
+        let mut json = serde_json::to_value(NodeKind::read(0, "plate.exr")).unwrap();
+        assert!(json["Read"].get("scale").is_none(), "{json}");
+        let back: NodeKind = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(back, NodeKind::Read { scale: crate::decode::LoadScale::Full, .. }));
+        json["Read"]["scale"] = "Half".into();
+        let back: NodeKind = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, NodeKind::Read { scale: crate::decode::LoadScale::Half, .. }));
+    }
+
     /// Which instances are windowed is topology; where the window sits is not.
     #[test]
     fn a_window_corner_is_not_topology() {
         let mut g = Graph::default_poc();
         let h0 = g.topology_hash();
-        g.reader_windows.insert((1, TIME_KEY_ROOT), [64.0, 0.0]);
+        g.reader_windows.insert((1, TIME_KEY_ROOT), [64.0, 0.0, 1.0, 1.0]);
         let h1 = g.topology_hash();
-        g.reader_windows.insert((1, TIME_KEY_ROOT), [128.0, 64.0]);
+        g.reader_windows.insert((1, TIME_KEY_ROOT), [128.0, 64.0, 0.5, 0.5]);
         assert_ne!(h0, h1);
         assert_eq!(h1, g.topology_hash());
     }

@@ -70,6 +70,60 @@ impl SingleChannel {
     }
 }
 
+/// A Load's own proxy: the resolution its frames are kept at, on top of
+/// (and independent of) the comp-wide proxy switch. The picture stays where
+/// it was: the format, the canvas and every pixel-unit number downstream are
+/// the plate's, and only the stored frames are smaller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum LoadScale {
+    #[default]
+    Full,
+    ThreeQuarters,
+    Half,
+    Quarter,
+}
+
+impl LoadScale {
+    pub const ALL: [LoadScale; 4] =
+        [LoadScale::Full, LoadScale::ThreeQuarters, LoadScale::Half, LoadScale::Quarter];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LoadScale::Full => "1",
+            LoadScale::ThreeQuarters => "0.75",
+            LoadScale::Half => "0.5",
+            LoadScale::Quarter => "0.25",
+        }
+    }
+
+    /// `&self` so serde can skip the default: a Load that never set it
+    /// saves, and keys its bakes, exactly as it always did.
+    pub fn is_full(&self) -> bool {
+        *self == LoadScale::Full
+    }
+
+    /// Quarters kept. Integers, so a size never depends on float rounding.
+    fn quarters(self) -> u32 {
+        match self {
+            LoadScale::Full => 4,
+            LoadScale::ThreeQuarters => 3,
+            LoadScale::Half => 2,
+            LoadScale::Quarter => 1,
+        }
+    }
+
+    /// `n` pixels at this scale, rounded up (the way proxy halves).
+    pub fn of(self, n: u32) -> u32 {
+        (n as u64 * self.quarters() as u64).div_ceil(4).max(1) as u32
+    }
+
+    /// The whole frame at this scale.
+    pub fn frame(self, info: ImageInfo) -> ImageInfo {
+        ImageInfo { width: self.of(info.width), height: self.of(info.height) }
+    }
+}
+
 /// How a reader's frames are STORED from the decode on: in the RAM and NVMe
 /// tiers, the staging ring and the GPU texture. The default is the classic
 /// RGBA half float. A matte-like plate at 7680² is 450 MB a frame that way;
@@ -117,6 +171,24 @@ impl Window {
     pub fn contains(&self, o: &Window) -> bool {
         o.x >= self.x && o.y >= self.y && o.x + o.w <= self.x + self.w && o.y + o.h <= self.y + self.h
     }
+
+    /// The same box of the frame at `scale`: rounded outward, plus one
+    /// stored pixel each way, because a filtered read half a stored pixel
+    /// past the box reaches further than the plate-pixel padding did.
+    fn at_scale(self, scale: LoadScale) -> Window {
+        if scale.is_full() {
+            return self;
+        }
+        let q = scale.quarters();
+        let x = (self.x * q / 4).saturating_sub(1);
+        let y = (self.y * q / 4).saturating_sub(1);
+        Window {
+            x,
+            y,
+            w: ((self.x + self.w) * q).div_ceil(4) + 1 - x,
+            h: ((self.y + self.h) * q).div_ceil(4) + 1 - y,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -134,6 +206,10 @@ pub struct Pack {
     /// what the decoder fills a two-channel layer's rgba with, so nothing
     /// downstream changes. `single` wins when both are set.
     pub rg: bool,
+    /// Keep the frame at this resolution (`LoadScale`): area-averaged here,
+    /// on the way into the caches, so every tier holds the small frame.
+    /// `window` stays in the pixels of the frame the decoder hands back.
+    pub scale: LoadScale,
 }
 
 impl Pack {
@@ -156,13 +232,38 @@ impl Pack {
         self.lanes() * if self.eight { 1 } else { 2 }
     }
 
-    /// The size of what is stored: the window's, else the frame's. This is
-    /// the reader texture's size and an upload's extent.
+    /// The box kept, in STORED pixels (the frame at `scale`); `None` when
+    /// all of it is.
+    pub fn stored_window(&self, info: ImageInfo) -> Option<Window> {
+        let w = self.window?.fit(info)?;
+        w.at_scale(self.scale).fit(self.scale.frame(info))
+    }
+
+    /// The size of what is stored: the window's, else the frame's at
+    /// `scale`. This is the reader texture's size and an upload's extent.
     pub fn dims(&self, info: ImageInfo) -> ImageInfo {
-        match self.window.and_then(|w| w.fit(info)) {
+        match self.stored_window(info) {
             Some(w) => ImageInfo { width: w.w, height: w.h },
-            None => info,
+            None => self.scale.frame(info),
         }
+    }
+
+    /// Where the stored pixels sit, for the leaf that samples them:
+    /// `[x, y, kx, ky]`, read as `position * k - xy`. `None` when a position
+    /// in the plate IS a position in the texture.
+    pub fn placement(&self, info: ImageInfo) -> Option<[f32; 4]> {
+        let win = self.stored_window(info);
+        if win.is_none() && self.scale.is_full() {
+            return None;
+        }
+        let f = self.scale.frame(info);
+        let (x, y) = win.map_or((0, 0), |w| (w.x, w.y));
+        Some([
+            x as f32,
+            y as f32,
+            f.width as f32 / info.width as f32,
+            f.height as f32 / info.height as f32,
+        ])
     }
 
     /// Row stride in bytes, padded to wgpu's 256-byte copy alignment.
@@ -190,16 +291,18 @@ impl Pack {
     }
 
     /// Folded into the NVMe key: two packs of one file are two entries.
-    /// 0 for the default, so every existing entry keeps its key.
+    /// 0 for the default, so every existing entry keeps its key. The scale
+    /// takes the bits above every channel tag (which stop at 14).
     pub fn tag(&self) -> u8 {
-        if self.single == SingleChannel::Off && !self.eight && !self.rg {
+        let channels = if self.single == SingleChannel::Off && !self.eight && !self.rg {
             0
         } else if self.single.is_on() || !self.rg {
             1 + self.single as u8 * 2 + self.eight as u8
         } else {
             // RG: past every single-channel tag (1 + 5 * 2 + 1 = 12).
             13 + self.eight as u8
-        }
+        };
+        channels | (self.scale as u8) << 5
     }
 
     /// Convert a decoded RGBA f16 frame (`info`'s staging layout) into this
@@ -207,6 +310,31 @@ impl Pack {
     /// be a mapped staging slot.
     pub fn pack(&self, src: &[f16], info: ImageInfo, dst: &mut [u8]) {
         use rayon::prelude::*;
+        if !self.scale.is_full() {
+            // Scale first, only the box that is kept; the rest of the pack
+            // then runs on that box as a frame of its own.
+            let frame = self.scale.frame(info);
+            let area = self.stored_window(info).unwrap_or(Window {
+                x: 0,
+                y: 0,
+                w: frame.width,
+                h: frame.height,
+            });
+            let kept = ImageInfo { width: area.w, height: area.h };
+            let rest = Pack { window: None, scale: LoadScale::Full, ..*self };
+            let stride = kept.row_stride_f16();
+            if rest.is_default() {
+                // Plain RGBA: straight into the slot, no second buffer.
+                if let Ok(out) = bytemuck::try_cast_slice_mut::<u8, f16>(dst) {
+                    resample_area(src, info, info.row_stride_f16(), frame, area, out, stride);
+                    return;
+                }
+            }
+            let mut small = vec![f16::ZERO; stride * area.h as usize];
+            resample_area(src, info, info.row_stride_f16(), frame, area, &mut small, stride);
+            rest.pack(&small, kept, dst);
+            return;
+        }
         let win = self.window.and_then(|w| w.fit(info));
         let (wx, wy) = win.map_or((0, 0), |w| (w.x as usize, w.y as usize));
         let d = self.dims(info);
@@ -327,6 +455,68 @@ pub fn downsample_half(
             }
         }
     }
+}
+
+/// One axis of an area resample: for each output pixel in `from..from + n`,
+/// the first source pixel it covers and how much of each it takes (the
+/// weights of a pixel sum to 1). Exact in integers: output pixel `d` covers
+/// `d * src .. (d + 1) * src` in units of `1 / out`, so both edges of the
+/// frame land on both edges of the output whatever the ratio.
+fn area_spans(src: u32, out: u32, from: u32, n: u32) -> Vec<(usize, Vec<f32>)> {
+    let (src, out) = (src as u64, out as u64);
+    (from as u64..(from + n) as u64)
+        .map(|d| {
+            let (a, b) = (d * src, (d + 1) * src);
+            let (first, end) = (a / out, b.div_ceil(out).min(src));
+            let weights = (first..end)
+                .map(|s| {
+                    let lap = b.min((s + 1) * out) - a.max(s * out);
+                    (lap as f64 / src as f64) as f32
+                })
+                .collect();
+            (first as usize, weights)
+        })
+        .collect()
+}
+
+/// Area-average an RGBA f16 frame down to `frame`, writing only `area` of
+/// the result into `out` (rows `out_stride` halfs apart). Written once per
+/// element, so `out` may be a mapped staging slot.
+pub fn resample_area(
+    src: &[f16],
+    info: ImageInfo,
+    src_stride: usize,
+    frame: ImageInfo,
+    area: Window,
+    out: &mut [f16],
+    out_stride: usize,
+) {
+    use half::slice::HalfFloatSliceExt;
+    use rayon::prelude::*;
+    let xs = area_spans(info.width, frame.width, area.x, area.w);
+    let ys = area_spans(info.height, frame.height, area.y, area.h);
+    // The source columns this box touches: the rest are never converted.
+    let x0 = xs.first().map_or(0, |s| s.0);
+    let x1 = xs.last().map_or(0, |s| s.0 + s.1.len());
+    let w = area.w as usize;
+    out[..out_stride * ys.len()].par_chunks_mut(out_stride).zip(&ys).for_each(|(row, (y0, wy))| {
+        let mut line = vec![0f32; (x1 - x0) * 4];
+        let mut sum = vec![0f32; w * 4];
+        for (j, &ky) in wy.iter().enumerate() {
+            let at = (y0 + j) * src_stride;
+            src[at + x0 * 4..at + x1 * 4].convert_to_f32_slice(&mut line);
+            for (px, (sx, wx)) in sum.chunks_exact_mut(4).zip(&xs) {
+                let texels = line[(sx - x0) * 4..].chunks_exact(4);
+                for (&kx, t) in wx.iter().zip(texels) {
+                    let k = kx * ky;
+                    for c in 0..4 {
+                        px[c] += t[c] * k;
+                    }
+                }
+            }
+        }
+        row[..w * 4].convert_from_f32_slice(&sum);
+    });
 }
 
 /// Half-resolution view over any decoder: headers report the halved frame,
@@ -1298,9 +1488,9 @@ mod pack_tests {
         let whole = Pack::default().frame_bytes(info);
         assert_eq!(whole, info.staging_bytes());
         for (pack, div) in [
-            (Pack { single: SingleChannel::Red, eight: false, rg: false, window: None }, 4),
-            (Pack { single: SingleChannel::Off, eight: true, rg: false, window: None }, 2),
-            (Pack { single: SingleChannel::Alpha, eight: true, rg: false, window: None }, 8),
+            (Pack { single: SingleChannel::Red, eight: false, rg: false, ..Default::default() }, 4),
+            (Pack { single: SingleChannel::Off, eight: true, rg: false, ..Default::default() }, 2),
+            (Pack { single: SingleChannel::Alpha, eight: true, rg: false, ..Default::default() }, 8),
         ] {
             assert_eq!(pack.frame_bytes(info) * div, whole, "{pack:?}");
             // The caches size and check a stored frame by this.
@@ -1308,7 +1498,7 @@ mod pack_tests {
         }
         // An odd width still pads every row to 256 bytes.
         let odd = ImageInfo { width: 301, height: 3 };
-        let p = Pack { single: SingleChannel::Red, eight: true, rg: false, window: None };
+        let p = Pack { single: SingleChannel::Red, eight: true, rg: false, ..Default::default() };
         assert_eq!(p.padded_row_bytes(odd), 512);
         assert_eq!(p.storage_info(odd).staging_bytes(), p.frame_bytes(odd));
     }
@@ -1360,7 +1550,7 @@ mod pack_tests {
         let mut seen = std::collections::HashSet::new();
         for single in SingleChannel::ALL {
             for eight in [false, true] {
-                assert!(seen.insert(Pack { single, eight, rg: false, window: None }.tag()), "{single:?} {eight}");
+                assert!(seen.insert(Pack { single, eight, rg: false, ..Default::default() }.tag()), "{single:?} {eight}");
             }
         }
     }
@@ -1369,21 +1559,21 @@ mod pack_tests {
     fn packing_keeps_the_picked_channel() {
         let info = ImageInfo { width: 5, height: 2 };
         let src = frame(info, |x, y| [x as f32 / 4.0, 0.5, 2.0, y as f32]);
-        let mut r8 = vec![0u8; Pack { single: SingleChannel::Red, eight: true, rg: false, window: None }.frame_bytes(info) as usize];
-        Pack { single: SingleChannel::Red, eight: true, rg: false, window: None }.pack(&src, info, &mut r8);
+        let mut r8 = vec![0u8; Pack { single: SingleChannel::Red, eight: true, rg: false, ..Default::default() }.frame_bytes(info) as usize];
+        Pack { single: SingleChannel::Red, eight: true, rg: false, ..Default::default() }.pack(&src, info, &mut r8);
         assert_eq!(&r8[..5], &[0, 64, 128, 191, 255]);
         // Clamped to 0..1 in 8 bits; alpha is row 1's 1.0.
-        let mut a8 = vec![0u8; Pack { single: SingleChannel::Alpha, eight: true, rg: false, window: None }.frame_bytes(info) as usize];
-        Pack { single: SingleChannel::Alpha, eight: true, rg: false, window: None }.pack(&src, info, &mut a8);
-        let row = Pack { single: SingleChannel::Alpha, eight: true, rg: false, window: None }.padded_row_bytes(info) as usize;
+        let mut a8 = vec![0u8; Pack { single: SingleChannel::Alpha, eight: true, rg: false, ..Default::default() }.frame_bytes(info) as usize];
+        Pack { single: SingleChannel::Alpha, eight: true, rg: false, ..Default::default() }.pack(&src, info, &mut a8);
+        let row = Pack { single: SingleChannel::Alpha, eight: true, rg: false, ..Default::default() }.padded_row_bytes(info) as usize;
         assert_eq!((a8[0], a8[row]), (0, 255));
         // Half float keeps what 8 bits clamps.
-        let p = Pack { single: SingleChannel::Blue, eight: false, rg: false, window: None };
+        let p = Pack { single: SingleChannel::Blue, eight: false, rg: false, ..Default::default() };
         let mut b16 = vec![0u8; p.frame_bytes(info) as usize];
         p.pack(&src, info, &mut b16);
         assert_eq!(f16::from_le_bytes([b16[0], b16[1]]).to_f32(), 2.0);
         // RGBA 8-bit, four bytes a pixel.
-        let p = Pack { single: SingleChannel::Off, eight: true, rg: false, window: None };
+        let p = Pack { single: SingleChannel::Off, eight: true, rg: false, ..Default::default() };
         let mut c8 = vec![0u8; p.frame_bytes(info) as usize];
         p.pack(&src, info, &mut c8);
         assert_eq!(&c8[4..8], &[64, 128, 255, 0]);
@@ -1393,6 +1583,113 @@ mod pack_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ramp(info: ImageInfo) -> Vec<f16> {
+        let stride = info.row_stride_f16();
+        let mut v = vec![f16::ZERO; stride * info.height as usize];
+        for y in 0..info.height as usize {
+            for x in 0..info.width as usize {
+                let p = &mut v[y * stride + x * 4..y * stride + x * 4 + 4];
+                p[0] = f16::from_f32(x as f32 + 0.5);
+                p[1] = f16::from_f32(y as f32 + 0.5);
+                p[2] = f16::from_f32(0.25);
+                p[3] = f16::from_f32(1.0);
+            }
+        }
+        v
+    }
+
+    /// Sizes are the plate's rounded up, the key moves with the scale (and
+    /// only then), and a window lands inside the smaller frame.
+    #[test]
+    fn a_load_scale_shrinks_the_store_and_moves_the_key() {
+        let info = ImageInfo { width: 6144, height: 3241 };
+        let p = |scale| Pack { scale, ..Default::default() };
+        assert_eq!(p(LoadScale::Half).dims(info), ImageInfo { width: 3072, height: 1621 });
+        assert_eq!(p(LoadScale::ThreeQuarters).dims(info), ImageInfo { width: 4608, height: 2431 });
+        assert_eq!(p(LoadScale::Quarter).dims(info), ImageInfo { width: 1536, height: 811 });
+        assert!(p(LoadScale::Half).frame_bytes(info) * 3 < p(LoadScale::Full).frame_bytes(info));
+        assert_eq!(p(LoadScale::Full).tag(), 0, "existing NVMe entries keep their keys");
+        assert_eq!(p(LoadScale::Full).placement(info), None);
+        let packs = [false, true].map(|eight| Pack { eight, ..Default::default() });
+        let mut seen = std::collections::HashSet::new();
+        for base in packs {
+            for scale in LoadScale::ALL {
+                assert!(seen.insert(Pack { scale, ..base }.tag()), "{scale:?} {}", base.eight);
+            }
+        }
+        let k = p(LoadScale::Half).placement(info).unwrap();
+        assert_eq!(k[..2], [0.0, 0.0]);
+        assert_eq!(k[2], 0.5);
+        assert_eq!(k[3], 1621.0 / 3241.0);
+
+        let w = Pack {
+            window: Some(Window { x: 1000, y: 400, w: 512, h: 256 }),
+            scale: LoadScale::Half,
+            ..Default::default()
+        };
+        let s = w.stored_window(info).unwrap();
+        assert_eq!((s.x, s.y, s.w, s.h), (499, 199, 258, 130));
+        assert_eq!(w.dims(info), ImageInfo { width: 258, height: 130 });
+        assert_eq!(w.placement(info).unwrap()[..2], [499.0, 199.0]);
+    }
+
+    /// A ramp averages to the ramp at the output pixel's centre, at every
+    /// ratio: nothing shifted, nothing darkened at the edges, flat stays
+    /// flat. And a box resampled alone equals that box of the whole frame.
+    #[test]
+    fn area_resample_keeps_the_picture_in_place() {
+        let info = ImageInfo { width: 41, height: 23 };
+        let src = ramp(info);
+        for scale in [LoadScale::ThreeQuarters, LoadScale::Half, LoadScale::Quarter] {
+            let f = scale.frame(info);
+            let p = Pack { scale, ..Default::default() };
+            let stride = p.padded_row_bytes(info) as usize / 2;
+            let mut out = vec![f16::ZERO; stride * f.height as usize];
+            p.pack(&src, info, bytemuck::cast_slice_mut(&mut out));
+            let kx = info.width as f32 / f.width as f32;
+            let ky = info.height as f32 / f.height as f32;
+            for y in 0..f.height as usize {
+                for x in 0..f.width as usize {
+                    let o = &out[y * stride + x * 4..y * stride + x * 4 + 4];
+                    // A source pixel is a flat square, so a part-covered
+                    // one pulls the mean by a fraction of a pixel.
+                    assert!((o[0].to_f32() - (x as f32 + 0.5) * kx).abs() < 0.25, "{scale:?} x {x}");
+                    assert!((o[1].to_f32() - (y as f32 + 0.5) * ky).abs() < 0.25, "{scale:?} y {y}");
+                    assert!((o[2].to_f32() - 0.25).abs() < 1e-3);
+                    assert!((o[3].to_f32() - 1.0).abs() < 1e-3);
+                }
+            }
+            let win = Pack { window: Some(Window { x: 10, y: 6, w: 12, h: 8 }), ..p };
+            let a = win.stored_window(info).unwrap();
+            let s2 = win.padded_row_bytes(info) as usize / 2;
+            let mut part = vec![f16::ZERO; s2 * a.h as usize];
+            win.pack(&src, info, bytemuck::cast_slice_mut(&mut part));
+            for y in 0..a.h as usize {
+                for x in 0..a.w as usize * 4 {
+                    let whole = out[(y + a.y as usize) * stride + a.x as usize * 4 + x];
+                    assert_eq!(part[y * s2 + x].to_bits(), whole.to_bits(), "{scale:?}");
+                }
+            }
+        }
+    }
+
+    /// Scale and a channel pack compose: one 8-bit channel of the small frame.
+    #[test]
+    fn a_scaled_pack_still_packs() {
+        let info = ImageInfo { width: 8, height: 4 };
+        let mut src = vec![f16::ZERO; info.row_stride_f16() * 4];
+        for y in 0..4 {
+            for x in 0..8 {
+                src[y * info.row_stride_f16() + x * 4] = f16::from_f32(if x < 4 { 0.0 } else { 1.0 });
+            }
+        }
+        let p = Pack { single: SingleChannel::Red, eight: true, scale: LoadScale::Half, ..Default::default() };
+        assert_eq!(p.dims(info), ImageInfo { width: 4, height: 2 });
+        let mut out = vec![0u8; p.frame_bytes(info) as usize];
+        p.pack(&src, info, &mut out);
+        assert_eq!(&out[..4], &[0, 0, 255, 255]);
+    }
 
     /// The proxy wrapper: headers halve (ceil), pixels box-average, and the
     /// downsample places rows through the padded stride correctly.

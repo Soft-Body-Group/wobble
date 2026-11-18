@@ -19,6 +19,7 @@ pub(crate) struct Cx<'a> {
     pub cache_on_play: &'a mut bool,
     pub single: &'a mut engine::decode::SingleChannel,
     pub eight_bit: &'a mut bool,
+    pub scale: &'a mut engine::decode::LoadScale,
     pub asset: &'a mut Option<assets::AssetRef>,
     /// A Project Load: footage from a project only, no paths shown.
     pub project_only: bool,
@@ -69,6 +70,7 @@ pub(crate) fn panel(
         cache_on_play,
         single,
         eight_bit,
+        scale,
         asset,
         project_only,
         node,
@@ -594,6 +596,31 @@ pub(crate) fn panel(
             .changed()
         {
             *playback_dirty = true;
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("proxy");
+        let was = *scale;
+        egui::ComboBox::from_id_salt(("read-scale", node))
+            .selected_text(scale.label())
+            .show_ui(ui, |ui| {
+                for s in engine::decode::LoadScale::ALL {
+                    ui.selectable_value(scale, s, s.label());
+                }
+            })
+            .response
+            .on_hover_text(
+                "keep this Load at a lower resolution: smaller frames in RAM, \
+                 on NVMe and on the GPU, for this Load only. It stays the same \
+                 size in the comp, softer, and renders use it too. Adds to the \
+                 comp-wide proxy",
+            );
+        if *scale != was {
+            *playback_dirty = true;
+        }
+        if let Some(l) = loaded.get(&key).filter(|_| !scale.is_full()) {
+            let f = scale.frame(l.seq.info);
+            ui.weak(format!("{}x{} cached", f.width, f.height));
         }
     });
     if loaded.contains_key(&key) {
