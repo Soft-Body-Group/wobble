@@ -11,6 +11,7 @@
 # entry and icon too), and wobble's scrub button starts the binary beside it.
 #
 #   tools/release_public_linux.sh          # dist/public-linux/wobble-<ver>-<git>-linux-x86_64.tar.gz
+#                                          # and scrub-<ver>-<git>-linux-x86_64.tar.gz (same build)
 #   WOBBLE_MOVIE=0 tools/release_public_linux.sh   # ...-nomovie, no FFmpeg
 #
 # FFmpeg comes from tools/build_ffmpeg_lgpl_linux.sh; bindgen needs libclang
@@ -118,3 +119,28 @@ python3 tools/scrub_paths.py "$ST"
 # Owned by root in the archive, not by whoever built it.
 tar --owner=0 --group=0 --numeric-owner -C "$OUT" -czf "$OUT/$NAME.tar.gz" "$NAME"
 echo "== $OUT/$NAME.tar.gz"
+# One build, two names: the same folder as scrub-<...>, led by Scrub, which
+# scrub.ing links to (download.scrub.ing serves scrub-*). Not for -nomovie.
+if [ -z "$SUFFIX" ]; then
+  SN="scrub-$VERSION-$GIT-linux-$ARCH"
+  rm -rf "${OUT:?}/$SN"
+  mv "$ST" "$OUT/$SN"
+  cat > "$OUT/$SN/README.txt" <<TXT
+Scrub $VERSION (Linux, $ARCH)
+
+Scrub, the video editor, and Wobble, the compositor, are one app with two
+front doors: this folder is the same build as the Wobble download.
+
+Unpack anywhere, cd into the folder and run ./scrub (./wobble opens Wobble).
+Needs a GPU with Vulkan (NVIDIA's proprietary driver, or Mesa for AMD and Intel).
+$MOVIE_LINE
+./install-desktop-entry.sh adds Scrub and Wobble to your app launcher, each with its icon.
+Hotkeys and the guide: https://scrub.ing/guide/
+
+Scrub is free software under the GPL-3.0-or-later; see the licenses folder
+(LICENSING.md says what each file covers).
+Built from $GIT.
+TXT
+  tar --owner=0 --group=0 --numeric-owner -C "$OUT" -czf "$OUT/$SN.tar.gz" "$SN"
+  echo "== $OUT/$SN.tar.gz"
+fi

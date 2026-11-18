@@ -7,6 +7,7 @@
 # GenAI credits — anything involving money) never ships.
 #
 #   tools/release_public.sh        # writes dist/public/wobble-<ver>-<git>-macos-<arch>.zip
+#                                  # and the same zip as scrub-<ver>-<git>-macos-<arch>.zip
 #   WOBBLE_MOVIE=0 tools/release_public.sh   # ...without movie support
 #
 # Scrub, the timeline editor (scrub/app), ships beside it in the same zip as
@@ -135,6 +136,14 @@ ditto "$OUT/Scrub.app" "$ZS/Scrub.app"
 ditto -c -k --norsrc --noextattr "$ZS" "$OUT/$NAME"
 rm -rf "$ZS"
 echo "== $OUT/$NAME"
+# One build, two names: the same zip as scrub-<...>, which scrub.ing links to
+# (download.scrub.ing serves scrub-*, download.wobble.ing wobble-*). Not for a
+# -nomovie build: Scrub is a video editor.
+if [ -z "$SUFFIX" ]; then
+  SNAME="scrub-$VERSION-$GIT-macos-$(uname -m).zip"
+  cp "$OUT/$NAME" "$OUT/$SNAME"
+  echo "== $OUT/$SNAME"
+fi
 # A clean tree's release is tagged v<version>, locally; pushing it is a choice.
 case "$GIT" in *-dirty) ;; *)
   if ! git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then

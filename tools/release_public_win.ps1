@@ -7,6 +7,7 @@
 # same DLLs (wobble's scrub button starts the binary beside it).
 #
 #   powershell -File tools\release_public_win.ps1          # dist\public-win\wobble-<ver>-<git>-windows-x86_64.zip
+#                                                         # and scrub-<ver>-<git>-windows-x86_64.zip (same build)
 #   $env:WOBBLE_MOVIE="0"; powershell -File tools\release_public_win.ps1   # ...-nomovie, no FFmpeg
 #
 # FFmpeg comes from tools\build_ffmpeg_lgpl_win.cmd (MSVC + MSYS2), and
@@ -101,5 +102,33 @@ if ($LASTEXITCODE) { throw "scrub_paths found a home path it could not blank" }
 Push-Location $out
 tar.exe -a -c -f "$name.zip" $name
 Pop-Location
-Remove-Item -Recurse -Force $st
 "== $out\$name.zip"
+# One build, two names: the same folder as scrub-<...>, led by Scrub, which
+# scrub.ing links to (download.scrub.ing serves scrub-*). Not for -nomovie.
+if ($movie) {
+    $sname = "scrub-$ver-$git-windows-x86_64"
+    $sst = "$out\$sname"
+    if (Test-Path $sst) { Remove-Item -Recurse -Force $sst }
+    Rename-Item $st $sname
+    $st = $sst
+    @"
+Scrub $ver (Windows, x64)
+
+Scrub, the video editor, and Wobble, the compositor, are one app with two
+front doors: this folder is the same build as the Wobble download.
+
+Unzip anywhere and run scrub.exe (wobble.exe opens Wobble). Needs a GPU with
+Vulkan or DX12. Pin scrub.exe to Start or the taskbar to keep it handy.
+$movieLine
+Hotkeys and the guide: https://scrub.ing/guide/
+
+Scrub is free software under the GPL-3.0-or-later; see the licenses folder
+(LICENSING.md says what each file covers).
+Built from $git.
+"@ | Set-Content -Encoding ascii "$st\README.txt"
+    Push-Location $out
+    tar.exe -a -c -f "$sname.zip" $sname
+    Pop-Location
+    "== $out\$sname.zip"
+}
+Remove-Item -Recurse -Force $st
