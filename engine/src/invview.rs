@@ -53,8 +53,13 @@ impl Default for InverseView {
 
 impl InverseView {
     /// The transforms that can be inverted here (OpenDRT has no CPU mirror).
-    pub const TRANSFORMS: [ViewTransform; 4] =
-        [ViewTransform::Aces13, ViewTransform::AgX, ViewTransform::Filmic, ViewTransform::None];
+    pub const TRANSFORMS: [ViewTransform; 5] = [
+        ViewTransform::Aces13,
+        ViewTransform::Aces12,
+        ViewTransform::AgX,
+        ViewTransform::Filmic,
+        ViewTransform::None,
+    ];
 
     fn key(&self) -> u64 {
         (((GEN * 16 + self.transform as u64) * 16 + self.display as u64) * 16 + self.eotf as u64) * 32

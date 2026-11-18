@@ -3715,10 +3715,11 @@ pub fn run() -> anyhow::Result<()> {
                     "none" => engine::viewtf::ViewTransform::None,
                     "filmic" => engine::viewtf::ViewTransform::Filmic,
                     "aces" | "aces13" => engine::viewtf::ViewTransform::Aces13,
+                    "aces12" => engine::viewtf::ViewTransform::Aces12,
                     "opendrt" => engine::viewtf::ViewTransform::OpenDrt,
                     "agx" => engine::viewtf::ViewTransform::AgX,
                     other => {
-                        anyhow::bail!("unknown --view {other} (none|filmic|aces|agx|opendrt)")
+                        anyhow::bail!("unknown --view {other} (none|filmic|aces|aces12|agx|opendrt)")
                     }
                 });
             }
@@ -16350,7 +16351,13 @@ impl Gfx {
                     )
                     .on_hover_text("the default set in colour…");
                     ui.separator();
+                    let mut aces12 = false;
                     for p in menu {
+                        let is_12 = p.transform == engine::viewtf::ViewTransform::Aces12;
+                        if is_12 && !aces12 {
+                            ui.weak("ACES 1.2");
+                        }
+                        aces12 |= is_12;
                         colorprefs::preset_entry(ui, &mut self.viewer_tf, p);
                     }
                     ui.separator();

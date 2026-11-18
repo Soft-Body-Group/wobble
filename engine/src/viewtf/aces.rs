@@ -25,6 +25,14 @@
 //! bit for bit, pair this with the Rec.1886 (2.4) EOTF: the CTL's final step
 //! is `bt1886_r(v, 2.4, 1.0, 0.0)`, which for those parameters is `v^(1/2.4)`.
 //!
+//! **ACES 1.2 is this same maths.** The RRT and the SDR ODTs did not change
+//! between 1.0.3 and 1.3; what 1.3 added is the optional gamut-compression
+//! LMT. So ACES 1.2's `Output - Rec.709` and `Output - sRGB` are [`apply`]
+//! with the look off, and their inverses ([`output_to_ap0`], from
+//! `InvRRT.ctl` and `InvODT.Academy.*_100nits_dim.ctl`) are what the
+//! `Curve::AcesOut*` input spaces run. `engine/tests/aces12.rs` holds both
+//! directions to OpenColorIO.
+//!
 //! Only the SDR (48-nit tonescale, dim surround) rendering is implemented.
 //! For P3-D65 and Rec.2020 targets the same rendering is sent through a
 //! different output matrix; that is a faithful generalisation but it is NOT
@@ -105,11 +113,17 @@ const ODT_SLOPE_HIGH: f32 = 0.04;
 /// The ODT spline's x anchors, from the RRT spline. `0.18 * 2^-6.5` and
 /// `0.18 * 2^6.5`.
 fn odt_anchors() -> ((f32, f32), (f32, f32), (f32, f32)) {
-    (
-        (rrt_spline(0.18 * 2f32.powf(-6.5)), 0.02),
-        (rrt_spline(0.18), 4.8),
-        (rrt_spline(0.18 * 2f32.powf(6.5)), 48.0),
-    )
+    // Once: a Write through an Output space asks for these per channel, per
+    // pixel.
+    static ANCHORS: std::sync::OnceLock<((f32, f32), (f32, f32), (f32, f32))> =
+        std::sync::OnceLock::new();
+    *ANCHORS.get_or_init(|| {
+        (
+            (rrt_spline(0.18 * 2f32.powf(-6.5)), 0.02),
+            (rrt_spline(0.18), 4.8),
+            (rrt_spline(0.18 * 2f32.powf(6.5)), 48.0),
+        )
+    })
 }
 
 /// A saturation matrix in the textbook column-vector form: `sat * c +
@@ -173,6 +187,57 @@ pub fn odt_spline(x: f32) -> f32 {
         logx * ODT_SLOPE_HIGH + (hi.1.log10() - ODT_SLOPE_HIGH * hi.0.log10())
     };
     10f32.powf(logy)
+}
+
+/// One segment of the spline, backwards: the `logx` whose [`spline_segment`]
+/// is `logy`. `segmented_spline_c5_rev` / `_c9_rev`, whose knot search and
+/// quadratic this is.
+fn spline_segment_inv(logy: f32, lo: (f32, f32), hi: (f32, f32), coefs: &[f32], n_knots: usize) -> f32 {
+    // The spline's value at knot i is the mean of two neighbouring coefs.
+    let knot_y = |i: usize| (coefs[i] + coefs[i + 1]) / 2.0;
+    let mut j = 0;
+    while j < n_knots - 2 && logy > knot_y(j + 1) {
+        j += 1;
+    }
+    let cf = [coefs[j], coefs[j + 1], coefs[j + 2]];
+    let a = 0.5 * cf[0] - cf[1] + 0.5 * cf[2];
+    let b = -cf[0] + cf[1];
+    let c = 0.5 * cf[0] + 0.5 * cf[1] - logy;
+    let d = (b * b - 4.0 * a * c).max(0.0).sqrt();
+    let t = 2.0 * c / (-d - b);
+    let inc = (hi.0.log10() - lo.0.log10()) / (n_knots - 1) as f32;
+    lo.0.log10() + (t + j as f32) * inc
+}
+
+/// `segmented_spline_c5_rev` with RRT_PARAMS: OCES luminance -> scene-linear.
+pub fn rrt_spline_inv(y: f32) -> f32 {
+    let logy = y.max(1e-10).log10();
+    let logx = if logy <= RRT_MIN.1.log10() {
+        RRT_MIN.0.log10()
+    } else if logy <= RRT_MID.1.log10() {
+        spline_segment_inv(logy, RRT_MIN, RRT_MID, &RRT_COEFS_LOW, 4)
+    } else if logy < RRT_MAX.1.log10() {
+        spline_segment_inv(logy, RRT_MID, RRT_MAX, &RRT_COEFS_HIGH, 4)
+    } else {
+        RRT_MAX.0.log10()
+    };
+    10f32.powf(logx)
+}
+
+/// `segmented_spline_c9_rev` with ODT_48nits: display cd/m2 -> OCES luminance.
+pub fn odt_spline_inv(y: f32) -> f32 {
+    let (lo, mid, hi) = odt_anchors();
+    let logy = y.max(1e-10).log10();
+    let logx = if logy <= lo.1.log10() {
+        lo.0.log10()
+    } else if logy <= mid.1.log10() {
+        spline_segment_inv(logy, lo, mid, &ODT_COEFS_LOW, 8)
+    } else if logy < hi.1.log10() {
+        spline_segment_inv(logy, mid, hi, &ODT_COEFS_HIGH, 8)
+    } else {
+        hi.0.log10()
+    };
+    10f32.powf(logx)
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +424,12 @@ pub fn apply_look(rgb: [f32; 3], working: Primaries, display: Gamut, compress: b
 /// `darkSurround_to_dimSurround`: raise Y to 0.9811 with chromaticity held,
 /// which is what a cinema-referred rendering needs on a dim-surround monitor.
 fn dark_to_dim(cv: [f32; 3]) -> [f32; 3] {
+    surround(cv, DIM_SURROUND_GAMMA)
+}
+
+/// Y to `gamma`, chromaticity held. `dimSurround_to_darkSurround` is this
+/// with the reciprocal.
+fn surround(cv: [f32; 3], gamma: f32) -> [f32; 3] {
     use crate::color::mat3_apply;
     let xyz = mat3_apply(Primaries::Ap1.to_xyz(), cv);
     let sum = xyz[0] + xyz[1] + xyz[2];
@@ -366,12 +437,93 @@ fn dark_to_dim(cv: [f32; 3]) -> [f32; 3] {
         return [0.0, 0.0, 0.0];
     }
     let (x, y) = (xyz[0] / sum, xyz[1] / sum);
-    let big_y = xyz[1].max(0.0).powf(DIM_SURROUND_GAMMA);
+    let big_y = xyz[1].max(0.0).powf(gamma);
     if y <= 0.0 {
         return [0.0, 0.0, 0.0];
     }
     let xyz2 = [x * big_y / y, big_y, (1.0 - x - y) * big_y / y];
     mat3_apply(Primaries::Ap1.from_xyz(), xyz2)
+}
+
+/// The two SDR outputs an ACES 1.2 config calls `Output - Rec.709` and
+/// `Output - sRGB`: one rendering, Rec.709 primaries at D65, two encodings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Output {
+    /// `ODT.Academy.Rec709_100nits_dim`: BT.1886, a pure 2.4 power.
+    Rec709,
+    /// `ODT.Academy.RGBmonitor_100nits_dim`: the sRGB piecewise curve.
+    Srgb,
+}
+
+impl Output {
+    fn eotf(self) -> super::Eotf {
+        match self {
+            Self::Rec709 => super::Eotf::Rec1886,
+            Self::Srgb => super::Eotf::Srgb,
+        }
+    }
+
+    fn decode(self, code: f32) -> f32 {
+        let c = code.max(0.0);
+        match self {
+            Self::Rec709 => c.powf(2.4),
+            Self::Srgb => crate::color::Curve::Srgb.to_linear(c),
+        }
+    }
+}
+
+/// RRT + ODT: ACES2065-1 in, display code values out.
+pub fn output_from_ap0(ap0: [f32; 3], out: Output) -> [f32; 3] {
+    apply(ap0, Primaries::Ap0, Gamut::Rec709).map(|v| out.eotf().encode(v))
+}
+
+/// `glow_inv`.
+fn glow_inv(yc_out: f32, gain: f32, mid: f32) -> f32 {
+    if yc_out <= (1.0 + gain) * 2.0 / 3.0 * mid {
+        -gain / (1.0 + gain)
+    } else if yc_out >= 2.0 * mid {
+        0.0
+    } else {
+        gain * (mid / yc_out - 0.5) / (gain / 2.0 - 1.0)
+    }
+}
+
+/// `InvRRT.ctl` from its tonescale on: OCES in AP1 (the AP1->AP0->AP1 hop is
+/// dropped as it is forwards) to ACES2065-1.
+fn rrt_inv(oces: [f32; 3]) -> [f32; 3] {
+    use crate::color::{mat3_apply, mat3_inverse};
+    let y = Primaries::Ap1.luma_weights();
+    let rgb = mat3_apply(mat3_inverse(sat_matrix(RRT_SAT_FACTOR, y)), oces.map(rrt_spline_inv));
+    let rgb = rgb.map(|v| v.clamp(0.0, 65504.0));
+    let mut aces = mat3_apply(primaries_matrix(Primaries::Ap1, Primaries::Ap0), rgb).map(|v| v.clamp(0.0, 65504.0));
+
+    // The red modifier, solved for the red it was given.
+    let centered = center_hue(rgb_2_hue(aces), RRT_RED_HUE);
+    let weight = cubic_basis_shaper(centered, RRT_RED_WIDTH);
+    let min_chan = if centered < 0.0 { aces[1] } else { aces[2] };
+    let k = 1.0 - RRT_RED_SCALE;
+    let a = weight * k - 1.0;
+    let b = aces[0] - weight * (RRT_RED_PIVOT + min_chan) * k;
+    let c = weight * RRT_RED_PIVOT * min_chan * k;
+    aces[0] = (-b - (b * b - 4.0 * a * c).max(0.0).sqrt()) / (2.0 * a);
+
+    let s = sigmoid_shaper((rgb_2_saturation(aces) - 0.4) / 0.2);
+    let glow = 1.0 + glow_inv(rgb_2_yc(aces), RRT_GLOW_GAIN * s, RRT_GLOW_MID);
+    aces.map(|v| v * glow)
+}
+
+/// Inverse ODT + inverse RRT: display code values in, ACES2065-1 out. Only
+/// defined up to what the display can show: a code of 1 lands at the
+/// rendering's own white (about 16), and a colour the forward transform
+/// clips comes back as the nearest one it does not.
+pub fn output_to_ap0(code: [f32; 3], out: Output) -> [f32; 3] {
+    use crate::color::{mat3_apply, mat3_inverse};
+    let lin = code.map(|c| out.decode(c));
+    let cv = mat3_apply(primaries_matrix(Primaries::Rec709, Primaries::Ap1), lin);
+    let y = Primaries::Ap1.luma_weights();
+    let cv = mat3_apply(mat3_inverse(sat_matrix(ODT_SAT_FACTOR, y)), cv);
+    let cv = surround(cv, 1.0 / DIM_SURROUND_GAMMA);
+    rrt_inv(cv.map(|v| odt_spline_inv(v * (CINEMA_WHITE - CINEMA_BLACK) + CINEMA_BLACK)))
 }
 
 #[cfg(test)]
@@ -530,6 +682,13 @@ fn mat_lit(m: crate::color::Mat3) -> String {
 /// `in_to_rs` carries working -> AP0, `out_cwp` carries AP1 -> display. Both
 /// are filled by `ViewSettings::matrices`.
 pub fn wgsl(_display: Gamut) -> String {
+    format!("{}{VIEW_BODY}", lib_wgsl())
+}
+
+/// The rendering as a library: no entry point, no uniforms. The blit calls
+/// it through [`VIEW_BODY`], the `Curve::AcesOut*` colour spaces directly.
+pub fn lib_wgsl() -> String {
+    use crate::color::mat3_inverse;
     let y = Primaries::Ap1.luma_weights();
     let (lo, mid, hi) = odt_anchors();
     let consts = format!(
@@ -542,6 +701,10 @@ const ACES_RGC_SCALE: vec3f = vec3f({sc0:.9}, {sc1:.9}, {sc2:.9});
 const ACES_RGC_POW: f32 = {pw};
 const ACES_RRT_SAT: mat3x3<f32> = {rrt_sat};
 const ACES_ODT_SAT: mat3x3<f32> = {odt_sat};
+const ACES_RRT_SAT_INV: mat3x3<f32> = {rrt_sat_inv};
+const ACES_ODT_SAT_INV: mat3x3<f32> = {odt_sat_inv};
+const ACES_AP1_2_709: mat3x3<f32> = {ap1_2_709};
+const ACES_709_2_AP1: mat3x3<f32> = {r709_2_ap1};
 const ACES_AP1_2_XYZ: mat3x3<f32> = {ap1_2_xyz};
 const ACES_XYZ_2_AP1: mat3x3<f32> = {xyz_2_ap1};
 const ACES_RRT_LOG_MIN: f32 = {rrt_log_min:.9};
@@ -550,6 +713,7 @@ const ACES_RRT_LOG_MAX: f32 = {rrt_log_max:.9};
 const ACES_ODT_LOG_MIN: f32 = {odt_log_min:.9};
 const ACES_ODT_LOG_MID: f32 = {odt_log_mid:.9};
 const ACES_ODT_LOG_MAX: f32 = {odt_log_max:.9};
+const ACES_LOG_4_8: f32 = {log_4_8:.9};
 "#,
         ap0_2_ap1 = mat_lit(primaries_matrix(Primaries::Ap0, Primaries::Ap1)),
         ap1_2_ap0 = mat_lit(primaries_matrix(Primaries::Ap1, Primaries::Ap0)),
@@ -562,6 +726,11 @@ const ACES_ODT_LOG_MAX: f32 = {odt_log_max:.9};
         pw = RGC_POWER,
         rrt_sat = mat_lit(sat_matrix(RRT_SAT_FACTOR, y)),
         odt_sat = mat_lit(sat_matrix(ODT_SAT_FACTOR, y)),
+        rrt_sat_inv = mat_lit(mat3_inverse(sat_matrix(RRT_SAT_FACTOR, y))),
+        odt_sat_inv = mat_lit(mat3_inverse(sat_matrix(ODT_SAT_FACTOR, y))),
+        ap1_2_709 = mat_lit(primaries_matrix(Primaries::Ap1, Primaries::Rec709)),
+        r709_2_ap1 = mat_lit(primaries_matrix(Primaries::Rec709, Primaries::Ap1)),
+        log_4_8 = 4.8f32.log10(),
         ap1_2_xyz = mat_lit(Primaries::Ap1.to_xyz()),
         xyz_2_ap1 = mat_lit(Primaries::Ap1.from_xyz()),
         rrt_log_min = RRT_MIN.0.log10(),
@@ -708,28 +877,23 @@ fn aces_red_weight(hue: f32) -> f32 {
     return y * 1.5;
 }
 
-// darkSurround_to_dimSurround: raise Y, hold chromaticity.
-fn aces_dim(cv: vec3f) -> vec3f {
+// Y to `gamma`, chromaticity held: darkSurround_to_dimSurround at 0.9811,
+// dimSurround_to_darkSurround at its reciprocal.
+fn aces_surround(cv: vec3f, gamma: f32) -> vec3f {
     let xyz = ACES_AP1_2_XYZ * cv;
     let sum = xyz.x + xyz.y + xyz.z;
     if (sum <= 0.0) { return vec3f(0.0); }
     let x = xyz.x / sum;
     let y = xyz.y / sum;
     if (y <= 0.0) { return vec3f(0.0); }
-    let big = pow(max(xyz.y, 0.0), 0.9811);
+    let big = pow(max(xyz.y, 0.0), gamma);
     return ACES_XYZ_2_AP1 * vec3f(x * big / y, big, (1.0 - x - y) * big / y);
 }
 
-// ACES 1.3 Output Transform. `in_to_rs` is working -> AP0; `out_cwp` is
-// AP1 -> display. Display-LINEAR out: the blit's tail applies the EOTF, so
-// pair this with Rec.1886 to match the reference ODT exactly.
-fn view_transform(rgb: vec3f) -> vec3f {
-    var aces = u.in_to_rs * rgb;
-    // The look: ACES 1.3 Reference Gamut Compression (drt[0].x = 1).
-    if (u.drt[0].x > 0.5) {
-        aces = aces_rgc(aces);
-    }
-
+// RRT + ODT up to the display matrix: ACES2065-1 in, AP1 linear code values
+// out.
+fn aces_rrt_odt(ap0: vec3f) -> vec3f {
+    var aces = ap0;
     // RRT sweeteners: glow, then the red modifier.
     let sat = aces_saturation(aces);
     let s = aces_sigmoid((sat - 0.4) / 0.2);
@@ -746,8 +910,119 @@ fn view_transform(rgb: vec3f) -> vec3f {
     // ODT. The reference's AP1 -> AP0 -> AP1 hop between the two tonescales
     // is an exact identity and is skipped.
     let d = vec3f(aces_odt_spline(oces.r), aces_odt_spline(oces.g), aces_odt_spline(oces.b));
-    var cv = (d - vec3f(0.02)) / (48.0 - 0.02);
-    cv = ACES_ODT_SAT * aces_dim(cv);
-    return clamp(u.out_cwp * cv, vec3f(0.0), vec3f(1.0));
+    let cv = (d - vec3f(0.02)) / (48.0 - 0.02);
+    return ACES_ODT_SAT * aces_surround(cv, 0.9811);
+}
+
+// One segment of a log-log spline, backwards: its position in the knot `cf`
+// starts at.
+fn aces_seg_inv(cf: vec3f, logy: f32) -> f32 {
+    let a = 0.5 * cf.x - cf.y + 0.5 * cf.z;
+    let b = -cf.x + cf.y;
+    let c = 0.5 * cf.x + 0.5 * cf.y - logy;
+    let d = sqrt(max(b * b - 4.0 * a * c, 0.0));
+    return 2.0 * c / (-d - b);
+}
+
+// segmented_spline_c5_rev with RRT_PARAMS.
+fn aces_rrt_spline_inv(y: f32) -> f32 {
+    let logy = log(max(y, 1e-10)) / log(10.0);
+    var logx: f32;
+    if (logy <= -4.0) {
+        logx = ACES_RRT_LOG_MIN;
+    } else if (logy <= ACES_LOG_4_8) {
+        var c = array<f32, 6>(-4.0, -4.0, -3.1573765773, -0.4852499958, 1.8477324706, 1.8477324706);
+        var j = 0;
+        while (j < 2 && logy > (c[j + 1] + c[j + 2]) / 2.0) { j = j + 1; }
+        let t = aces_seg_inv(vec3f(c[j], c[j + 1], c[j + 2]), logy);
+        logx = ACES_RRT_LOG_MIN + (t + f32(j)) * (ACES_RRT_LOG_MID - ACES_RRT_LOG_MIN) / 3.0;
+    } else if (logy < 4.0) {
+        var c = array<f32, 6>(-0.7185482425, 2.0810307172, 3.6681241237, 4.0, 4.0, 4.0);
+        var j = 0;
+        while (j < 2 && logy > (c[j + 1] + c[j + 2]) / 2.0) { j = j + 1; }
+        let t = aces_seg_inv(vec3f(c[j], c[j + 1], c[j + 2]), logy);
+        logx = ACES_RRT_LOG_MID + (t + f32(j)) * (ACES_RRT_LOG_MAX - ACES_RRT_LOG_MID) / 3.0;
+    } else {
+        logx = ACES_RRT_LOG_MAX;
+    }
+    return pow(10.0, logx);
+}
+
+// segmented_spline_c9_rev with ODT_48nits.
+fn aces_odt_spline_inv(y: f32) -> f32 {
+    let logy = log(max(y, 1e-10)) / log(10.0);
+    var logx: f32;
+    if (logy <= -1.6989700043) {
+        logx = ACES_ODT_LOG_MIN;
+    } else if (logy <= ACES_LOG_4_8) {
+        var c = array<f32, 10>(-1.6989700043, -1.6989700043, -1.4779, -1.2291, -0.8648,
+                               -0.4480, 0.00518, 0.4511080334, 0.9113744414, 0.9113744414);
+        var j = 0;
+        while (j < 6 && logy > (c[j + 1] + c[j + 2]) / 2.0) { j = j + 1; }
+        let t = aces_seg_inv(vec3f(c[j], c[j + 1], c[j + 2]), logy);
+        logx = ACES_ODT_LOG_MIN + (t + f32(j)) * (ACES_ODT_LOG_MID - ACES_ODT_LOG_MIN) / 7.0;
+    } else if (logy < 1.6812412374) { // log10(48)
+        var c = array<f32, 10>(0.5154386965, 0.8470437783, 1.1358, 1.3802, 1.5197,
+                               1.5985, 1.6467, 1.6746091357, 1.6878733390, 1.6878733390);
+        var j = 0;
+        while (j < 6 && logy > (c[j + 1] + c[j + 2]) / 2.0) { j = j + 1; }
+        let t = aces_seg_inv(vec3f(c[j], c[j + 1], c[j + 2]), logy);
+        logx = ACES_ODT_LOG_MID + (t + f32(j)) * (ACES_ODT_LOG_MAX - ACES_ODT_LOG_MID) / 7.0;
+    } else {
+        logx = ACES_ODT_LOG_MAX;
+    }
+    return pow(10.0, logx);
+}
+
+fn aces_glow_inv(yc: f32, gain: f32, mid: f32) -> f32 {
+    if (yc <= (1.0 + gain) * 2.0 / 3.0 * mid) { return -gain / (1.0 + gain); }
+    if (yc >= 2.0 * mid) { return 0.0; }
+    return gain * (mid / yc - 0.5) / (gain / 2.0 - 1.0);
+}
+
+// Inverse ODT + inverse RRT: display-linear Rec.709 in, ACES2065-1 out.
+// Mirrors `output_to_ap0`.
+fn aces_out_to_ap0(lin: vec3f) -> vec3f {
+    var cv = ACES_ODT_SAT_INV * (ACES_709_2_AP1 * lin);
+    cv = aces_surround(cv, 1.0 / 0.9811);
+    let d = cv * (48.0 - 0.02) + vec3f(0.02);
+    let oces = vec3f(aces_odt_spline_inv(d.r), aces_odt_spline_inv(d.g), aces_odt_spline_inv(d.b));
+    let s1 = vec3f(aces_rrt_spline_inv(oces.r), aces_rrt_spline_inv(oces.g), aces_rrt_spline_inv(oces.b));
+    let ap1 = clamp(ACES_RRT_SAT_INV * s1, vec3f(0.0), vec3f(65504.0));
+    var aces = clamp(ACES_AP1_2_AP0 * ap1, vec3f(0.0), vec3f(65504.0));
+
+    // The red modifier, solved for the red it was given.
+    var h = aces_hue(aces);
+    if (h > 180.0) { h = h - 360.0; }
+    let w = aces_red_weight(h);
+    let m = select(aces.b, aces.g, h < 0.0);
+    let k = 1.0 - 0.82;
+    let qa = w * k - 1.0;
+    let qb = aces.r - w * (0.03 + m) * k;
+    let qc = w * 0.03 * m * k;
+    aces.r = (-qb - sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa);
+
+    let s = aces_sigmoid((aces_saturation(aces) - 0.4) / 0.2);
+    return aces * (1.0 + aces_glow_inv(aces_yc(aces), 0.05 * s, 0.08));
+}
+
+// RRT + ODT to Rec.709 display-linear, clamped as the ODTs clamp.
+fn aces_ap0_to_out(ap0: vec3f) -> vec3f {
+    return clamp(ACES_AP1_2_709 * aces_rrt_odt(ap0), vec3f(0.0), vec3f(1.0));
+}
+"#;
+
+/// The blit's entry point. `in_to_rs` is working -> AP0; `out_cwp` is
+/// AP1 -> display.
+const VIEW_BODY: &str = r#"
+// ACES Output Transform. Display-LINEAR out: the blit's tail applies the
+// EOTF, so pair this with Rec.1886 to match the reference ODT exactly.
+fn view_transform(rgb: vec3f) -> vec3f {
+    var aces = u.in_to_rs * rgb;
+    // The look: ACES 1.3 Reference Gamut Compression (drt[0].x = 1).
+    if (u.drt[0].x > 0.5) {
+        aces = aces_rgc(aces);
+    }
+    return clamp(u.out_cwp * aces_rrt_odt(aces), vec3f(0.0), vec3f(1.0));
 }
 "#;

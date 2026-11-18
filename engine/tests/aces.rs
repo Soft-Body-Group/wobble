@@ -198,6 +198,23 @@ fn shader_matches_the_mirror_in_every_display_gamut() {
     }
 }
 
+/// ACES 1.2 is a menu entry over the same shader, so it has to run it.
+#[test]
+fn aces12_runs_the_same_shader() {
+    let Some(ctx) = ctx() else { return };
+    let (_, lin) = plate();
+    let view = ViewSettings { transform: ViewTransform::Aces12, ..settings(Gamut::AcesCg, Gamut::Rec709) };
+    let out = run(&ctx, &view);
+    let mut worst = 0.0f32;
+    for (o, c) in out.iter().zip(&lin) {
+        let want = aces::apply(*c, engine::color::Primaries::Ap1, Gamut::Rec709);
+        for i in 0..3 {
+            worst = worst.max((o[i] - want[i]).abs());
+        }
+    }
+    assert!(worst < 5e-3, "shader off the mirror by {worst}");
+}
+
 /// The working space reaches the shader through the blit uniform, not
 /// through an assumption — so the same picture in two working spaces has to
 /// come out the same, on the GPU as well as on the CPU.

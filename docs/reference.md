@@ -1757,7 +1757,7 @@ through, with the reason in red in the panel.
 ### Inverse View
 
 Colour ▸ **Inverse View** is the same node with its table SOLVED instead of
-read: the viewer's display transform (ACES 1.3, AgX, Narkowicz or Standard,
+read: the viewer's display transform (ACES 1.3 or 1.2, AgX, Narkowicz or Standard,
 with its display gamut, curve and look) run backwards, so a display-referred
 picture — an AI-generated clip, a graded Rec.709 deliverable — comes into the
 comp as scene-linear light a blur, glow or grade can treat as light. Shown
@@ -4076,6 +4076,19 @@ Transforms (menubar "view…", or `--view` for a reproducible headless run):
 - **ACES 1.3 Output Transform** — the RRT + SDR ODT, ported from the CTL
   (`engine/src/viewtf/aces.rs`). Look: **Reference Gamut Compression**, the
   Academy's LMT (Blender's "ACES 1.3 - Reference Gamut Compression").
+- **ACES 1.2 Output Transform** — the same RRT + SDR ODT with no look, for
+  matching a pipeline on an ACES 1.2 OCIO config. The viewer menu's
+  **sRGB (ACES)** and **Rec.709 (ACES)** are that config's `sRGB` and
+  `Rec.709` views (D65, dim surround; sRGB curve and BT.1886 2.4). A Read's
+  input and a Write's output offer **Output - Rec.709 (ACES 1.2)** and
+  **Output - sRGB (ACES 1.2)**, its `Output - *` colour spaces: as an input
+  the picture runs the inverse ODT and inverse RRT on the GPU, in the fused
+  pass, back to scene-linear. `engine/tests/aces12.rs` holds both directions
+  to OpenColorIO's built-in ACES transforms (`tools/aces12_reference.py`).
+  The config itself bakes these into 3D LUTs, so it differs a little from
+  the exact maths, most where a channel clips. Like the CTL, the inverse only
+  reaches what the display can show, and saturated colours come back up to
+  0.007 of a code value off (OCIO's own inverse does the same).
 - **AgX** — Blender's, read from the Blender installed on the machine
   (`engine/src/viewtf/agx.rs`): its cubes, its chain, so the picture matches
   Blender's by construction and nothing of Blender's ships with wobble.

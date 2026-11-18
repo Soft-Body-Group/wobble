@@ -327,9 +327,18 @@ pub enum Curve {
     DaVinciIntermediate,
     /// Kodak Cineon printing density, 95 black / 685 white / 0.6 gamma.
     Cineon,
+    /// ACES 1.2 `Output - Rec.709`: RRT + ODT between ACES2065-1 and BT.1886
+    /// code values. NOT per channel, the one kind of "curve" that is not:
+    /// it works on whole pixels ([`Self::decode_rgb`]), which is why it is
+    /// outside [`Self::ALL`]. The scalar methods give its neutral axis. Pair
+    /// it with [`Primaries::Ap0`].
+    AcesOutRec709,
+    /// ACES 1.2 `Output - sRGB`, the same with the sRGB curve.
+    AcesOutSrgb,
 }
 
 impl Curve {
+    /// The per-channel curves.
     pub const ALL: [Self; 16] = [
         Self::Linear,
         Self::Srgb,
@@ -348,6 +357,32 @@ impl Curve {
         Self::DaVinciIntermediate,
         Self::Cineon,
     ];
+
+    /// The ACES rendering this stands for, if it is one of those.
+    fn aces_output(self) -> Option<crate::viewtf::aces::Output> {
+        use crate::viewtf::aces::Output;
+        match self {
+            Self::AcesOutRec709 => Some(Output::Rec709),
+            Self::AcesOutSrgb => Some(Output::Srgb),
+            _ => None,
+        }
+    }
+
+    /// Encoded -> scene-linear, a whole pixel.
+    pub fn decode_rgb(self, c: [f32; 3]) -> [f32; 3] {
+        match self.aces_output() {
+            Some(o) => crate::viewtf::aces::output_to_ap0(c, o),
+            None => c.map(|v| self.to_linear(v)),
+        }
+    }
+
+    /// Scene-linear -> encoded, a whole pixel.
+    pub fn encode_rgb(self, c: [f32; 3]) -> [f32; 3] {
+        match self.aces_output() {
+            Some(o) => crate::viewtf::aces::output_from_ap0(c, o),
+            None => c.map(|v| self.from_linear(v)),
+        }
+    }
 
     /// Encoded -> scene-linear.
     pub fn to_linear(self, x: f32) -> f32 {
@@ -450,6 +485,7 @@ impl Curve {
                 }
             }
             Self::Cineon => cineon_to_linear(x * 1023.0),
+            Self::AcesOutRec709 | Self::AcesOutSrgb => self.decode_rgb([x; 3])[1],
         }
     }
 
@@ -559,6 +595,7 @@ impl Curve {
                 }
             }
             Self::Cineon => linear_to_cineon(x) / 1023.0,
+            Self::AcesOutRec709 | Self::AcesOutSrgb => self.encode_rgb([x; 3])[1],
         }
     }
 
@@ -580,6 +617,8 @@ impl Curve {
             Self::BmdFilmGen5 => "Blackmagic Film Gen5",
             Self::DaVinciIntermediate => "DaVinci Intermediate",
             Self::Cineon => "Cineon (printing density)",
+            Self::AcesOutRec709 => "ACES 1.2 Output - Rec.709",
+            Self::AcesOutSrgb => "ACES 1.2 Output - sRGB",
         }
     }
 
@@ -602,6 +641,8 @@ impl Curve {
             Self::BmdFilmGen5 => "bmd5",
             Self::DaVinciIntermediate => "dvi",
             Self::Cineon => "cineon",
+            Self::AcesOutRec709 => "aces_out709",
+            Self::AcesOutSrgb => "aces_outsrgb",
         }
     }
 }
@@ -723,12 +764,17 @@ impl Colorspace {
     /// Resolve's colour-managed timeline: DaVinci Wide Gamut, Intermediate
     /// log. What a LUT exported from a DWG project expects and returns.
     pub const DAVINCI_INTERMEDIATE: Self = Self::new(Primaries::DaVinciWideGamut, Curve::DaVinciIntermediate);
+    /// What an ACES 1.2 `Rec.709` view put on screen: as an input, the
+    /// picture goes back through the inverse ODT and RRT to scene-linear.
+    pub const ACES_OUTPUT_REC709: Self = Self::new(Primaries::Ap0, Curve::AcesOutRec709);
+    /// The same for the `sRGB` view.
+    pub const ACES_OUTPUT_SRGB: Self = Self::new(Primaries::Ap0, Curve::AcesOutSrgb);
 
     /// The presets the UI offers, in menu order. Camera spaces come as the
     /// vendor ships them (their own primaries AND their own curve) because
     /// that pairing is what an IDT means; mixing them is possible but is
     /// never what someone picking "S-Log3" wants.
-    pub const PRESETS: [(&'static str, Self); 18] = [
+    pub const PRESETS: [(&'static str, Self); 20] = [
         ("ACEScg", Self::ACESCG),
         ("ACES2065-1", Self::ACES2065),
         ("ACEScc", Self::ACESCC),
@@ -747,6 +793,9 @@ impl Colorspace {
         ("Blackmagic Film Gen5", Self::BMD_GEN5),
         ("DaVinci Intermediate / DWG", Self::DAVINCI_INTERMEDIATE),
         ("Cineon", Self::CINEON),
+        // Appended: the colour menus address presets by position.
+        ("Output - Rec.709 (ACES 1.2)", Self::ACES_OUTPUT_REC709),
+        ("Output - sRGB (ACES 1.2)", Self::ACES_OUTPUT_SRGB),
     ];
 
     pub fn label(&self) -> String {
@@ -937,17 +986,7 @@ impl Transform {
     /// CPU evaluation. Used by the tests, by the colour picker, and by
     /// anything that reads pixels back and has to reason about them.
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
-        let lin = [
-            self.decode.to_linear(rgb[0]),
-            self.decode.to_linear(rgb[1]),
-            self.decode.to_linear(rgb[2]),
-        ];
-        let m = mat3_apply(self.matrix, lin);
-        [
-            self.encode.from_linear(m[0]),
-            self.encode.from_linear(m[1]),
-            self.encode.from_linear(m[2]),
-        ]
+        self.encode.encode_rgb(mat3_apply(self.matrix, self.decode.decode_rgb(rgb)))
     }
 
     /// Emit `fn {name}(c: vec3f) -> vec3f`, collecting the curve helpers it
@@ -955,6 +994,10 @@ impl Transform {
     /// curve emit it once).
     pub fn wgsl(&self, name: &str, helpers: &mut std::collections::BTreeMap<String, String>) -> String {
         let mut body = String::from("    var v = c;\n");
+        if self.decode.aces_output().is_some() || self.encode.aces_output().is_some() {
+            // Named to sort ahead of the `cs_aces_out*` functions that call it.
+            helpers.entry("cs_aces_0lib".into()).or_insert_with(crate::viewtf::aces::lib_wgsl);
+        }
         if let Some((f, def)) = curve_wgsl(self.decode, true) {
             helpers.entry(f.clone()).or_insert(def);
             let _ = writeln!(body, "    v = {f}(v);");
@@ -981,7 +1024,8 @@ impl Transform {
 /// WGSL for one curve in one direction: `(function name, definition)`, or
 /// `None` for Linear, which emits nothing.
 ///
-/// Every curve is componentwise on a `vec3f` and every comparison is
+/// Every curve but the `AcesOut*` pair is componentwise on a `vec3f`, and
+/// every comparison is
 /// parenthesised — naga parses a bare `a < b` in some positions as the start
 /// of a template argument list, which fails with a message that does not
 /// mention the comparison at all.
@@ -1132,6 +1176,19 @@ fn curve_wgsl(c: Curve, to_linear: bool) -> Option<(String, String)> {
                 )
             }
         }
+
+        (Curve::AcesOutRec709, true) => "    return aces_out_to_ap0(pow(max(c, vec3f(0.0)), vec3f(2.4)));".to_string(),
+        (Curve::AcesOutRec709, false) => "    return pow(aces_ap0_to_out(c), vec3f(1.0 / 2.4));".to_string(),
+        (Curve::AcesOutSrgb, true) => "    let a = max(c, vec3f(0.0));
+    let lo = a / 12.92;
+    let hi = pow((a + vec3f(0.055)) / 1.055, vec3f(2.4));
+    return aces_out_to_ap0(select(hi, lo, (a <= vec3f(0.04045))));"
+            .to_string(),
+        (Curve::AcesOutSrgb, false) => "    let a = aces_ap0_to_out(c);
+    let lo = a * 12.92;
+    let hi = 1.055 * pow(a, vec3f(1.0 / 2.4)) - vec3f(0.055);
+    return select(hi, lo, (a <= vec3f(0.0031308)));"
+            .to_string(),
 
         (Curve::Cineon, dir) => {
             // Gain/offset are solved from the reference black/white so the

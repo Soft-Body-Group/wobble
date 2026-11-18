@@ -48,16 +48,22 @@ pub enum ViewTransform {
     /// Blender's AgX, from the cubes in the user's Blender install (see
     /// [`agx`]). Without a Blender this falls back to [`Self::Filmic`].
     AgX,
+    /// ACES 1.2: the same RRT + SDR ODT as [`Self::Aces13`] and no looks, so
+    /// a picture cannot pick up 1.3's gamut compression. What an ACES 1.2
+    /// OCIO config's `sRGB` and `Rec.709` views run.
+    Aces12,
 }
 
 impl ViewTransform {
-    pub const ALL: [Self; 5] = [Self::None, Self::Filmic, Self::Aces13, Self::AgX, Self::OpenDrt];
+    pub const ALL: [Self; 6] =
+        [Self::None, Self::Filmic, Self::Aces13, Self::Aces12, Self::AgX, Self::OpenDrt];
 
     pub fn label(&self) -> &'static str {
         match self {
             Self::None => "None (clamp)",
             Self::Filmic => "Narkowicz fit (approx)",
             Self::Aces13 => "ACES 1.3 Output Transform",
+            Self::Aces12 => "ACES 1.2 Output Transform",
             Self::AgX => {
                 if agx::available() {
                     "AgX (Blender)"
@@ -91,6 +97,7 @@ impl ViewTransform {
             Self::None => "Standard",
             Self::Filmic => "Narkowicz",
             Self::Aces13 => "ACES 1.3",
+            Self::Aces12 => "ACES 1.2",
             Self::OpenDrt => "OpenDRT",
             Self::AgX => "AgX",
         }
@@ -330,9 +337,12 @@ impl ViewPreset {
 
     /// The catalogue offered in colour…, named the way Blender and others
     /// name them. The first few are the default menu ([`Self::DEFAULT_MENU`]).
-    pub const CATALOGUE: [(&'static str, Self); 11] = [
+    pub const CATALOGUE: [(&'static str, Self); 13] = [
         ("ACES 1.3 · sRGB", Self::new(ViewTransform::Aces13, Gamut::Rec709, Eotf::Srgb)),
         ("ACES 1.3 · Rec.709", Self::new(ViewTransform::Aces13, Gamut::Rec709, Eotf::Rec1886)),
+        // An ACES 1.2 OCIO config's two SDR views, by the names it is known by.
+        ("sRGB (ACES)", Self::new(ViewTransform::Aces12, Gamut::Rec709, Eotf::Srgb)),
+        ("Rec.709 (ACES)", Self::new(ViewTransform::Aces12, Gamut::Rec709, Eotf::Rec1886)),
         ("AgX · sRGB", Self::new(ViewTransform::AgX, Gamut::Rec709, Eotf::Srgb)),
         ("AgX · Rec.1886", Self::new(ViewTransform::AgX, Gamut::Rec709, Eotf::Rec1886)),
         ("Standard · sRGB", Self::new(ViewTransform::None, Gamut::Rec709, Eotf::Srgb)),
@@ -345,7 +355,7 @@ impl ViewPreset {
     ];
 
     /// How many of [`Self::CATALOGUE`] a fresh install offers.
-    pub const DEFAULT_MENU: usize = 5;
+    pub const DEFAULT_MENU: usize = 7;
 
     pub fn default_menu() -> Vec<Self> {
         Self::CATALOGUE[..Self::DEFAULT_MENU].iter().map(|(_, p)| *p).collect()
@@ -447,7 +457,12 @@ impl ViewSettings {
     /// Identity of the generated shader. The blit rebuilds its pipeline when
     /// this changes; everything else rides the uniform.
     pub fn shader_key(&self) -> u64 {
-        let mut k = self.effective() as u64;
+        // ACES 1.2 and 1.3 are one shader; only the look uniform differs.
+        let t = match self.effective() {
+            ViewTransform::Aces12 => ViewTransform::Aces13,
+            t => t,
+        };
+        let mut k = t as u64;
         k = k * 8 + self.display as u64;
         k = k * 8 + self.eotf as u64;
         k
@@ -474,7 +489,7 @@ fn view_transform(rgb: vec3f) -> vec3f {{
 "#,
                 A = 2.51, B = 0.03, C = 2.43, D = 0.59, E = 0.14
             ),
-            ViewTransform::Aces13 => aces::wgsl(self.display),
+            ViewTransform::Aces13 | ViewTransform::Aces12 => aces::wgsl(self.display),
             ViewTransform::OpenDrt => opendrt::wgsl(self.display),
             ViewTransform::AgX => agx::wgsl(),
         }
@@ -531,7 +546,7 @@ fn view_transform(rgb: vec3f) -> vec3f {{
         let rgb = [scene_linear[0] * g, scene_linear[1] * g, scene_linear[2] * g];
         let d = match self.effective() {
             ViewTransform::OpenDrt => return None,
-            ViewTransform::Aces13 => aces::apply_look(
+            ViewTransform::Aces13 | ViewTransform::Aces12 => aces::apply_look(
                 rgb,
                 self.working.primaries(),
                 self.display,
@@ -569,7 +584,7 @@ fn view_transform(rgb: vec3f) -> vec3f {{
             // needs them from `color`'s PUBLISHED matrices with a real
             // Bradford adaptation — not from this module's D65-normalised
             // OpenDRT set, which is a different (display-oriented) choice.
-            ViewTransform::Aces13 => {
+            ViewTransform::Aces13 | ViewTransform::Aces12 => {
                 use crate::color::{primaries_matrix, Primaries};
                 let w = self.working.primaries();
                 (
@@ -626,7 +641,7 @@ fn view_transform(rgb: vec3f) -> vec3f {{
                 d[..agx::SLOTS].copy_from_slice(&agx::pack(self.effective_look(), self.display));
                 d
             }
-            ViewTransform::Aces13 => {
+            ViewTransform::Aces13 | ViewTransform::Aces12 => {
                 let mut d = [[0.0; 4]; opendrt::SLOTS];
                 d[0][0] = (self.effective_look() == Look::GamutCompress) as u8 as f32;
                 d
@@ -860,6 +875,22 @@ mod tests {
             assert_eq!(t.looks()[0], Look::None, "{t:?}");
         }
         assert_eq!(ViewTransform::AgX.looks().len(), 10, "Blender's nine AgX looks + None");
+    }
+
+    /// ACES 1.2 is ACES 1.3's shader with no look: switching between them is
+    /// a uniform, and 1.3's gamut compression cannot reach a 1.2 picture.
+    #[test]
+    fn aces12_is_aces13_without_the_look() {
+        let a = ViewSettings { transform: ViewTransform::Aces13, ..Default::default() };
+        let b = ViewSettings { transform: ViewTransform::Aces12, look: Look::GamutCompress, ..a };
+        assert_eq!(a.shader_key(), b.shader_key());
+        assert_eq!(a.wgsl(), b.wgsl());
+        assert_eq!(b.effective_look(), Look::None);
+        let mut u = BlitUniform::default();
+        b.fill_uniform(&mut u);
+        assert_eq!(u.drt[0][0], 0.0);
+        let c = [0.9, 0.02, 0.01];
+        assert_eq!(a.display_rgb(c), b.display_rgb(c));
     }
     use super::*;
 
