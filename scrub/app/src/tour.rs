@@ -63,11 +63,13 @@ const STEPS: &[Step] = &[
 /// Seconds one pass of an animation takes (one key of a pair).
 const PASS: f64 = 3.2 / SPEED;
 /// How much faster than first drawn the animations run.
-const SPEED: f64 = 3.0;
+const SPEED: f64 = 1.5;
 /// Loops of its animation a step plays before the tour moves on.
-const LOOPS: f64 = 4.0;
+const LOOPS: f64 = 1.0;
+/// A beat on the last frame before the next step starts.
+const REST: f64 = 0.4;
 
-/// How long a step stays before the tour moves on by itself: four loops
+/// How long a step stays before the tour moves on by itself: one loop
 /// of its animation (a pair of keys loops once both have had a pass).
 fn dwell(s: &Step) -> f64 {
     let one = match s.anim {
@@ -77,7 +79,7 @@ fn dwell(s: &Step) -> f64 {
         Anim::Panels => 3.0 * 1.6 / SPEED,
         _ => PASS,
     };
-    LOOPS * one
+    LOOPS * one + REST
 }
 
 pub struct Tour {
@@ -139,6 +141,25 @@ impl Tour {
         }
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::new("scrub-hotkey-tour")).show(ctx, |ui| {
+          ui.horizontal_top(|ui| {
+            // Every step by name: click one to see it again (it then loops).
+            ui.vertical(|ui| {
+                ui.set_width(LIST_W);
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("steps").size(11.0).weak());
+                ui.add_space(2.0);
+                for (i, s) in STEPS.iter().enumerate() {
+                    let on = i == self.step;
+                    let text = egui::RichText::new(short(s.anim)).size(13.0);
+                    let text = if on { text.color(accent()) } else { text };
+                    if ui.add_sized([LIST_W, 22.0], egui::Button::selectable(on, text)).clicked() {
+                        self.manual = true;
+                        self.go(i);
+                    }
+                }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
             ui.set_width(CARD_W);
             let step = &STEPS[self.step];
             ui.add_space(2.0);
@@ -154,16 +175,6 @@ impl Tour {
             act(&painter, stage, step, t);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                // Progress: one dot a step, click to go there.
-                for i in 0..STEPS.len() {
-                    let (r, resp) = ui.allocate_exact_size(vec2(12.0, 12.0), egui::Sense::click());
-                    let c = if i == self.step { accent() } else { ui.visuals().weak_text_color().gamma_multiply(0.6) };
-                    ui.painter().circle_filled(r.center(), if i == self.step { 4.0 } else { 3.0 }, c);
-                    if resp.clicked() {
-                        self.manual = true;
-                        self.go(i);
-                    }
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let last = self.step + 1 == STEPS.len();
                     if ui.button(if last { "start editing" } else { "next" }).clicked() {
@@ -183,6 +194,8 @@ impl Tour {
                     }
                 });
             });
+            });
+          });
         });
         if modal.should_close() {
             close = true;
@@ -196,6 +209,8 @@ impl Tour {
 }
 
 const CARD_W: f32 = 640.0;
+/// The step list down the card's left.
+const LIST_W: f32 = 170.0;
 const KB_H: f32 = 190.0;
 const STAGE_H: f32 = 150.0;
 
@@ -208,6 +223,25 @@ const TRIM: Color32 = Color32::from_rgb(230, 60, 60);
 const RIPPLE: Color32 = Color32::from_rgb(240, 210, 60);
 const INK: Color32 = Color32::from_rgb(225, 228, 235);
 const DIM: Color32 = Color32::from_rgb(120, 124, 135);
+
+/// A step's name in the list.
+fn short(a: Anim) -> &'static str {
+    match a {
+        Anim::Intro => "welcome",
+        Anim::Trim => "A  D   trim",
+        Anim::Slip => "S   slip",
+        Anim::Ripple => "Z  C   ripple trim",
+        Anim::Speed => "shift S   speed",
+        Anim::Shuttle => "J  K  L   shuttle",
+        Anim::Marks => "I  O   marks",
+        Anim::Edit => ",  .   insert, overwrite",
+        Anim::Targets => "1  2  3   targets",
+        Anim::Dissolve => "cmd D   dissolve",
+        Anim::Scrub => "drag   scrub",
+        Anim::Panels => "Q  W  H   panels",
+        Anim::Done => "done",
+    }
+}
 
 // ------------------------------------------------------------ the keyboard
 
@@ -701,9 +735,11 @@ mod tests {
 
     fn frame(ctx: &egui::Context, tour: &mut Tour, time: f64) {
         let input = egui::RawInput { time: Some(time), ..Default::default() };
-        let _ = ctx.run_ui(input, |ui| {
+        let mut out = ctx.run_ui(input, |ui| {
             tour.show(ui.ctx());
         });
+        // No renderer here: drop the font atlas uploads on purpose.
+        out.textures_delta.clear();
     }
 
     #[test]
