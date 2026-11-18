@@ -1442,6 +1442,16 @@ pub fn swappable_inputs(kind: &NodeKind) -> Option<(usize, usize)> {
 
 pub fn node_label(kind: &NodeKind) -> String {
     match kind {
+        // A prompt is named by what it says (the start of it).
+        NodeKind::GenAiStep(genai::Op::Prompt { text }) if !text.trim().is_empty() => {
+            let t = text.trim();
+            let cut: String = t.chars().take(28).collect();
+            if t.chars().count() > 28 {
+                format!("\u{201c}{}…\u{201d}", cut.trim_end())
+            } else {
+                format!("\u{201c}{cut}\u{201d}")
+            }
+        }
         // A dot is a bend in a wire; a label beside it would be the loudest
         // thing on screen for the least reason.
         NodeKind::Dot { .. } => String::new(),
@@ -1963,6 +1973,9 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         // And the SDF family.
         NodeKind::Sdf(_) | NodeKind::SdfNode(_) => t::node_sdf(),
         NodeKind::Blender(_) => t::node_blender(),
+        // Words inside a GenAI Pipeline wear the String node's colour: a
+        // prompt is text, and reads as text at a glance among the models.
+        NodeKind::GenAiStep(genai::Op::Prompt { .. } | genai::Op::Template { .. }) => t::node_prompt(),
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => t::node_genai(),
         NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => t::node_scene3d(),
         NodeKind::RotoNode(_) => t::node_spline(),
@@ -2684,6 +2697,10 @@ pub(crate) fn paint_body(
         NodeKind::BokehKernel(_) => crate::nodes::bokehkernel::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Grain(_) => crate::nodes::grain::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Blender(_) => crate::blenderui::glyph(&painter, sp, r, fill, stroke),
+        // A prompt is a speech bubble with its own words in it.
+        NodeKind::GenAiStep(genai::Op::Prompt { text } | genai::Op::Template { text }) => {
+            crate::genaiui::prompt_glyph(&painter, sp, r, fill, stroke, text)
+        }
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => crate::genaiui::glyph(&painter, sp, r, fill, stroke),
         NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => {
             crate::nodes::scene3d::scene_glyph(&painter, sp, r, fill, stroke)
@@ -14443,6 +14460,53 @@ mod link_view_tests {
             }
         }
         (buf, w, h)
+    }
+
+    /// Inside a GenAI Pipeline a prompt is a speech bubble with its words
+    /// in it, in the String node's colour. Dumps
+    /// `target/graph-genai-prompt.png` to judge by eye.
+    #[test]
+    fn a_prompt_inside_a_pipeline_is_a_bubble_named_by_its_words() {
+        let (w_pt, h_pt, ss) = (620.0f32, 300.0f32, 2.0f32);
+        let mut pl = genai::Pipeline::default();
+        if let genai::Op::Prompt { text } = &mut pl.steps[0].op {
+            *text = "a moth on a lamp at night, rain on the glass behind it".into();
+        }
+        pl.push(genai::Op::Prompt { text: String::new() }, [0.75, -0.45]);
+        let mut g = crate::genaiui::to_editor(&pl);
+        let said = g.nodes.values().find(|n| matches!(&n.kind, NodeKind::GenAiStep(genai::Op::Prompt { text }) if !text.is_empty())).unwrap();
+        assert_eq!(node_label(&said.kind), "\u{201c}a moth on a lamp at night, r…\u{201d}");
+        assert_eq!(type_color(&said.kind), type_color(&NodeKind::Prompt(Default::default())));
+        assert_eq!(node_label(&NodeKind::GenAiStep(genai::Op::Prompt { text: String::new() })), "Prompt");
+
+        let ctx = egui::Context::default();
+        let mut ed = NodeEditor::default();
+        ed.zoom = 1.5;
+        // Up the graph, to the prompts.
+        ed.pan = Vec2::new(0.0, 130.0);
+        ed.in_genai = true;
+        let (mut sel, mut act, mut pins, mut slot, mut rects) =
+            (Vec::new(), Vec::new(), Vec::new(), 3usize, Vec::new());
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w_pt, h_pt))),
+            ..Default::default()
+        };
+        input.viewports.values_mut().for_each(|v| v.native_pixels_per_point = Some(1.0));
+        let out = ctx.run_ui(input, |ui| {
+            ed.show(ui, &mut g, &mut sel, &mut act, &mut pins, &mut slot, &mut rects);
+        });
+        let prims = ctx.tessellate(out.shapes, 1.0);
+        let (w, h) = ((w_pt * ss) as usize, (h_pt * ss) as usize);
+        let buf = rasterize(&prims, w, h, ss);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target").join("graph-genai-prompt.png");
+        if let Ok(file) = std::fs::File::create(&path) {
+            let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            if let Ok(mut wr) = enc.write_header() {
+                let _ = wr.write_image_data(&buf);
+            }
+        }
     }
 
     /// A GenAI Pipeline wears a bar like a Layer's: its pictures stand on

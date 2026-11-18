@@ -501,6 +501,42 @@ pub fn glyph(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, stroke: St
     }
 }
 
+/// A prompt inside a pipeline: a speech bubble, wider than the disc, with
+/// the words themselves written in it once it is big enough to read (and
+/// three rules for lines of text when it is not, or when it is empty).
+pub fn prompt_glyph(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke, text: &str) {
+    let card = egui::Rect::from_center_size(c, Vec2::new(r * 2.5, r * 1.6));
+    // The tail first, so the card's outline covers its root.
+    let tail = vec![
+        Pos2::new(card.left() + r * 0.35, card.bottom() - 1.0),
+        Pos2::new(card.left() + r * 0.2, card.bottom() + r * 0.42),
+        Pos2::new(card.left() + r * 0.85, card.bottom() - 1.0),
+    ];
+    painter.add(egui::Shape::convex_polygon(tail, fill, stroke));
+    painter.rect(card, r * 0.3, fill, stroke, egui::StrokeKind::Middle);
+    let ink = theme::node_ink();
+    let inner = card.shrink2(Vec2::new(r * 0.22, r * 0.16));
+    let words = text.trim();
+    let size = r * 0.34;
+    if !words.is_empty() && size >= 7.0 {
+        // The words, wrapped, clipped to the bubble (text bleeds otherwise).
+        let galley = painter.layout(
+            words.chars().take(120).collect(),
+            egui::FontId::proportional(size.min(13.0)),
+            ink,
+            inner.width(),
+        );
+        painter.with_clip_rect(inner).galley(inner.min, galley, ink);
+        return;
+    }
+    let rule = Stroke::new(stroke.width.max(1.0), ink);
+    let widths: [f32; 3] = if words.is_empty() { [0.3, 0.0, 0.0] } else { [1.0, 1.0, 0.55] };
+    for (k, w) in widths.into_iter().enumerate().filter(|(_, w)| *w > 0.0) {
+        let y = inner.top() + inner.height() * (0.2 + 0.3 * k as f32);
+        painter.line_segment([Pos2::new(inner.left(), y), Pos2::new(inner.left() + inner.width() * w, y)], rule);
+    }
+}
+
 /// Does running this node's pipeline spend money? (A model step on a
 /// remote service. Cached steps still count: whether they are cached is a
 /// hash of the reference, which the graph does not render every frame.)
