@@ -53,7 +53,10 @@ pub(super) fn row(ui: &mut Ui, node: u64, p: &mut GenAiParams) {
             );
         }
         Ok(n) if n > 1 => {
-            ui.weak(small(format!("run… makes {n} takes, priced together")));
+            ui.weak(small(crate::genaiui::priced!(
+                format!("run… makes {n} takes, priced together"),
+                format!("run… makes {n} takes")
+            )));
         }
         Ok(_) => {}
         Err(e) => {
@@ -143,7 +146,10 @@ fn fan_out(ui: &mut Ui, node: u64, p: &mut GenAiParams) {
         }
     });
     crate::widgets::note_rect(ui, button_id(node), r.response.rect);
-    r.response.on_hover_text("fan out: run… then makes one take per model, priced together");
+    r.response.on_hover_text(crate::genaiui::priced!(
+        "fan out: run… then makes one take per model, priced together",
+        "fan out: run… then makes one take per model"
+    ));
 }
 
 #[cfg(test)]

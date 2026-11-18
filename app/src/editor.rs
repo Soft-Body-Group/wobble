@@ -10452,6 +10452,7 @@ impl NodeEditor {
             }
             // A pipeline that bills when you press run: a `$` in the same
             // corner (a GenAI node never declares weights).
+            #[cfg(feature = "commerce")]
             if let NodeKind::GenAi(p) = &n.kind {
                 if crate::genaiui::spends(p) {
                     crate::genaiui::money_badge(&painter, sp, r);

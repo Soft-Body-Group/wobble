@@ -25,13 +25,31 @@
 //! machine state (`genai::config`): never in a setup, never in prefs.
 
 use crate::{innards, theme, Gfx};
+
+/// Words that mention money, and the words a build without the `commerce`
+/// feature says instead. A macro so the first never reaches that binary.
+#[cfg(feature = "commerce")]
+macro_rules! priced {
+    ($money:expr, $plain:expr) => {
+        $money
+    };
+}
+#[cfg(not(feature = "commerce"))]
+macro_rules! priced {
+    ($money:expr, $plain:expr) => {
+        $plain
+    };
+}
+pub(crate) use priced;
 use egui::{Color32, Pos2, Stroke, Ui, Vec2};
 use engine::graph::{GenAiParams, NodeKind};
 use genai::catalog::{self, Task};
 use genai::config::{self, Config, Origin, Route};
 use genai::pipeline::{Op, Opts, Pipeline};
 use genai::run::{self, Clip, Event, Inputs, Plan, Png, StepState};
-use genai::service::{self, Quote};
+use genai::service::Quote;
+#[cfg(any(feature = "commerce", test))]
+use genai::service;
 use std::collections::BTreeMap;
 use std::sync::mpsc::Receiver;
 
@@ -505,7 +523,10 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
         let mut act = None;
         ui.horizontal(|ui| {
             ui.weak(small(match v.to_step {
-                Some(_) => "another step is being prepared: pay & run it (or cancel), then run this one beside it",
+                Some(_) => priced!(
+                    "another step is being prepared: pay & run it (or cancel), then run this one beside it",
+                    "another step is being prepared: cancel it, or run this one once it is going"
+                ),
                 None => "the whole pipeline is being prepared",
             }));
             if ui.small_button("cancel").clicked() {
@@ -826,7 +847,7 @@ fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
         .iter()
         .rev()
         .map(|s| {
-            let cost = s.usd.map(|u| format!(" · {}", service::usd(u))).unwrap_or_default();
+            let cost = cost_note(s.usd);
             Pic { shot: s, caption: format!("{}{cost}", hist::ago(s.when, now)), step: None }
         })
         .collect();
@@ -850,7 +871,7 @@ fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
                     if s.picked {
                         ui.painter().rect_stroke(r.rect, 2.0, Stroke::new(2.0, theme::selection()), egui::StrokeKind::Outside);
                     }
-                    let cost = s.usd.map(|u| format!(" · {}", service::usd(u))).unwrap_or_default();
+                    let cost = cost_note(s.usd);
                     if r.on_hover_text(format!("{}{cost}\nclick: use this as the step's result", hist::ago(s.when, now))).clicked() {
                         act = Some(Action::PickMade(s.k));
                     }
@@ -954,6 +975,7 @@ pub fn prompt_glyph(painter: &egui::Painter, c: Pos2, r: f32, fill: Color32, str
 /// Does running this node's pipeline spend money? (A model step on a
 /// remote service. Cached steps still count: whether they are cached is a
 /// hash of the reference, which the graph does not render every frame.)
+#[cfg(feature = "commerce")]
 pub fn spends(p: &GenAiParams) -> bool {
     p.pipeline.steps.iter().any(|s| s.op.is_remote())
 }
@@ -962,6 +984,7 @@ pub fn spends(p: &GenAiParams) -> bool {
 /// never declares weights, so the weights badge never wants that corner).
 /// Manifesto 8's rule, for a new currency: a node that bills when you press
 /// it says so where you can see it.
+#[cfg(feature = "commerce")]
 pub fn money_badge(painter: &egui::Painter, sp: Pos2, r: f32) {
     let br = (r * 0.4).clamp(3.5, 6.0);
     let c = sp + Vec2::new(-r * 0.95 - 4.0, r * 0.95 + 4.0);
@@ -977,12 +1000,27 @@ pub fn money_badge(painter: &egui::Painter, sp: Pos2, r: f32) {
     }
 }
 
+/// " · $0.04" for a result's caption; nothing without `commerce`.
+pub(crate) fn cost_note(usd: Option<f64>) -> String {
+    #[cfg(feature = "commerce")]
+    return usd.map(|u| format!(" · {}", service::usd(u))).unwrap_or_default();
+    #[cfg(not(feature = "commerce"))]
+    {
+        let _ = usd;
+        String::new()
+    }
+}
+
 // ------------------------------------------------------------ run state
 
 /// Every GenAI run in the app. One at a time: a second click while one is
 /// going says so rather than queueing money.
 pub struct Runs {
     pub cfg: Config,
+    /// Stop at a quote before anything billed is sent. The `commerce`
+    /// feature; without it a run goes straight to the service on the
+    /// user's own key. `--test-genai` turns it on to walk the quote stages.
+    quotes: bool,
     /// The run being PREPARED (capturing, pricing, waiting for pay & run)
     /// — one at a time: they share the capture bake — or the last one
     /// that ended, until dismissed.
@@ -1097,6 +1135,7 @@ impl Default for Runs {
     fn default() -> Self {
         Self {
             cfg: Config::load(),
+            quotes: cfg!(feature = "commerce"),
             run: None,
             background: vec![],
             captured: vec![],
@@ -1233,6 +1272,7 @@ pub enum ViewState {
     Capturing,
     Quoting,
     /// `what`: the steps that will be billed, by name.
+    #[cfg_attr(not(feature = "commerce"), allow(dead_code))]
     Ready { quote: Result<Quote, String>, billed: usize, stale: bool, what: Vec<String> },
     Running,
     Failed(String),
@@ -1250,6 +1290,7 @@ pub enum Action {
     /// Make a Load node of take `take`; `wire` feeds it into the node's
     /// image input (the history's "load" and "feed").
     TakeToLoad { take: usize, wire: bool },
+    #[cfg_attr(not(feature = "commerce"), allow(dead_code))]
     SetRoute(Route),
     SaveKey(Key, String),
     ForgetKey(Key),
@@ -1310,7 +1351,7 @@ fn clock(secs: f32) -> String {
 
 fn state_words(s: &StepState) -> String {
     match s {
-        StepState::Cached => "cached — not billed".into(),
+        StepState::Cached => priced!("cached — not billed", "cached").into(),
         StepState::Sending => "sending".into(),
         StepState::Queued(Some(n)) => format!("queued, {n} ahead"),
         StepState::Queued(None) => "queued".into(),
@@ -1479,7 +1520,10 @@ fn model_info(m: &catalog::RemoteModel, ports: &[String]) -> Vec<String> {
         format!("kind: {}", m.task.label()),
         format!("takes: {}", if ports.is_empty() { "nothing".to_string() } else { ports.join(", ") }),
         format!("gives back: {gives}"),
-        format!("runs at: {} ({})", m.endpoint, "paid per run: get the price first"),
+        priced!(
+            format!("runs at: {} ({})", m.endpoint, "paid per run: get the price first"),
+            format!("runs at: {}", m.endpoint)
+        ),
         format!("licence: {}", m.licence),
     ];
     v.push(
@@ -1644,7 +1688,7 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                     ui.horizontal(|ui| {
                         ui.add_sized([crate::widgets::LABEL_W, 16.0], egui::Label::new(small("seed")));
                         ui.add(egui::DragValue::new(seed).update_while_editing(false).speed(1.0));
-                        if ui.small_button("new seed").on_hover_text("a variation: a new request, billed again").clicked() {
+                        if ui.small_button("new seed").on_hover_text(priced!("a variation: a new request, billed again", "a variation: a new request")).clicked() {
                             *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000;
                         }
                     });
@@ -1672,7 +1716,10 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                                         }
                                     }
                                 });
-                                ui.weak(small("billed per second; no audio; plays from the frame it was made at"));
+                                ui.weak(small(priced!(
+                                    "billed per second; no audio; plays from the frame it was made at",
+                                    "no audio; plays from the frame it was made at"
+                                )));
                             }
                             if !video_ok() {
                                 ui.colored_label(theme::error(), small(NO_VIDEO));
@@ -1801,7 +1848,10 @@ fn run_ui(
     // PRICE, which is free and sends nothing to a model; (2) PAY & RUN,
     // which is the request and the charge. `what` = "this step" / "the
     // pipeline".
+    //
+    // Without `commerce` there is neither: one button, and the run goes.
     let mut act = None;
+    #[cfg(feature = "commerce")]
     let step = |ui: &mut Ui, n: u8, on: bool, text: &str| {
         let t = small(format!("{n}  {text}"));
         ui.label(if on { t.strong() } else { t.weak() });
@@ -1814,33 +1864,49 @@ fn run_ui(
             if let ViewState::Done(s) = &v.state {
                 ui.colored_label(theme::selection(), small(format!("done: {s}")));
             }
+            #[cfg(feature = "commerce")]
             step(ui, 1, true, "get the price: free, nothing is sent to a model yet");
             let busy = v.busy_elsewhere;
-            let b = ui.add_enabled(!busy, egui::Button::new(format!("get price for {what}")));
+            let label = priced!(format!("get price for {what}"), format!("run {what}"));
+            let b = ui.add_enabled(!busy, egui::Button::new(label));
             let b = if busy {
-                b.on_disabled_hover_text("another GenAI run is being priced: finish or cancel that one first")
+                b.on_disabled_hover_text(priced!(
+                    "another GenAI run is being priced: finish or cancel that one first",
+                    "another GenAI run is being prepared: finish or cancel that one first"
+                ))
             } else {
-                b.on_hover_text(
+                b.on_hover_text(priced!(
                     "renders the inputs it needs at the playhead and asks the service what it will cost. \
                      Free. Nothing is sent to a model and nothing is charged until you press pay & run.",
-                )
+                    "renders the inputs it needs at the playhead and sends the request to the service"
+                ))
             };
             if b.clicked() {
                 act = Some(prepare());
             }
+            #[cfg(feature = "commerce")]
             step(ui, 2, false, "pay & run: appears here with the price");
         }
         ViewState::Capturing | ViewState::Quoting => {
             ui.horizontal(|ui| {
                 ui.spinner();
                 let doing = if matches!(v.state, ViewState::Capturing) { "rendering the inputs" } else { "asking the service" };
-                ui.label(small(format!("1  getting the price (free): {doing}… {}", clock(v.run_secs))).strong());
+                let line = priced!(
+                    format!("1  getting the price (free): {doing}… {}", clock(v.run_secs)),
+                    format!("{doing}… {}", clock(v.run_secs))
+                );
+                ui.label(small(line).strong());
             });
+            #[cfg(feature = "commerce")]
             step(ui, 2, false, "pay & run: next");
             if ui.small_button("cancel").clicked() {
                 act = Some(cancel());
             }
         }
+        // Never reached without `commerce`, outside `--test-genai`.
+        #[cfg(not(feature = "commerce"))]
+        ViewState::Ready { .. } => {}
+        #[cfg(feature = "commerce")]
         ViewState::Ready { quote, billed, stale, what: billed_for } => {
             step(ui, 1, false, "price received");
             let price = match quote {
@@ -1905,7 +1971,7 @@ fn run_ui(
             ui.weak(small("nothing has been sent or charged yet"));
         }
         ViewState::Running => {
-            ui.label(small("2  sent: running at the service").strong());
+            ui.label(small(priced!("2  sent: running at the service", "sent: running at the service")).strong());
             for (i, s) in &v.steps {
                 let name = names.get(*i).cloned().unwrap_or_default();
                 let going = !matches!(s, StepState::Done | StepState::Cached);
@@ -1940,10 +2006,10 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
     // --- who pays
     // Wobble credits are the `commerce` feature; without it the one route
     // is the user's own key, and there is nothing to pick.
-    if cfg!(feature = "commerce") {
+    #[cfg(feature = "commerce")]
+    {
     ui.horizontal(|ui| {
         ui.label(small("bill"));
-        #[cfg(feature = "commerce")]
         if ui.add(egui::Button::selectable(v.route == Route::Relay, small("wobble credits"))).clicked() && v.route != Route::Relay {
             act = Some(Action::SetRoute(Route::Relay));
         }
@@ -3043,7 +3109,7 @@ impl Gfx {
             .collect();
         let mut all = vec![(lead.clone(), plan.clone())];
         all.extend(r.more.iter().map(|(p, plan, _)| (p.clone(), plan.clone())));
-        if all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
+        if !self.jobs.genai.quotes || all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
             let mut variants = vec![run::Variant { pipeline: lead, plan, approved: vec![], inputs: None }];
             variants.extend(r.more.iter().cloned().map(|(pipeline, plan, inputs)| run::Variant {
                 pipeline,
@@ -3259,10 +3325,13 @@ impl Gfx {
                     Some(Ok(t)) => {
                         // What it cost, said either way: a charge, or
                         // that there was nothing new to pay for.
+                        #[cfg(feature = "commerce")]
                         let spent = match t.usd {
                             Some(u) => format!(", {} charged", service::usd(u)),
                             None => ", free (nothing new to pay for)".to_string(),
                         };
+                        #[cfg(not(feature = "commerce"))]
+                        let spent = "";
                         let n = 1 + r.more.len();
                         // Where every step's result is now: what viewing
                         // a step inside shows.
@@ -4289,6 +4358,9 @@ pub mod fake {
     }
 }
 
+/// `--test-genai`'s stage that runs with quotes off.
+const DIRECT: u32 = 100;
+
 /// `--test-genai`'s state.
 pub struct TestGenai {
     stage: u32,
@@ -4334,6 +4406,9 @@ impl Gfx {
             println!("GENAI TEST FAIL: {m}");
             std::process::exit(1);
         };
+        // The quote stages run in every build; `DIRECT` is the one stage
+        // that runs as a build without `commerce` does.
+        self.jobs.genai.quotes = t.stage != DIRECT;
         // The LIVE end-to-end run (`WOBBLE_TEST_GENAI_LIVE=1`): the real
         // fal, the user's own key, real money (cents). Opt-in by name.
         if std::env::var_os("WOBBLE_TEST_GENAI_LIVE").is_some() {
@@ -4449,10 +4524,36 @@ impl Gfx {
                     }) {
                         fail("the node still has a prompt input".into());
                     }
+                    // First, on a node of its own, the run without a quote.
+                    let slot = self.next_read_slot;
+                    self.next_read_slot += 1;
+                    let mut p = GenAiParams::new(slot);
+                    p.pipeline.steps[0].op = Op::Prompt { text: "no quote first".into() };
+                    let g = self.egraph.add(NodeKind::GenAi(p), egui::pos2(360.0, 400.0));
+                    self.jobs.genai.quotes = false;
+                    self.genai_action(g, Action::Prepare);
+                    t.pipe = g;
+                    next(&mut t, DIRECT);
+                }
+            }
+            DIRECT => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the run without a quote failed: {e}")),
+                Some(Phase::Quoting { .. } | Phase::Ready { .. }) => fail("a run without quotes stopped for one".into()),
+                Some(Phase::Done(_)) => {
+                    let fake = t.fake.as_ref().unwrap();
+                    if fake.submits() != 1 {
+                        fail(format!("the run without a quote submitted {} requests, expected one", fake.submits()));
+                    }
+                    fake.submits.store(0, std::sync::atomic::Ordering::SeqCst);
+                    let g = t.pipe;
+                    self.genai_action(g, Action::Dismiss);
+                    t.pipe = 0;
+                    self.jobs.genai.quotes = true;
                     self.genai_action(t.node, Action::Prepare);
                     next(&mut t, 4);
                 }
-            }
+                _ => {}
+            },
             4 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the remote prepare failed: {e}")),
                 Some(Phase::Ready { quote, .. }) => {

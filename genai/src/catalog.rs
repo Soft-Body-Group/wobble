@@ -505,7 +505,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::TextToImage,
         commercial: true,
         licence: "Apache-2.0",
-        about: "fast text-to-image, four steps; the cheap way to find a composition",
+        about: "fast text-to-image, four steps; the quick way to find a composition",
     },
     RemoteModel {
         id: "fal/flux-dev",
@@ -772,7 +772,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::ImageToVideo,
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
-        about: "animate the input from a prompt: 4-15 s at 480p/720p, billed per second",
+        about: "animate the input from a prompt: 4-15 s at 480p/720p",
     },
     RemoteModel {
         id: "fal/seedance-2.5-i2v",
@@ -784,7 +784,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::ImageToVideo,
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
-        about: "the bigger Seedance: up to 30 s and 1080p; about twice 2.0 fast's price per second",
+        about: "the bigger Seedance: up to 30 s and 1080p",
     },
     RemoteModel {
         id: "fal/seedance-2.5-reference",
@@ -808,7 +808,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::VideoEdit,
         commercial: true,
         licence: "ByteDance via fal API terms (commercial use through the API)",
-        about: "edit the input clip by instruction (change, add, remove): 2-30 s, 720p; billed on the clip sent and the clip made",
+        about: "edit the input clip by instruction (change, add, remove): 2-30 s, 720p",
     },
     RemoteModel {
         id: "fal/kling-o3-pro-video-edit",
@@ -820,7 +820,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::VideoEdit,
         commercial: true,
         licence: "Kling via fal API terms (commercial use through the API)",
-        about: "edit the input clip by instruction: 3-15 s, 720 px or more, billed per second",
+        about: "edit the input clip by instruction: 3-15 s, 720 px or more",
     },
     RemoteModel {
         id: "fal/lucy-edit-dev",
@@ -834,7 +834,7 @@ pub const CATALOG: &[RemoteModel] = &[
         // states no terms: tagged until someone shows otherwise.
         commercial: false,
         licence: "Decart Lucy Edit Dev: no commercial terms stated (treat as research)",
-        about: "cheap prompt edits of the input clip (clothes, colours, props), billed per second",
+        about: "quick prompt edits of the input clip (clothes, colours, props)",
     },
     RemoteModel {
         id: "fal/ltx-2.3-inpaint",
@@ -860,7 +860,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::VideoEdit,
         commercial: true,
         licence: "Wan 2.7 via fal API terms (commercial use through the API)",
-        about: "edit the input clip by instruction (restyle, change, remove): 2-10 s, 720p, billed per second",
+        about: "edit the input clip by instruction (restyle, change, remove): 2-10 s, 720p",
     },
     RemoteModel {
         id: "fal/wan-vace-inpaint",
@@ -873,7 +873,7 @@ pub const CATALOG: &[RemoteModel] = &[
         // Wan 2.1 (and VACE) are released under Apache 2.0.
         commercial: true,
         licence: "Wan 2.1 VACE (Apache 2.0)",
-        about: "repaint the matte's white over the input clip from the prompt: edit or remove on video, 17-241 frames, billed per second",
+        about: "repaint the matte's white over the input clip from the prompt: edit or remove on video, 17-241 frames",
     },
     RemoteModel {
         id: "fal/bria-video-eraser",
@@ -886,7 +886,7 @@ pub const CATALOG: &[RemoteModel] = &[
         // fal tags it "Commercial use"; Bria trains on licensed data.
         commercial: true,
         licence: "Bria via fal (tagged commercial use)",
-        about: "erase what the matte's white covers from the input clip, no prompt: under 5 s, billed per second",
+        about: "erase what the matte's white covers from the input clip, no prompt: under 5 s",
     },
     RemoteModel {
         id: "fal/topaz-video-upscale",
@@ -946,7 +946,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::TextToImage,
         commercial: true,
         licence: "Google via fal API terms (commercial use through the API)",
-        about: "the faster, cheaper Nano Banana; 1K, or 2K from 2 MP",
+        about: "the faster Nano Banana; 1K, or 2K from 2 MP",
     },
     RemoteModel {
         id: "fal/nano-banana-2-edit",
@@ -958,7 +958,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Edit,
         commercial: true,
         licence: "Google via fal API terms (commercial use through the API)",
-        about: "edit a picture by instruction, the faster, cheaper Nano Banana",
+        about: "edit a picture by instruction, the faster Nano Banana",
     },
     RemoteModel {
         id: "fal/gpt-image-2",
@@ -970,7 +970,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::TextToImage,
         commercial: true,
         licence: "OpenAI via fal API terms (commercial use through the API)",
-        about: "OpenAI's image model. Billed by tokens, so no price up front; quality defaults to high, and extra {\"quality\": \"medium\"} costs far less",
+        about: "OpenAI's image model; quality defaults to high, extra {\"quality\": \"medium\"} lowers it",
     },
     RemoteModel {
         id: "fal/gpt-image-2-edit",
@@ -982,7 +982,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Edit,
         commercial: true,
         licence: "OpenAI via fal API terms (commercial use through the API)",
-        about: "edit a picture by instruction with GPT Image; billed by tokens, so no price up front",
+        about: "edit a picture by instruction with GPT Image",
     },
     RemoteModel {
         id: "fal/gpt-image-2-inpaint",
@@ -994,7 +994,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Inpaint,
         commercial: true,
         licence: "OpenAI via fal API terms (commercial use through the API)",
-        about: "repaint the white of the matte from a prompt with GPT Image; billed by tokens, so no price up front",
+        about: "repaint the white of the matte from a prompt with GPT Image",
     },
     RemoteModel {
         id: "fal/moge-3-normals",
@@ -1018,7 +1018,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Normals,
         commercial: true,
         licence: "fal lists it for commercial use",
-        about: "surface normals from one picture, MoGe-2: cheaper than MoGe-3; raw n*0.5+0.5",
+        about: "surface normals from one picture, MoGe-2; raw n*0.5+0.5",
     },
     RemoteModel {
         id: "fal/marigold-depth",
@@ -1066,7 +1066,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Depth,
         commercial: false,
         licence: "Depth Anything V2: Small is Apache-2.0, Base/Large CC-BY-NC-4.0; which fal runs is not stated",
-        about: "relative depth (near is bright) from one picture, raw grey; fal gives no price up front",
+        about: "relative depth (near is bright) from one picture, raw grey",
     },
     RemoteModel {
         id: "fal/midas-depth",
@@ -1078,7 +1078,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Depth,
         commercial: true,
         licence: "MiDaS: MIT",
-        about: "relative depth (near is bright) from one picture, raw grey; fal gives no price up front",
+        about: "relative depth (near is bright) from one picture, raw grey",
     },
     RemoteModel {
         id: "fal/midas-normals",
@@ -1090,7 +1090,7 @@ pub const CATALOG: &[RemoteModel] = &[
         task: Task::Normals,
         commercial: true,
         licence: "MiDaS: MIT",
-        about: "normals derived from MiDaS depth, raw; rougher than MoGe or Marigold; no price up front",
+        about: "normals derived from MiDaS depth, raw; rougher than MoGe or Marigold",
     },
     RemoteModel {
         id: "fal/iclight-v2",

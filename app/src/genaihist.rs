@@ -27,7 +27,7 @@ use egui::{Color32, Sense, Stroke, Ui};
 use super::{small, video_ok, Action, View, NO_VIDEO};
 use crate::theme;
 use engine::graph::GenAiParams;
-use genai::{config, service, Take};
+use genai::{config, Take};
 
 /// Thumbnail height on screen, in points; decoded at twice that.
 const THUMB_H: f32 = 38.0;
@@ -161,9 +161,7 @@ pub(super) fn now() -> u64 {
 
 fn hover(k: usize, t: &Take) -> String {
     let mut s = format!("{} · {}", k + 1, if t.label.is_empty() { "take" } else { &t.label });
-    if let Some(u) = t.usd {
-        s.push_str(&format!(" · {}", service::usd(u)));
-    }
+    s.push_str(&super::cost_note(t.usd));
     // The frame it was made at: what tells a batch over frames apart.
     s.push_str(&format!(" · frame {}", t.tick));
     let a = ago(t.when, now());
@@ -313,7 +311,10 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
             act = Some(Action::Show);
         }
         if v.take_missing {
-            ui.colored_label(theme::warn(), small("this take's file is not on this machine; running again bills again"));
+            ui.colored_label(theme::warn(), small(super::priced!(
+                "this take's file is not on this machine; running again bills again",
+                "this take's file is not on this machine; running again makes a new request"
+            )));
         }
         if pl.picked().is_some_and(|t| t.is_splat()) {
             ui.weak(small("a 3D take: the Splat node made from it shows it; this node passes its input through"));

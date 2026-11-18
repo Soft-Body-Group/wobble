@@ -1102,7 +1102,11 @@ fn execute(
                     }
                 } else {
                     let svc = svcs.remote.as_deref().ok_or_else(|| {
-                        anyhow!("no way to bill this step: add a relay token or a fal key")
+                        anyhow!(if cfg!(feature = "relay") {
+                            "no way to run this step: add a relay token or a fal key"
+                        } else {
+                            "no way to run this step: add a fal key"
+                        })
                     })?;
                     let prompt = match get(&vals, i, 0) {
                         Some(Val::Text(t)) => Some(t),

@@ -1916,6 +1916,10 @@ and in prefs → "alpha testing + updates"; both are OFF until answered
   `--no-default-features`, so none of it ships; `engine` and `app` depend on
   `genai` with `default-features = false` or feature unification turns the
   relay back on. Check a release with `strings` for "wobble credits".
+  Without `commerce` a GenAI run has no quote step: one "run" button, straight
+  to the service on the user's own key, and no price, charge or `$` badge
+  (`genaiui::priced!`, `Runs::quotes`). `--test-genai` turns quotes on, and
+  has one stage with them off.
 - **Sending feedback is its own consent**: the help menu's bug / feature /
   node / feedback forms send with testing off, anonymous unless an email or
   name is filled in. A node request is a `feature` with a `[node] ` title,

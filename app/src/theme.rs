@@ -303,9 +303,9 @@ slots! {
         cost_nc: "non-commercial" = shade(S::wire_data, rgb(0xc0, 0x78, 0xe8));
         /// A panel saying, in words, what a node costs.
         cost_note: "cost notes" = shade(S::highlight, rgb(0xd0, 0x92, 0x3a));
-        /// A node that bills when you press run (a GenAI pipeline): money,
-        /// not frame time — its own hue, never the slow red.
-        cost_money: "costs money" = rgb(0x5c, 0xc0, 0x6a);
+        /// A node that calls a remote service when you press run (a GenAI
+        /// pipeline): not frame time, so its own hue, never the slow red.
+        cost_money: "remote service" = rgb(0x5c, 0xc0, 0x6a);
     }
     "timeline" {
         /// The playhead on the transport track, the cache meter and scrub strips.

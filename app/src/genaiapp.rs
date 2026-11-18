@@ -122,7 +122,7 @@ pub(super) fn form(ui: &mut Ui, node: u64, p: &mut GenAiParams) {
                     if ui.add(egui::DragValue::new(&mut v).update_while_editing(false).speed(1.0)).changed() {
                         app::set_number(&mut p.pipeline, f.step, f.what, v);
                     }
-                    if ui.small_button("new").on_hover_text("a variation: a new request, billed again").clicked() {
+                    if ui.small_button("new").on_hover_text(crate::genaiui::priced!("a variation: a new request, billed again", "a variation: a new request")).clicked() {
                         let next = genai::vary::next_seed(v.max(0.0) as u32);
                         app::set_number(&mut p.pipeline, f.step, f.what, next as f32);
                     }
