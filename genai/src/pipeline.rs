@@ -98,6 +98,17 @@ pub enum Op {
         #[serde(default)]
         clip: bool,
     },
+    /// A PROMPT GROUP's inputs: one prompt, pictures and a matte, handed to
+    /// every model in the group on its matching ports (`members`, filled
+    /// by the host from the backdrop the node sits in; `expand_groups` does
+    /// the wiring for a run). The prompt is typed here (`text`) or wired
+    /// into port 0. It makes nothing itself.
+    Group {
+        #[serde(default)]
+        text: String,
+        #[serde(default)]
+        members: Vec<usize>,
+    },
     /// A comp node that WORKS ON a picture inside the pipeline (a
     /// Transform, Reformat, Crop, Freeze), carried whole like a `Shape`.
     /// Its one port takes what the host can render: an Input, a Shape or
@@ -308,6 +319,9 @@ impl Op {
             | Op::ClipIn { .. }
             | Op::MatteClip => vec![],
             Op::Output => vec![(Pipe::Image, "image")],
+            Op::Group { .. } => {
+                vec![(Pipe::Text, "prompt"), (Pipe::Image, "image 1"), (Pipe::Image, "image 2"), (Pipe::Image, "mask")]
+            }
             Op::Comp { inputs, .. } => COMP_PORTS.iter().take(*inputs).map(|n| (Pipe::Image, *n)).collect(),
             Op::Template { .. } => vec![(Pipe::Text, "a"), (Pipe::Text, "b")],
             Op::Comfy { .. } => {
@@ -334,7 +348,7 @@ impl Op {
             Op::Generate { model, .. } if catalog::get(model).is_some_and(|m| m.task.is_text()) => {
                 Some(Pipe::Text)
             }
-            Op::Output => None,
+            Op::Output | Op::Group { .. } => None,
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
             Op::Input { clip: true, .. } | Op::Shape { clip: true, .. } | Op::Comp { clip: true, .. } => {
                 Some(Pipe::Video)
@@ -359,6 +373,14 @@ impl Op {
         if let Op::Comp { inputs, .. } = self {
             return port < (*inputs).min(COMP_PORTS.len()) && matches!(pipe, Pipe::Image | Pipe::Video);
         }
+        // A group's pictures may be clips: a video model inside reads them.
+        if matches!(self, Op::Group { .. }) {
+            return match port {
+                0 => pipe == Pipe::Text,
+                1..=3 => matches!(pipe, Pipe::Image | Pipe::Video),
+                _ => false,
+            };
+        }
         match self.ports().get(port) {
             Some(&(want, _)) => {
                 want == pipe || (matches!(self, Op::Output) && matches!(pipe, Pipe::Video | Pipe::Scene))
@@ -372,7 +394,7 @@ impl Op {
     /// extra reference ports.
     pub fn optional(&self, port: usize) -> bool {
         match self {
-            Op::Comfy { .. } | Op::Template { .. } | Op::Comp { .. } => true,
+            Op::Comfy { .. } | Op::Template { .. } | Op::Comp { .. } | Op::Group { .. } => true,
             Op::Generate { model, .. } => catalog::get(model).is_some_and(|m| port >= task_ports(m.task).len()),
             _ => false,
         }
@@ -393,6 +415,7 @@ impl Op {
             Op::Input { matte: false, clip: true, .. } => "Image Clip In",
             Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
             Op::Shape { .. } => "Spline",
+            Op::Group { .. } => "Prompt Group",
             Op::Comp { kind, .. } => intern(kind),
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
@@ -432,6 +455,7 @@ impl Op {
             Op::Shape { clip: false, .. } => "spline".into(),
             Op::Shape { clip: true, .. } => "spline clip".into(),
             Op::Comp { kind, .. } => kind.to_lowercase(),
+            Op::Group { members, .. } => format!("group of {}", members.len()),
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
@@ -672,6 +696,73 @@ impl Pipeline {
         let out = p.push(Op::Output, [0.0, 0.55]);
         p.connect(gen, out, 0);
         Some(p)
+    }
+
+    /// The models of the group whose node is step `g`, in step order.
+    pub fn group_models(&self, g: usize) -> Vec<usize> {
+        let Some(Op::Group { members, .. }) = self.steps.get(g).map(|s| &s.op) else { return vec![] };
+        let mut v: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|&m| matches!(self.steps.get(m).map(|s| &s.op), Some(Op::Generate { .. } | Op::Comfy { .. })))
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// The pipeline with every PROMPT GROUP's inputs wired into its
+    /// models, as a run walks it: each model's unwired ports take the
+    /// group's — the prompt on its text port, the group's pictures on its
+    /// picture ports IN ORDER (image 1 on the first, image 2 on the
+    /// second; a model with one ignores the rest), the matte on its
+    /// "mask". A port wired by hand is left alone. A typed prompt becomes
+    /// a Prompt step APPENDED at the end, so no existing index moves. An
+    /// Input a video port ends up reading is read as a clip. The run's
+    /// copy only: never written back.
+    pub fn expand_groups(&self) -> Pipeline {
+        let mut p = self.clone();
+        for g in 0..self.steps.len() {
+            let Op::Group { text, .. } = &self.steps[g].op else { continue };
+            let fed = |port: usize| self.steps[g].inputs.get(port).copied().flatten();
+            let mut prompt = fed(0);
+            let pics = [fed(1), fed(2)];
+            let mask = fed(3);
+            for m in self.group_models(g) {
+                let ports = p.steps[m].op.ports();
+                let mut nth = 0;
+                for (k, (pipe, name)) in ports.iter().enumerate() {
+                    let picture = *pipe != Pipe::Text && *name != "mask";
+                    let at = nth;
+                    nth += usize::from(picture);
+                    if p.steps[m].inputs.get(k).copied().flatten().is_some() {
+                        continue;
+                    }
+                    let src = match (*pipe, *name) {
+                        (Pipe::Text, _) => {
+                            if prompt.is_none() && !text.trim().is_empty() {
+                                prompt = Some(p.push(Op::Prompt { text: text.clone() }, self.steps[g].at));
+                            }
+                            prompt
+                        }
+                        (_, "mask") => mask,
+                        _ => pics.get(at).copied().flatten(),
+                    };
+                    let Some(src) = src else { continue };
+                    // A clip where the model reads one.
+                    if *pipe == Pipe::Video {
+                        if let Op::Input { clip, .. } = &mut p.steps[src].op {
+                            *clip = true;
+                        }
+                    }
+                    if p.steps[m].inputs.len() <= k {
+                        p.steps[m].inputs.resize(ports.len(), None);
+                    }
+                    p.steps[m].inputs[k] = Some(src);
+                }
+            }
+        }
+        p
     }
 
     /// A step made a result: it joins the step's gallery (once per key)
@@ -996,6 +1087,15 @@ impl Pipeline {
 
     fn remove_step(&mut self, i: usize) {
         self.steps.remove(i);
+        // A group lets go of it, and its members' indices slide too.
+        for s in &mut self.steps {
+            if let Op::Group { members, .. } = &mut s.op {
+                members.retain(|m| *m != i);
+                for m in members.iter_mut().filter(|m| **m > i) {
+                    *m -= 1;
+                }
+            }
+        }
         // Its gallery goes with it; later steps' slide down with them.
         self.made.retain(|m| m.step != i);
         for m in self.made.iter_mut().filter(|m| m.step > i) {
@@ -1662,5 +1762,41 @@ mod tests {
         assert_eq!(p.made_by(0).len(), 2);
         // No gallery, no field in the file.
         assert!(!serde_json::to_string(&Pipeline::default()).unwrap().contains("made"));
+    }
+
+    #[test]
+    fn a_prompt_group_feeds_every_model_in_it_in_port_order() {
+        // image, matte, image 2 on the node; an editor (prompt, image), a
+        // two-picture editor (prompt, image, reference) and an inpainter
+        // (prompt, image, mask) in one group.
+        let mut p = Pipeline::bare(vec![InKind::Image, InKind::Matte, InKind::Image]);
+        let (i1, mt, i2) = (p.input_step(0).unwrap(), p.input_step(1).unwrap(), p.input_step(2).unwrap());
+        let gen = |p: &mut Pipeline, id: &str| p.push(Op::Generate { model: id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let (ed, two, fill) = (gen(&mut p, "fal/flux-kontext-pro"), gen(&mut p, "fal/nano-banana-pro-edit-ref"), gen(&mut p, "fal/flux-fill-pro"));
+        let own = p.push(Op::Prompt { text: "its own words".into() }, [0.0, 0.0]);
+        assert!(p.connect(own, fill, 0), "wired by hand");
+        let g = p.push(Op::Group { text: "make it dusk".into(), members: vec![ed, two, fill, own] }, [0.0, 0.0]);
+        assert!(p.connect(i1, g, 1) && p.connect(i2, g, 2) && p.connect(mt, g, 3));
+        assert_eq!(p.group_models(g), vec![ed, two, fill], "a prompt in the backdrop is not a model");
+        let x = p.expand_groups();
+        // No index moved: the typed prompt is a step at the end.
+        assert_eq!(x.steps.len(), p.steps.len() + 1);
+        let typed = x.steps.len() - 1;
+        assert!(matches!(&x.steps[typed].op, Op::Prompt { text } if text == "make it dusk"));
+        assert_eq!(x.steps[ed].inputs, vec![Some(typed), Some(i1)], "one picture: image 2 is ignored");
+        assert_eq!(x.steps[two].inputs[..3], [Some(typed), Some(i1), Some(i2)], "pictures in order");
+        assert_eq!(x.steps[fill].inputs, vec![Some(own), Some(i1), Some(mt)], "its own prompt stays; the matte lands on mask");
+        // Every member plans now; before, none did.
+        for m in [ed, two, fill] {
+            let mut to = x.clone();
+            let out = to.push(Op::Output, [0.0, 0.0]);
+            assert!(to.connect(m, out, 0) && to.plan(out).is_ok());
+        }
+        // Removing a step slides the membership with it.
+        assert!(p.remove(own));
+        assert!(matches!(&p.steps[g - 1].op, Op::Group { members, .. } if *members == vec![ed, two, fill]));
+        // An old file knows nothing of groups; a new one round-trips.
+        let j = serde_json::to_string(&p).unwrap();
+        assert_eq!(serde_json::from_str::<Pipeline>(&j).unwrap(), p);
     }
 }

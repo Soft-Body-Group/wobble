@@ -3583,6 +3583,13 @@ model node inside a pipeline has the same two steps for itself, an **info**
 button (what it takes, what it gives back, its licence), and a gallery of
 every result it has made: click one to make it the step's result, **pop
 out** for a Load of it in the outer graph.
+A **prompt group** (add menu, inside a pipeline) runs one prompt on
+several models: select the model nodes, add it, and they sit on its
+backdrop. Wire a prompt, up to two images and a mask into the group node
+and every model on the backdrop gets them in the same order (a model with
+one image input takes image 1 and ignores the rest). One **get price for
+all**, one **pay & run all**, and the group's panel shows the results side
+by side as a contact sheet; click one to view that model.
 A pipeline with nothing to bill — all cached, or ComfyUI only — runs
 straight through. There is no per-frame evaluation and no auto-run on open.
 

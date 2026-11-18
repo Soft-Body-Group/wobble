@@ -1305,6 +1305,20 @@ pub(crate) fn add_wired(
     }
     // A Breakout arrives as a harp: receiver included.
     crate::breakout::after_add(graph, id);
+    // A Prompt Group arrives ON a backdrop, wrapping what was selected:
+    // the backdrop is the group, this node its inputs. Nothing is wired
+    // into it (the selection is its members, not its sources).
+    let prompt_group = matches!(graph.node(id).map(|n| &n.kind), Some(NodeKind::GenAiStep(genai::Op::Group { .. })));
+    if prompt_group {
+        let mut on: Vec<u64> = selection.iter().copied().filter(|s| graph.node(*s).is_some()).collect();
+        on.push(id);
+        let gid = graph.next_id;
+        graph.next_id += 1;
+        let mut b = crate::nodeux::group_over(&on, gid);
+        b.title = "prompt group".into();
+        graph.groups.push(b);
+        graph.adopt_into_group(gid, &on);
+    }
     // A Layer made from several picks has a layer for each.
     if !patch_mode {
         let picks = selection.iter().filter(|s| **s != id && graph.node(**s).is_some()).count();
@@ -1314,7 +1328,7 @@ pub(crate) fn add_wired(
             }
         }
     }
-    let feeds = if patch_mode { Vec::new() } else { feeds_for_new(graph, id, selection) };
+    let feeds = if patch_mode || prompt_group { Vec::new() } else { feeds_for_new(graph, id, selection) };
     for (src, input) in &feeds {
         connect_or_bridge(graph, *src, 0, id, *input, zoom);
     }
@@ -1978,7 +1992,9 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::Blender(_) => t::node_blender(),
         // Words inside a GenAI Pipeline: the family's slate, lighter, so
         // a prompt reads apart from the models at a glance.
-        NodeKind::GenAiStep(genai::Op::Prompt { .. } | genai::Op::Template { .. }) => t::node_genai_prompt(),
+        NodeKind::GenAiStep(genai::Op::Prompt { .. } | genai::Op::Template { .. } | genai::Op::Group { .. }) => {
+            t::node_genai_prompt()
+        }
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => t::node_genai(),
         NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => t::node_scene3d(),
         NodeKind::RotoNode(_) => t::node_spline(),
@@ -2703,7 +2719,7 @@ pub(crate) fn paint_body(
         NodeKind::Grain(_) => crate::nodes::grain::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Blender(_) => crate::blenderui::glyph(&painter, sp, r, fill, stroke),
         // A prompt is a speech bubble with its own words in it.
-        NodeKind::GenAiStep(genai::Op::Prompt { text } | genai::Op::Template { text }) => {
+        NodeKind::GenAiStep(genai::Op::Prompt { text } | genai::Op::Template { text } | genai::Op::Group { text, .. }) => {
             crate::genaiui::prompt_glyph(&painter, sp, r, fill, stroke, text)
         }
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => crate::genaiui::glyph(&painter, sp, r, fill, stroke),

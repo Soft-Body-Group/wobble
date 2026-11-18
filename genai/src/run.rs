@@ -280,6 +280,9 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     (h(&["shape", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
                 }
             }
+            // A group makes nothing: nothing reads it, so it is never in
+            // a plan's order.
+            Op::Group { .. } => (h(&["group"]), 0.0),
             Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
                 return Err(OLD_STEP.into())
             }
@@ -1061,6 +1064,7 @@ fn execute(
                 };
                 Val::Image(path)
             }
+            Op::Group { .. } => Val::Text(String::new()),
             Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
                 bail!(OLD_STEP)
             }

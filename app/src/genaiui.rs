@@ -165,6 +165,17 @@ pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
         }
     }
     g.next_id = pl.steps.len() as u64 + 1;
+    // Each prompt group's backdrop, over its node and its members.
+    for (i, s) in pl.steps.iter().enumerate() {
+        let Op::Group { members, .. } = &s.op else { continue };
+        let mut on: Vec<u64> = members.iter().map(|m| *m as u64 + 1).filter(|id| g.nodes.contains_key(id)).collect();
+        on.push(i as u64 + 1);
+        let gid = g.next_id;
+        g.next_id += 1;
+        let mut b = crate::nodeux::group_over(&on, gid);
+        b.title = "prompt group".into();
+        g.groups.push(b);
+    }
     g
 }
 
@@ -205,6 +216,22 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
             genai::Step { at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()], op }
         })
         .collect();
+    // A prompt group is the backdrop its node sits on: the other steps
+    // on that backdrop are its members.
+    for (i, id) in ids.iter().enumerate() {
+        if !matches!(steps[i].op, Op::Group { .. }) {
+            continue;
+        }
+        let on: Vec<usize> = g
+            .group_of(*id)
+            .and_then(|gid| g.groups.iter().find(|b| b.id == gid))
+            .map(|b| b.members.iter().filter(|m| *m != id).filter_map(|m| index(*m)).collect())
+            .unwrap_or_default();
+        if let Op::Group { members, .. } = &mut steps[i].op {
+            *members = on;
+            members.sort_unstable();
+        }
+    }
     let edges: Vec<(usize, usize, usize)> = g
         .edges
         .iter()
@@ -421,6 +448,7 @@ pub fn step_entries() -> Vec<(&'static str, Op)> {
     // No inputs: each of the node's inputs is already in here as its own
     // Input step (add one on the node's bar, or in its panel).
     let mut v = vec![Op::Prompt { text: String::new() }];
+    v.push(Op::Group { text: String::new(), members: vec![] });
     v.push(Op::Template { text: "{a}".into() });
     v.extend(
         catalog::CATALOG
@@ -441,8 +469,28 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
     // A model runs from its own node: its inputs are rendered, the steps
     // above it run (or are found cached), and its result is what viewing
     // it shows — ready for the next model to read.
-    let runs = matches!(op, Op::Generate { .. } | Op::Comfy { .. }) && op.output() != Some(genai::Pipe::Text);
     let me = v.step_ids.iter().position(|x| *x == node);
+    // A prompt group runs every model on its backdrop, as one run, and
+    // shows what each made.
+    if let (Op::Group { .. }, Some(me)) = (&*op, me) {
+        let n = v.sheet.len();
+        if n == 0 {
+            ui.colored_label(theme::warn(), small("no model on the backdrop yet: drag model nodes onto it"));
+            return None;
+        }
+        let names: Vec<String> = Vec::new();
+        let r = run_ui(
+            ui,
+            v,
+            &names,
+            &format!("all {n} models"),
+            || Action::PrepareGroup(me),
+            || Action::CancelStep(me),
+            || Action::DismissStep(me),
+        );
+        return r.or_else(|| contact_sheet(ui, node, v));
+    }
+    let runs = matches!(op, Op::Generate { .. } | Op::Comfy { .. }) && op.output() != Some(genai::Pipe::Text);
     let (true, Some(me)) = (runs, me) else {
         if matches!(op, Op::Generate { .. }) {
             ui.weak(small("a text step runs with the model that reads it"));
@@ -482,6 +530,48 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
     );
     ui.weak(small("view the node to see its result; the pipeline node's own run makes the take"));
     r.or_else(|| gallery(ui, node, v))
+}
+
+/// A prompt group's contact sheet: one picture per model on the backdrop
+/// (the result picked in that model's gallery), under its name. Click one
+/// to look at that model; "pop out" makes a Load of it in the outer graph.
+fn contact_sheet(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
+    let mut act = None;
+    ui.separator();
+    let made = v.sheet.iter().filter(|s| s.2.is_some()).count();
+    ui.label(small(format!("contact sheet: {made} of {} models have a result", v.sheet.len())));
+    let size = egui::vec2(112.0, 63.0);
+    ui.horizontal_wrapped(|ui| {
+        for (step, name, shot) in &v.sheet {
+            ui.vertical(|ui| {
+                ui.set_width(size.x);
+                let tex = shot.as_ref().filter(|s| s.here).and_then(|s| hist::thumb(ui.ctx(), &s.path, false));
+                let r = match tex {
+                    Some(tex) => ui.add(egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(size))),
+                    None => ui.add_sized(
+                        size,
+                        egui::Button::new(small(match shot {
+                            Some(s) if !s.here => "file missing",
+                            Some(_) => "…",
+                            None => "not run yet",
+                        })),
+                    ),
+                };
+                crate::widgets::note_rect(ui, egui::Id::new(("genai-sheet", node, *step)), r.rect);
+                if r.on_hover_text("look at this model's node").clicked() {
+                    act = Some(Action::ViewStep(*step));
+                }
+                ui.add(egui::Label::new(small(name.as_str())).truncate());
+                if let Some(s) = shot {
+                    let b = ui.add_enabled(s.here, egui::Button::new(small("pop out")).small());
+                    if b.on_hover_text("a Load of this result, beside the pipeline node in the outer graph").clicked() {
+                        act = Some(Action::MadeToLoad(s.k));
+                    }
+                }
+            });
+        }
+    });
+    act
 }
 
 /// A model step's gallery: every result it has made, newest first, as
@@ -787,6 +877,12 @@ pub struct Run {
     /// state: the progress the graph and the panel show.
     pub t0: web_time::Instant,
     pub since: BTreeMap<usize, web_time::Instant>,
+    /// A PROMPT GROUP's run: the group node's step, and the pipelines of
+    /// its other models (`pipeline` is the first's), run in the same go.
+    pub group: Option<usize>,
+    pub rest: Vec<Pipeline>,
+    /// `keys`, for each of `rest`'s plans.
+    pub keys_more: Vec<Vec<(String, String)>>,
 }
 
 pub enum Phase {
@@ -822,6 +918,9 @@ pub struct View {
     pub wired: Vec<bool>,
     /// A step's panel: every result that step has made, oldest first.
     pub gallery: Vec<Shot>,
+    /// A prompt group's panel: per model on its backdrop, its step, its
+    /// name and the result picked in its gallery (if it has made one).
+    pub sheet: Vec<(usize, String, Option<Shot>)>,
     /// The take on screen is at another frame rate than the comp's, and a
     /// retime below the node conforms it: (the take's fps, it is RIFE).
     pub conform: Option<(f32, bool)>,
@@ -892,6 +991,10 @@ pub enum Action {
     /// Swap the conform Speed below the node for a Rifetime at the same
     /// rate (real in-between frames; it renders on a click).
     ConformRife,
+    /// Run every model of a prompt group (the group node's step index).
+    PrepareGroup(usize),
+    /// Look at a step (its index) inside the pipeline: view and select it.
+    ViewStep(usize),
     /// Cancel / dismiss the run of ONE step (several can be going).
     CancelStep(usize),
     DismissStep(usize),
@@ -1171,6 +1274,22 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
         }
         Op::Comp { .. } => {
             ui.label(small("a comp node inside the pipeline: open it (Enter) to edit it"));
+        }
+        Op::Group { text, members } => {
+            ui.label(small("the group's prompt: every model on this backdrop gets it"));
+            ui.add(
+                egui::TextEdit::multiline(text)
+                    .id(id("group-prompt"))
+                    .hint_text("describe the picture, or the change (or wire a prompt into the group)")
+                    .desired_rows(4)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.weak(small(format!(
+                "{} node(s) on the backdrop. Wire pictures into image 1 and image 2 and a matte into mask: each model \
+                 takes them in order on the inputs it has, and ignores the ones it has no input for. \
+                 A wire you make to a model yourself wins.",
+                members.len()
+            )));
         }
         Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
             ui.colored_label(theme::warn(), small("a step from an older build: step out and back in to update it"));
@@ -1865,7 +1984,7 @@ impl Gfx {
     /// first, then one going, then the last that ended.
     fn genai_run_for(&self, node: u64, step: Option<usize>) -> Option<&Run> {
         let g = &self.jobs.genai;
-        let fits = |r: &&Run| r.node == node && step.is_none_or(|s| r.to_step == Some(s));
+        let fits = |r: &&Run| r.node == node && step.is_none_or(|s| r.to_step == Some(s) || r.group == Some(s));
         g.run
             .as_ref()
             .filter(|r| r.active())
@@ -1880,7 +1999,9 @@ impl Gfx {
 
     /// Take that run out (to cancel or dismiss it).
     fn genai_take_run(&mut self, node: u64, step: Option<usize>, ended_only: bool) -> Option<Run> {
-        let fits = |r: &Run| r.node == node && step.is_none_or(|s| r.to_step == Some(s)) && !(ended_only && r.active());
+        let fits = |r: &Run| {
+            r.node == node && step.is_none_or(|s| r.to_step == Some(s) || r.group == Some(s)) && !(ended_only && r.active())
+        };
         let g = &mut self.jobs.genai;
         if g.run.as_ref().is_some_and(|r| fits(r) && (r.active() || ended_only)) {
             return g.run.take();
@@ -1952,6 +2073,7 @@ impl Gfx {
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
             gallery: vec![],
+            sheet: vec![],
             conform: conform_of(&self.egraph, node).and_then(|c| {
                 let fps = self.loaded.get(&node).and_then(|l| l.movie_fps)? as f32;
                 ((fps - self.fps).abs() > 0.01)
@@ -1970,6 +2092,9 @@ impl Gfx {
         match a {
             Action::Prepare => self.genai_prepare(node, None),
             Action::PrepareStep(i) => self.genai_prepare(node, Some(i)),
+            Action::PrepareGroup(g) => self.genai_prepare_group(node, g),
+            // Handled by the caller, which has the dive's graph open.
+            Action::ViewStep(_) => {}
             Action::RemoveInput(k) => {
                 if remove_input(&mut self.egraph, node, k) {
                     self.playback_dirty = true;
@@ -2101,10 +2226,37 @@ impl Gfx {
             used: vec![],
             t0: web_time::Instant::now(),
             since: BTreeMap::new(),
+            group: None,
+            rest: vec![],
+            keys_more: vec![],
         });
     }
 
     fn genai_prepare(&mut self, node: u64, to: Option<usize>) {
+        self.genai_prepare_many(node, to, None, vec![]);
+    }
+
+    /// Every model of prompt group `g` (the group node's step index), as
+    /// ONE run: one capture, one price, one pay & run. Each model is run
+    /// as a step of its own would be (Output reading it in the run's
+    /// copy), and each lands in its own gallery.
+    fn genai_prepare_group(&mut self, node: u64, g: usize) {
+        let Some(base) = self.genai_runnable(node) else { return };
+        let models: Vec<usize> = base
+            .group_models(g)
+            .into_iter()
+            .filter(|&m| base.steps[m].op.output().is_some_and(|p| p != genai::Pipe::Text))
+            .collect();
+        let Some((&first, rest)) = models.split_first() else {
+            return self.genai_fail(node, base, "the group has no model in it: drag model nodes onto its backdrop");
+        };
+        let rest: Vec<Pipeline> = rest.iter().filter_map(|&m| self.genai_runnable_to(node, Some(m))).collect();
+        self.genai_prepare_many(node, Some(first), Some(g), rest);
+    }
+
+    /// `rest`: more pipelines to run in the same go (a prompt group's
+    /// other models), captured, priced and paid together with the first.
+    fn genai_prepare_many(&mut self, node: u64, to: Option<usize>, group: Option<usize>, rest: Vec<Pipeline>) {
         // A run that is paid and going leaves the front (as `genai_poll`
         // does), so this one can be prepared beside it.
         if self.jobs.genai.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Running { .. })) {
@@ -2140,47 +2292,68 @@ impl Gfx {
                 return self.genai_fail(node, pl, e);
             }
         }
-        let reads = pl.reads();
-        if reads.iter().any(|r| r.1) && !clip_ok() {
-            return self.genai_fail(node, pl, NO_CLIP);
-        }
+        // What has to be rendered, over every pipeline of the run (a
+        // group's models read the same inputs: each is captured once).
         let mut todo = vec![];
-        for (input, clip) in reads {
-            let matte = pl.in_kind(input) == genai::InKind::Matte;
-            if self.egraph.input_of(node, input).is_none() {
-                let what = if matte { "matte" } else { "image" };
-                return self.genai_fail(node, pl, format!("the pipeline reads the node's {what} input {}: wire one in", input + 1));
-            }
-            let port = capture_port(input, matte, clip);
-            if !todo.contains(&port) {
-                todo.push(port);
-            }
-        }
-        // Mattes drawn inside: rendered from a stand-in node, by step.
         let mut used: Vec<(usize, String)> = vec![];
-        for (step, clip) in pl.shapes() {
-            // A comp node below a model works on that model's last result:
-            // it must have one (run the model from its own node first).
-            let above = pl.models_above(step);
-            if above.len() > 1 {
-                return self.genai_fail(node, pl, "a comp node inside can work on one model's result at a time, for now");
+        let mut refused: Option<String> = None;
+        'all: for one in std::iter::once(&pl).chain(rest.iter()) {
+            if let Some(Err(e)) = one.output().map(|o| one.plan(o)) {
+                refused = Some(e);
+                break;
             }
-            if let Some(&a) = above.first() {
-                let name = pl.steps[a].op.name();
-                match self.genai_step_result(node, a, name) {
-                    Some((key, _)) => used.push((a, key)),
-                    None => {
-                        let what = pl.steps[step].op.name();
-                        return self.genai_fail(
-                            node,
-                            pl,
-                            format!("{what} works on {name}'s result, and it has none yet: run {name} first, from its own node inside"),
-                        );
-                    }
+            let reads = one.reads();
+            if (reads.iter().any(|r| r.1) || one.shapes().iter().any(|r| r.1)) && !clip_ok() {
+                refused = Some(NO_CLIP.into());
+                break;
+            }
+            for (input, clip) in reads {
+                let matte = one.in_kind(input) == genai::InKind::Matte;
+                if self.egraph.input_of(node, input).is_none() {
+                    let what = if matte { "matte" } else { "image" };
+                    refused = Some(format!("the pipeline reads the node's {what} input {}: wire one in", input + 1));
+                    break 'all;
+                }
+                let port = capture_port(input, matte, clip);
+                if !todo.contains(&port) {
+                    todo.push(port);
                 }
             }
-            let matte = if step_is_matte(&pl.steps, step) { MATTE } else { 0 };
-            todo.push((step & 0xff) | SHAPE | matte | if clip { CLIP } else { 0 });
+            // Mattes and comp nodes inside: rendered from stand-ins, by step.
+            for (step, clip) in one.shapes() {
+                // A comp node below a model works on that model's last
+                // result: it must have one (run the model first).
+                let above = one.models_above(step);
+                if above.len() > 1 {
+                    refused = Some("a comp node inside can work on one model's result at a time, for now".into());
+                    break 'all;
+                }
+                if let Some(&a) = above.first() {
+                    let name = one.steps[a].op.name();
+                    match self.genai_step_result(node, a, name) {
+                        Some((key, _)) => {
+                            if !used.iter().any(|u| u.0 == a) {
+                                used.push((a, key));
+                            }
+                        }
+                        None => {
+                            let what = one.steps[step].op.name();
+                            refused = Some(format!(
+                                "{what} works on {name}'s result, and it has none yet: run {name} first, from its own node inside"
+                            ));
+                            break 'all;
+                        }
+                    }
+                }
+                let matte = if step_is_matte(&one.steps, step) { MATTE } else { 0 };
+                let port = (step & 0xff) | SHAPE | matte | if clip { CLIP } else { 0 };
+                if !todo.contains(&port) {
+                    todo.push(port);
+                }
+            }
+        }
+        if let Some(e) = refused {
+            return self.genai_fail(node, pl, e);
         }
         if !todo.is_empty() {
             if let Some(up) = self.genai_unrun_upstream(node) {
@@ -2233,6 +2406,9 @@ impl Gfx {
             used,
             t0: web_time::Instant::now(),
             since: BTreeMap::new(),
+            group,
+            rest,
+            keys_more: vec![],
         });
         self.genai_capture_next();
     }
@@ -2463,7 +2639,13 @@ impl Gfx {
         let mut frames = std::mem::take(&mut r.frames);
         frames.push(inputs);
         let inputs = frames.remove(0);
-        let pipes = r.vary.expand(&r.pipeline);
+        // A prompt group's run is its models, one pipeline each; any
+        // other is the pipeline and its fan-out.
+        let pipes = if r.rest.is_empty() {
+            r.vary.expand(&r.pipeline)
+        } else {
+            std::iter::once(r.pipeline.clone()).chain(r.rest.iter().cloned()).collect()
+        };
         r.lead = pipes.first().filter(|p| p.steps != r.pipeline.steps).cloned();
         let lead = r.lead.clone().unwrap_or_else(|| r.pipeline.clone());
         let plan = match run::plan(&lead, &inputs, &dir) {
@@ -2500,6 +2682,11 @@ impl Gfx {
                 }
             }
         }
+        r.keys_more = r
+            .more
+            .iter()
+            .map(|(p, plan, _)| p.steps.iter().zip(&plan.keys).map(|(s, k)| (s.op.name().to_string(), k.clone())).collect())
+            .collect();
         let mut all = vec![(lead.clone(), plan.clone())];
         all.extend(r.more.iter().map(|(p, plan, _)| (p.clone(), plan.clone())));
         if all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
@@ -2702,7 +2889,11 @@ impl Gfx {
                         // run goes on, and the next variant's steps start
                         // from a clean slate.
                         Event::Take(t) => {
-                            landed.push(t);
+                            // A step's or a group's run lands results in
+                            // galleries, never takes.
+                            if r.to_step.is_none() {
+                                landed.push(t);
+                            }
                             r.steps.clear();
                             r.since.clear();
                         }
@@ -2734,10 +2925,9 @@ impl Gfx {
                         // node: every result it has made, this one picked.
                         let dir = config::results_dir();
                         let lead = r.lead.as_ref().unwrap_or(&r.pipeline);
-                        let made: Vec<genai::Made> = r
-                            .keys
-                            .iter()
-                            .enumerate()
+                        let made: Vec<genai::Made> = std::iter::once(&r.keys)
+                            .chain(r.keys_more.iter().filter(|_| r.to_step.is_some()))
+                            .flat_map(|keys| keys.iter().enumerate())
                             .filter(|(k, n)| {
                                 !n.1.is_empty() && matches!(lead.steps.get(*k).map(|s| &s.op), Some(Op::Generate { .. } | Op::Comfy { .. }))
                             })
@@ -2760,7 +2950,9 @@ impl Gfx {
                                 p.pipeline.record_made(m);
                             }
                         }
-                        if r.to_step.is_some() {
+                        if r.group.is_some() {
+                            r.phase = Phase::Done(format!("{n} models ran: their results are in the contact sheet"));
+                        } else if r.to_step.is_some() {
                             // One step's run: its result to look at (and
                             // to feed onward, cached), never a take.
                             r.phase = Phase::Done(format!("step ran{spent}: view it to see the result"));
@@ -2848,6 +3040,8 @@ impl Gfx {
             }
         };
         pl.normalize();
+        // A prompt group's inputs, wired into its models.
+        let mut pl = pl.expand_groups();
         // An optional reference whose node input has nothing wired is not
         // asked for.
         pl.drop_unfed_optional(&wired);
@@ -3059,7 +3253,30 @@ impl Gfx {
                 .collect(),
             _ => vec![],
         };
-        View { wired: self.genai_wired(g, owner), step_ids, gallery, ..self.genai_view_of(owner, me) }
+        // A prompt group: its models and what each last made.
+        let sheet = match (me, self.egraph.node(sel).map(|n| &n.kind)) {
+            (Some(i), Some(NodeKind::GenAiStep(Op::Group { .. }))) => {
+                let live = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![], made: vec![] };
+                live.group_models(i)
+                    .into_iter()
+                    .map(|m| {
+                        let name = live.steps[m].op.name();
+                        let shot = self.genai_made_of(owner, m).filter(|x| x.name == name).map(|x| {
+                            let path = x.path(&dir);
+                            let k = g
+                                .node(owner)
+                                .and_then(|n| params(&n.kind))
+                                .and_then(|p| p.pipeline.made.iter().position(|y| y.step == m && y.key == x.key))
+                                .unwrap_or(0);
+                            Shot { k, here: path.exists(), path, picked: true, when: x.when, usd: x.usd }
+                        });
+                        (m, name.to_string(), shot)
+                    })
+                    .collect()
+            }
+            _ => vec![],
+        };
+        View { wired: self.genai_wired(g, owner), step_ids, gallery, sheet, ..self.genai_view_of(owner, me) }
     }
 
     /// Point the node's reader at its picked take (or at nothing).
@@ -4358,6 +4575,74 @@ impl Gfx {
                     if submits != 1 {
                         fail(format!("a comp node after a model sent {} request(s)", submits - 1));
                     }
+                    // A PROMPT GROUP: schnell on a backdrop with a group
+                    // node carrying the same words, its own prompt wire
+                    // cut. The group feeds it, so it is the request it
+                    // always was: cached, free, straight through.
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    let schnell = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .find(|(_, n)| matches!(&n.kind, NodeKind::GenAiStep(Op::Generate { model, .. }) if model == "fal/flux-schnell"))
+                        .map(|(id, _)| *id)
+                        .unwrap();
+                    self.egraph.edges.retain(|e| !(e.0 == schnell && e.1 == 0));
+                    let head = Op::Group { text: "an 18% grey card".into(), members: vec![] };
+                    let gnode = self.egraph.add(NodeKind::GenAiStep(head), egui::pos2(-300.0, 300.0));
+                    let gid = self.egraph.next_id;
+                    self.egraph.next_id += 1;
+                    // And a second model on the backdrop that has never
+                    // run (FLUX dev): the two go as ONE run, one price.
+                    let dev = Op::Generate { model: "fal/flux-dev".into(), seed: 4242, opts: Opts::default() };
+                    let dnode = self.egraph.add(NodeKind::GenAiStep(dev), egui::pos2(-300.0, 500.0));
+                    self.egraph.groups.push(crate::nodeux::group_over(&[schnell, dnode, gnode], gid));
+                    let g = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).position(|(id, _)| *id == gnode).unwrap();
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareGroup(g)));
+                    next(&mut t, 88);
+                }
+                _ => {}
+            },
+            88 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("a prompt group's run failed: {e}")),
+                // One price for the group: only the model that has never
+                // run is billed. Pay it, once.
+                Some(Phase::Ready { plan, .. }) => {
+                    let r = self.jobs.genai.run.as_ref().unwrap();
+                    let billed = plan.billed(&r.pipeline).len() + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
+                    if (billed, r.more.len()) != (1, 1) {
+                        fail(format!("a group of a cached and a new model bills {billed} request(s) over {} extra run(s); expected 1 and 1", r.more.len()));
+                    }
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::Confirm));
+                    if matches!(self.jobs.genai.run.as_ref().map(|r| &r.phase), Some(Phase::Ready { .. })) {
+                        fail("pay & run on a prompt group did nothing".into());
+                    }
+                }
+                Some(Phase::Done(words)) if !self.jobs.genai.background.iter().any(|r| r.active()) => {
+                    if !words.contains("2 models ran") {
+                        fail(format!("a prompt group's run ended with \"{words}\""));
+                    }
+                    let fake = t.fake.as_ref().unwrap();
+                    if (fake.submits(), fake.fanned()) != (1, 3) {
+                        fail(format!(
+                            "a prompt group left {} + {} request(s); expected 1 + 3 (schnell cached, dev sent once)",
+                            fake.submits(),
+                            fake.fanned()
+                        ));
+                    }
+                    // Each model's result is in ITS gallery.
+                    let made = |me: &Self, name: &str| {
+                        me.dive
+                            .last()
+                            .and_then(|d| d.graph.node(t.pipe))
+                            .and_then(|n| params(&n.kind))
+                            .map_or(0, |p| p.pipeline.made.iter().filter(|m| m.name == name && m.picked).count())
+                    };
+                    if (made(self, "FLUX.1 [schnell]"), made(self, "FLUX.1 [dev]")) != (1, 1) {
+                        fail("a prompt group's results are not in its models' galleries".into());
+                    }
                     let before = t.before.map(|n| n as usize);
                     let owner = t.pipe;
                     self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
@@ -4409,7 +4694,8 @@ impl Gfx {
                          the pipeline opens as a graph of step nodes with one Input per node input \
                          (none in the menu, a removed one restored), and a step added there comes \
                          back out as a step; a model step run from its own node inside \
-                         is a cache hit that lands no take, and a Mult after it works on its result"
+                         is a cache hit that lands no take, a Mult after it works on its result, \
+                         and a prompt group feeds the model on its backdrop the same request"
                     );
                     std::process::exit(0);
                 }
@@ -4559,6 +4845,40 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_group_is_its_backdrop_and_survives_the_dive() {
+        // Two models and a group node on one backdrop; a third model off it.
+        let mut pl = Pipeline::bare(vec![genai::InKind::Image, genai::InKind::Matte]);
+        let gen = |pl: &mut Pipeline, id: &str| pl.push(Op::Generate { model: id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let (a, b, c) = (gen(&mut pl, "fal/flux-kontext-pro"), gen(&mut pl, "fal/flux-schnell"), gen(&mut pl, "fal/esrgan"));
+        let grp = pl.push(Op::Group { text: "at dusk".into(), members: vec![a, b] }, [0.0, 0.0]);
+        let img = pl.input_step(0).unwrap();
+        assert!(pl.connect(img, grp, 1));
+        // In: a backdrop over the group node and its two members.
+        let g = to_editor(&pl);
+        let id = |i: usize| i as u64 + 1;
+        assert_eq!(g.groups.len(), 1);
+        let mut on = g.groups[0].members.clone();
+        on.sort_unstable();
+        assert_eq!(on, vec![id(a), id(b), id(grp)]);
+        // Out: the same membership, read back off the backdrop.
+        let back = from_editor(&g);
+        assert!(matches!(&back[grp].op, Op::Group { members, .. } if *members == vec![a, b]));
+        // A model dragged onto the backdrop joins; one dragged off leaves.
+        let mut g2 = g.clone();
+        let gid = g2.groups[0].id;
+        g2.adopt_into_group(gid, &[id(c)]);
+        g2.groups[0].members.retain(|m| *m != id(a));
+        let back = from_editor(&g2);
+        assert!(matches!(&back[grp].op, Op::Group { members, .. } if *members == vec![b, c]));
+        // And a run walks the group's inputs into its models.
+        let run = Pipeline { steps: back, ..pl.clone() }.expand_groups();
+        assert_eq!(run.steps[b].inputs.len(), 1);
+        assert!(run.steps[b].inputs[0].is_some(), "the group's prompt reached the text-to-image model");
+        assert_eq!(run.steps[c].inputs, vec![Some(img)], "the group's picture reached the upscaler");
+        assert_eq!(run.steps[a].inputs, vec![None, None], "off the backdrop, out of the group");
+    }
+
+    #[test]
     fn a_take_at_another_frame_rate_gets_one_retime_below_the_node() {
         use crate::editor::EditorGraph;
         let mut g = EditorGraph::default();
@@ -4612,6 +4932,7 @@ mod tests {
             busy_elsewhere: false,
             wired: vec![true, false],
             gallery: vec![],
+            sheet: vec![],
             conform: None,
             elapsed: BTreeMap::new(),
             run_secs: 0.0,

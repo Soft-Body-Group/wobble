@@ -24726,6 +24726,16 @@ impl Gfx {
                         .last()
                         .filter(|d| d.kind == DiveKind::GenAi && !matches!(self.egraph.node(key).map(|n| &n.kind), Some(NodeKind::GenAi(_))))
                         .and_then(|d| d.from);
+                    // "Look at this model": view and select that step.
+                    if let (genaiui::Action::ViewStep(i), Some(_)) = (&a, owner) {
+                        let id = self.egraph.nodes.iter().filter(|(_, n)| genaiui::is_step(&n.kind)).nth(*i).map(|(id, _)| *id);
+                        if let Some(id) = id {
+                            self.egraph.view = Some(id);
+                            self.egraph.view_active_b = false;
+                            self.selected = vec![id];
+                            self.playback_dirty = true;
+                        }
+                    }
                     match owner {
                         Some(o) => self.genai_in_comp(|me| me.genai_action(o, a)),
                         None => self.genai_action(key, a),

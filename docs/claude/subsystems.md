@@ -1650,6 +1650,23 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   (`Action::PickMade`), "pop out" makes a Load of the file in the OUTER
   graph (`MadeToLoad`, `genai_file_to_load`). A picked OLDER result is
   not what a downstream MODEL step reads (that is the plan's).
+- **A PROMPT GROUP is a backdrop plus one node** (`Op::Group { text,
+  members }`): the node holds the prompt and takes `prompt`, `image 1`,
+  `image 2`, `mask`; its MEMBERS are the steps on its backdrop
+  (`from_editor` reads them off the `nodeux` group, `to_editor` rebuilds
+  the backdrop, so membership is by position and nothing is wired).
+  Adding one wraps the selection in a backdrop titled "prompt group"
+  and wires nothing into it. `Pipeline::expand_groups` runs on the RUN'S
+  COPY only: every member model port still unwired takes the group's
+  source in order (image 1 to its first image port, and so on; a model
+  with fewer ports drops the rest; a port the user wired stays theirs).
+  The stored pipeline never holds those edges. A group run is ONE run of
+  N pipelines (`genai_prepare_group` -> `genai_prepare_many`; `Run::group`,
+  `Run::rest`, `keys_more`): one quote, one "pay $X & run all", no take
+  landed, each result into its own model's gallery. The group's panel
+  draws the picked results as a contact sheet (`contact_sheet`); a cell
+  views that step (`Action::ViewStep`). Stills and video models in one
+  group are not checked together.
 - **The run UI is two numbered steps and says which is which**
   (`run_ui`): 1 "get price" (free, nothing sent), 2 "pay $X & run" (the
   request and the charge), with the billed steps named
