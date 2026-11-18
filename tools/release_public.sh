@@ -9,19 +9,21 @@
 #   tools/release_public.sh        # writes dist/public/wobble-<ver>-<git>-macos-<arch>.zip
 #   WOBBLE_MOVIE=0 tools/release_public.sh   # ...without movie support
 #
-# Scrub, the timeline editor (scrub/app), ships in the same bundle as
-# Contents/MacOS/scrub: wobble's scrub button starts the binary beside it,
-# and the two share the bundled FFmpeg.
+# Scrub, the timeline editor (scrub/app), ships beside it in the same zip as
+# Scrub.app, an app of its own (tools/bundle_scrub.sh) with its own copy of
+# the bundled FFmpeg: it opens from Finder, the Dock or Spotlight without
+# wobble, and wobble's scrub button finds it beside Wobble.app or in
+# /Applications.
 #
 # FFmpeg is built here by tools/build_ffmpeg_lgpl.sh: LGPL only, decoders
 # only, macOS 12+, as dylibs in Contents/Frameworks (dynamic, so a user can
-# swap them, which LGPL asks for). The zip holds Wobble.app and nothing
-# else: the licences and an FFMPEG.txt naming the exact source and configure
-# line ride inside it, in Contents/Resources/licenses (Blender's layout).
+# swap them, which LGPL asks for). The zip holds Wobble.app and Scrub.app and
+# nothing else: the licences and an FFMPEG.txt naming the exact source and configure
+# line ride inside each, in Contents/Resources/licenses (Blender's layout).
 #
 # Ad-hoc signed unless WOBBLE_SIGN names a Developer ID identity; without
-# one, recipients open it the first time from System Settings → Privacy &
-# Security → Open Anyway (or `xattr -cr Wobble.app`).
+# one, recipients open each the first time from System Settings → Privacy &
+# Security → Open Anyway (or `xattr -cr Wobble.app Scrub.app`).
 # The scripting API is always compiled in (not a feature): it opens on
 # 127.0.0.1:7979 at launch unless prefs → "scripting API" turns it off.
 set -e
@@ -66,13 +68,15 @@ CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
 rm -rf "$OUT"
 mkdir -p "$OUT"
 WOBBLE_BIN=$TARGET/release/wobble WOBBLE_APP_OUT="$OUT/Wobble.app" sh tools/bundle_app.sh
-cp "$TARGET/release/scrub" "$OUT/Wobble.app/Contents/MacOS/scrub"
-python3 tools/bundle_dylibs.py "$OUT/Wobble.app"
-# The newest minimum any bundled library declares is the app's minimum.
-MINOS=$(for f in "$OUT"/Wobble.app/Contents/Frameworks/*.dylib; do
-  [ -e "$f" ] && otool -l "$f" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; b=0}'
-done | sort -V | tail -1)
-[ -n "$MINOS" ] && plutil -replace LSMinimumSystemVersion -string "$MINOS" "$OUT/Wobble.app/Contents/Info.plist"
+SCRUB_BIN=$TARGET/release/scrub SCRUB_APP_OUT="$OUT/Scrub.app" sh tools/bundle_scrub.sh
+for APP in Wobble Scrub; do
+  python3 tools/bundle_dylibs.py "$OUT/$APP.app"
+  # The newest minimum any bundled library declares is the app's minimum.
+  MINOS=$(for f in "$OUT/$APP.app"/Contents/Frameworks/*.dylib; do
+    [ -e "$f" ] && otool -l "$f" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; b=0}'
+  done | sort -V | tail -1)
+  [ -n "$MINOS" ] && plutil -replace LSMinimumSystemVersion -string "$MINOS" "$OUT/$APP.app/Contents/Info.plist"
+done
 # Debug symbols stay here (dist/symbols/<git>/) for reading crash dumps;
 # they are 3/4 of the app and no use to anyone running it.
 if [ -d "$OUT/Wobble.app/Contents/MacOS/wobble.dSYM" ]; then
@@ -80,27 +84,28 @@ if [ -d "$OUT/Wobble.app/Contents/MacOS/wobble.dSYM" ]; then
   rm -rf "dist/symbols/${GIT:?}/wobble.dSYM"
   mv "$OUT/Wobble.app/Contents/MacOS/wobble.dSYM" "dist/symbols/$GIT/"
 fi
-if [ -d "$TARGET/release/scrub.dSYM" ]; then
+if [ -d "$OUT/Scrub.app/Contents/MacOS/scrub.dSYM" ]; then
   mkdir -p "dist/symbols/$GIT"
   rm -rf "dist/symbols/${GIT:?}/scrub.dSYM"
-  cp -RL "$TARGET/release/scrub.dSYM" "dist/symbols/$GIT/"
+  mv "$OUT/Scrub.app/Contents/MacOS/scrub.dSYM" "dist/symbols/$GIT/"
 fi
 # Every build carries the licences (LICENSING.md says what each covers),
 # inside the bundle so the zip's top level is just the app; a movie build adds
 # FFMPEG.txt, the exact FFmpeg it links (LGPL 2.1 §6). In before the signing,
 # so the seal covers them.
-LIC="$OUT/Wobble.app/Contents/Resources/licenses"
+for APP in Wobble Scrub; do
+LIC="$OUT/$APP.app/Contents/Resources/licenses"
 mkdir -p "$LIC"
 cp LICENSE NOTICE.md THIRD_PARTY_LICENSES.md licenses/LGPL-2.1.txt "$LIC/"
 # One flat folder, so LICENSING.md's link to licenses/LGPL-2.1.txt is a sibling.
 sed 's#licenses/LGPL-2\.1\.txt#LGPL-2.1.txt#g' LICENSING.md > "$LIC/LICENSING.md"
 if [ -n "$WOBBLE_DYLIB_PATH" ]; then
   cat > "$LIC/FFMPEG.txt" <<TXT
-Wobble uses FFmpeg (https://ffmpeg.org) under the GNU Lesser General Public
+$APP uses FFmpeg (https://ffmpeg.org) under the GNU Lesser General Public
 License 2.1 or later (LGPL-2.1.txt, beside this file). Only FFmpeg's LGPL
 parts are built: no --enable-gpl, no --enable-nonfree, no x264, x265 or any
 other external codec library. It is linked dynamically: the libraries are
-Wobble.app/Contents/Frameworks/libav*.dylib and libsw*.dylib, and you may
+$APP.app/Contents/Frameworks/libav*.dylib and libsw*.dylib, and you may
 replace them with your own build of the same version.
 
 Version: FFmpeg 8.1, unmodified
@@ -112,13 +117,23 @@ Built with (macOS 12 SDK target, then make install):
 The build script is tools/build_ffmpeg_lgpl.sh in Wobble's source.
 TXT
 fi
+done
 # The few home paths the remap misses (inlined panic locations, FFmpeg's
 # configure line), blanked in place before the signature covers them.
-python3 tools/scrub_paths.py "$OUT/Wobble.app"
-codesign --force --deep --sign "${WOBBLE_SIGN:--}" "$OUT/Wobble.app"
-codesign --verify --deep --strict "$OUT/Wobble.app"
+python3 tools/scrub_paths.py "$OUT/Wobble.app" "$OUT/Scrub.app"
+for APP in Wobble Scrub; do
+  codesign --force --deep --sign "${WOBBLE_SIGN:--}" "$OUT/$APP.app"
+  codesign --verify --deep --strict "$OUT/$APP.app"
+done
 NAME="wobble-$VERSION-$GIT-macos-$(uname -m)$SUFFIX.zip"
-ditto -c -k --norsrc --noextattr --keepParent "$OUT/Wobble.app" "$OUT/$NAME"
+# Both apps at the zip's top level. ditto zips one source, so stage them in a
+# folder and zip its contents (no --keepParent).
+ZS="$OUT/zip-stage"
+rm -rf "$ZS" && mkdir -p "$ZS"
+ditto "$OUT/Wobble.app" "$ZS/Wobble.app"
+ditto "$OUT/Scrub.app" "$ZS/Scrub.app"
+ditto -c -k --norsrc --noextattr "$ZS" "$OUT/$NAME"
+rm -rf "$ZS"
 echo "== $OUT/$NAME"
 # A clean tree's release is tagged v<version>, locally; pushing it is a choice.
 case "$GIT" in *-dirty) ;; *)

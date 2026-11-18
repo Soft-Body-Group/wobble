@@ -19,6 +19,7 @@
 //! | `optimiseui`| the optimise dialog, job, HUD line and cache window       |
 
 mod apiserve;
+mod appicon;
 mod audio;
 mod bin;
 mod binthumbs;
@@ -986,6 +987,9 @@ impl ApplicationHandler for App {
         let gpu = Gpu::standalone().expect("no GPU adapter");
         let headless = self.shot.is_some() || self.play.is_some() || self.test_optimise || self.test_keys || self.test_mouse || self.test_tools || self.test_api || self.test_wobble || self.test_project || self.test_colour || self.test_record || self.test_realtime;
         let mut win = UiWindow::new(el, &gpu, media::sys::APP, (1600, 1000), !headless);
+        if !headless {
+            appicon::apply(&win.window);
+        }
         let res = viewer::Viewers::new(&gpu.device, win.format(), 3);
         win.layer_mut().renderer_mut().callback_resources.insert(res);
         #[cfg(feature = "fold")]
@@ -1157,6 +1161,7 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
+    appicon::drop_lonely_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let mut args = std::env::args().skip(1).peekable();
     let (mut path, mut shot, mut frame, mut play, mut speed) = (None, None, None, None, 1.0);

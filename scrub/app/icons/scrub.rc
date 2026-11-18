@@ -1,0 +1,3 @@
+// scrub.exe's icon (Explorer, the taskbar, the Start menu). Drawn by
+// tools/make_scrub_icons.py; embedded by scrub/app/build.rs.
+1 ICON "scrub.ico"

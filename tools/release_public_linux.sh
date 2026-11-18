@@ -7,7 +7,8 @@
 # runs from anywhere with no LD_LIBRARY_PATH. The licences (and FFMPEG.txt)
 # sit in licenses/, so the top level is the app and what it needs to run.
 # Scrub, the timeline editor (scrub/app), ships beside it as ./scrub, on the
-# same lib/ (wobble's scrub button starts the binary beside it).
+# same lib/: it runs on its own (install-desktop-entry.sh gives it a launcher
+# entry and icon too), and wobble's scrub button starts the binary beside it.
 #
 #   tools/release_public_linux.sh          # dist/public-linux/wobble-<ver>-<git>-linux-x86_64.tar.gz
 #   WOBBLE_MOVIE=0 tools/release_public_linux.sh   # ...-nomovie, no FFmpeg
@@ -66,6 +67,7 @@ sed 's#licenses/LGPL-2\.1\.txt#LGPL-2.1.txt#g' LICENSING.md > "$ST/licenses/LICE
 cp -r plugins/invert plugins/vignette "$ST/plugins/"
 mkdir -p "$ST/icons"
 cp app/icons/wobble-256.png app/icons/wobble-512.png "$ST/icons/"
+cp scrub/app/icons/scrub-256.png scrub/app/icons/scrub-512.png "$ST/icons/"
 cp app/icons/install-desktop-entry.sh "$ST/"
 MOVIE_LINE="This build has no movie (ProRes/H.264) support: read EXR, DPX, PNG or JPEG sequences."
 if [ -n "$FEATURES" ]; then
@@ -101,8 +103,9 @@ from ./plugins, relative to where you start it). Needs a GPU with Vulkan (NVIDIA
 proprietary driver, or Mesa for AMD and Intel).
 $MOVIE_LINE
 Plugins in the plugins folder load automatically; your own go in ~/.wobble/plugins.
-./install-desktop-entry.sh adds it to your app launcher, with its icon.
-./scrub is Scrub, the timeline editor (also started by wobble's scrub button).
+./scrub is Scrub, the timeline editor: an app of its own (run it directly), and
+also what wobble's scrub button starts.
+./install-desktop-entry.sh adds both to your app launcher, each with its icon.
 
 The first launch asks whether to join alpha testing and to be told about new
 builds; nothing is sent until you answer. Change either in prefs any time.

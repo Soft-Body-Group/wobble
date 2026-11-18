@@ -2752,7 +2752,7 @@ fn open_url(url: &str) {
 }
 
 /// Where the Scrub editor's binary should be: beside this executable (a
-/// cargo target dir, or the app bundle's `Contents/MacOS`).
+/// cargo target dir, or the Windows / Linux release folder).
 #[cfg(not(target_arch = "wasm32"))]
 fn scrub_exe() -> std::io::Result<std::path::PathBuf> {
     let exe = std::env::current_exe()?;
@@ -2760,16 +2760,39 @@ fn scrub_exe() -> std::io::Result<std::path::PathBuf> {
     Ok(dir.join(format!("scrub{}", std::env::consts::EXE_SUFFIX)))
 }
 
+/// macOS: Scrub.app, an app of its own (tools/bundle_scrub.sh): beside the
+/// Wobble.app this binary runs from (the release zip unpacked in place, or
+/// both dragged into one folder), else in /Applications or ~/Applications.
+#[cfg(target_os = "macos")]
+fn scrub_app() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    // .../X/Wobble.app/Contents/MacOS/wobble -> .../X
+    let beside = exe.ancestors().nth(4).filter(|_| exe.to_string_lossy().contains(".app/Contents/MacOS/"));
+    let home = std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Applications"));
+    [beside.map(|d| d.to_path_buf()), Some("/Applications".into()), home]
+        .into_iter()
+        .flatten()
+        .map(|d| d.join("Scrub.app"))
+        .find(|a| a.join("Contents/MacOS/scrub").is_file())
+}
+
 impl Gfx {
     /// Start Scrub, the timeline editor, as a process of its own: the
-    /// `scrub` binary (`scrub/app`) beside this one, else on PATH. This
-    /// comp stays exactly as it is.
+    /// `scrub` binary (`scrub/app`) beside this one, else (macOS) Scrub.app,
+    /// else on PATH. This comp stays exactly as it is.
     #[cfg(not(target_arch = "wasm32"))]
     fn launch_scrub(&mut self) {
         self.scrub_error = None;
         let beside = scrub_exe();
-        let started = match &beside {
-            Ok(p) if p.is_file() => std::process::Command::new(p).spawn(),
+        #[cfg(target_os = "macos")]
+        let app = scrub_app();
+        #[cfg(not(target_os = "macos"))]
+        let app: Option<std::path::PathBuf> = None;
+        let started = match (&beside, app) {
+            (Ok(p), _) if p.is_file() => std::process::Command::new(p).spawn(),
+            // `open`, so it starts as Scrub (its own Dock icon and menu), or
+            // comes forward if it is already running.
+            (_, Some(app)) => std::process::Command::new("open").arg("-a").arg(app).spawn(),
             _ => std::process::Command::new("scrub").spawn(),
         };
         if let Err(e) = started {

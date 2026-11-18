@@ -58,4 +58,8 @@ objc2 = "0.6"
 block2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }
+windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Console"] }
+
+# scrub.exe's icon (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"

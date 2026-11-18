@@ -81,7 +81,8 @@ The build script is tools/build_ffmpeg_lgpl_win.sh in Wobble's source.
 Wobble $ver (Windows, x64)
 
 Unzip anywhere and run wobble.exe. Needs a GPU with Vulkan or DX12.
-scrub.exe is Scrub, the timeline editor (also started by wobble's scrub button).
+scrub.exe is Scrub, the timeline editor: an app of its own (run it directly,
+or pin it to Start or the taskbar), and also what wobble's scrub button starts.
 $movieLine
 Plugins in the plugins folder load automatically; your own go in %USERPROFILE%\.wobble\plugins.
 

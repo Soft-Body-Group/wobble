@@ -4090,6 +4090,7 @@ dependencies = [
  "cpal",
  "egui",
  "egui-wgpu",
+ "embed-resource",
  "env_logger",
  "epaint_default_fonts 0.36.2",
  "ffmpeg-next",
