@@ -1973,9 +1973,9 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         // And the SDF family.
         NodeKind::Sdf(_) | NodeKind::SdfNode(_) => t::node_sdf(),
         NodeKind::Blender(_) => t::node_blender(),
-        // Words inside a GenAI Pipeline wear the String node's colour: a
-        // prompt is text, and reads as text at a glance among the models.
-        NodeKind::GenAiStep(genai::Op::Prompt { .. } | genai::Op::Template { .. }) => t::node_prompt(),
+        // Words inside a GenAI Pipeline: the family's slate, lighter, so
+        // a prompt reads apart from the models at a glance.
+        NodeKind::GenAiStep(genai::Op::Prompt { .. } | genai::Op::Template { .. }) => t::node_genai_prompt(),
         NodeKind::GenAi(_) | NodeKind::GenAiStep(_) => t::node_genai(),
         NodeKind::RotoNode(engine::graph::RotoInner::Axis(_)) => t::node_scene3d(),
         NodeKind::RotoNode(_) => t::node_spline(),
@@ -14463,7 +14463,7 @@ mod link_view_tests {
     }
 
     /// Inside a GenAI Pipeline a prompt is a speech bubble with its words
-    /// in it, in the String node's colour. Dumps
+    /// in it, in a lighter tint of the family's slate. Dumps
     /// `target/graph-genai-prompt.png` to judge by eye.
     #[test]
     fn a_prompt_inside_a_pipeline_is_a_bubble_named_by_its_words() {
@@ -14476,7 +14476,10 @@ mod link_view_tests {
         let mut g = crate::genaiui::to_editor(&pl);
         let said = g.nodes.values().find(|n| matches!(&n.kind, NodeKind::GenAiStep(genai::Op::Prompt { text }) if !text.is_empty())).unwrap();
         assert_eq!(node_label(&said.kind), "\u{201c}a moth on a lamp at night, r…\u{201d}");
-        assert_eq!(type_color(&said.kind), type_color(&NodeKind::Prompt(Default::default())));
+        // Its own tint of the family colour: neither a model's nor the
+        // comp String node's rose.
+        assert_ne!(type_color(&said.kind), type_color(&NodeKind::GenAi(Default::default())));
+        assert_ne!(type_color(&said.kind), type_color(&NodeKind::Prompt(Default::default())));
         assert_eq!(node_label(&NodeKind::GenAiStep(genai::Op::Prompt { text: String::new() })), "Prompt");
 
         let ctx = egui::Context::default();

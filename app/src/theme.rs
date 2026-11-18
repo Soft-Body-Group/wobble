@@ -431,7 +431,13 @@ slots! {
         node_bake: "Bake" = shade(S::family_time, rgb(0x8f, 0x8f, 0x4f));
         node_blend: "Blend" = shade(S::family_merge, gray(0x77));
         node_blender: "Blender" = shade(S::family_source, rgb(0x4f, 0x8f, 0xd6));
-        node_genai: "GenAI" = shade(S::family_source, rgb(0xb4, 0x5a, 0xd2));
+        // Slate, not a hue of its own (it was magenta): the `$` badge and
+        // the progress ring say what a GenAI node is doing. Cooler and
+        // lighter than a Blend's grey, so the two do not read as one.
+        node_genai: "GenAI" = shade(S::family_source, rgb(0xa4, 0xb0, 0xc0));
+        // A prompt inside a pipeline: the same slate, lighter, so words
+        // stand apart from models without a second hue.
+        node_genai_prompt: "GenAI prompt" = shade(S::family_source, rgb(0xd6, 0xdd, 0xe6));
         node_prompt: "String" = like(S::wire_text);
         node_blur: "Blur" = shade(S::family_filter, rgb(0x3f, 0x8a, 0x7a));
         node_breakout: "Breakout" = shade(S::family_channels, rgb(0x46, 0x9a, 0x96));
