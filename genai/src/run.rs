@@ -183,9 +183,13 @@ fn input_tag(matte: bool, nth: usize, clip: bool) -> String {
 /// The clip a step's video port reads straight off a clip Input (the
 /// picture before a matte), for a model that needs to know its shape.
 fn step_clip<'a>(p: &Pipeline, i: usize, inputs: &'a Inputs) -> Option<&'a Clip> {
+    // Straight off a clip Input, or through comp nodes on the way (a Crop,
+    // a Transform, a Spline: rendered by the host as a clip of their own).
     let src = |want_matte: bool| {
         p.steps[i].inputs.iter().flatten().find_map(|&j| match p.steps[j].op {
             Op::Input { input, clip: true, matte, .. } if matte == want_matte => inputs.clips.get(&input),
+            Op::Comp { clip: true, .. } if !want_matte => inputs.shape_clips.get(&j),
+            Op::Shape { clip: true, .. } if want_matte => inputs.shape_clips.get(&j),
             _ => None,
         })
     };
@@ -1646,5 +1650,27 @@ mod tests {
         b.clips.insert(0, enc(vec![2; 9]));
         let (ka, kb) = (plan(&p, &a, &dir).unwrap(), plan(&p, &b, &dir).unwrap());
         assert_eq!(ka.keys[ka.target], kb.keys[kb.target]);
+    }
+
+    #[test]
+    fn a_clip_through_a_comp_node_is_still_the_model_s_clip() {
+        // Input (clip) -> Crop -> Wan's video port: the model reads the
+        // clip the host rendered for the Crop.
+        let dir = std::env::temp_dir().join("wobble-genai-compclip-none");
+        let mut p = Pipeline::bare(vec![crate::InKind::Image]);
+        let img = p.input_step(0).unwrap();
+        let ask = p.push(Op::Prompt { text: "bluer".into() }, [0.0, 0.0]);
+        let crop = p.push(Op::Comp { kind: "Crop".into(), node: json!({}), clip: true, inputs: 1 }, [0.0, 0.0]);
+        let wan = p.push(Op::Generate { model: "fal/wan-2.7-video-edit".into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
+        let out = p.push(Op::Output, [0.0, 0.0]);
+        assert!(p.connect(img, crop, 0) && p.connect(ask, wan, 0) && p.connect(crop, wan, 1) && p.connect(wan, out, 0));
+        let mut ins = Inputs { comp: (1920, 1080), ..Default::default() };
+        assert!(plan(&p, &ins, &dir).is_err(), "nothing rendered yet");
+        ins.shape_clips.insert(crop, clip(72, 1280, 720));
+        let pl = plan(&p, &ins, &dir).unwrap();
+        assert!(!pl.keys[wan].is_empty());
+        // And its own limits are checked on THAT clip: one second is short.
+        ins.shape_clips.insert(crop, clip(24, 1280, 720));
+        assert!(plan(&p, &ins, &dir).unwrap_err().contains("2-10 s"));
     }
 }
