@@ -29,6 +29,7 @@ mod editor;
 #[cfg(feature = "fold")]
 mod fold;
 mod exportui;
+mod feedback;
 mod edits;
 mod marketing;
 mod mouse;
@@ -44,6 +45,7 @@ mod text;
 mod textui;
 mod testtools;
 mod timelineui;
+mod tour;
 mod transport;
 mod viewer;
 mod viewnav;

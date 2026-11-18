@@ -4109,6 +4109,7 @@ dependencies = [
  "seq",
  "serde",
  "serde_json",
+ "ureq",
  "wgpu",
  "windows",
  "winit",

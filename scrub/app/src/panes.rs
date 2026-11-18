@@ -138,6 +138,8 @@ pub struct Panes {
     pub bin_tile: f32,
     /// The screen recorder's options (area, cursor, mark, folders).
     pub rec_opts: Option<crate::recorder::Opts>,
+    /// The first-launch hotkey tour has been shown (and closed).
+    pub tour_seen: bool,
     /// Where each panel was drawn last frame, by window.
     #[serde(skip)]
     last: Vec<(usize, Pane, Rect)>,
@@ -174,6 +176,7 @@ impl Default for Panes {
             bin_tiles: false,
             bin_tile: 160.0,
             rec_opts: None,
+            tour_seen: false,
             last: Vec::new(),
             now: Vec::new(),
             host: MAIN,
@@ -299,6 +302,11 @@ impl Panes {
     #[cfg_attr(not(feature = "wobble"), allow(dead_code))]
     pub fn set_experimental_wobble(&mut self, on: bool) {
         self.experimental_wobble = on;
+        self.save();
+    }
+
+    pub fn set_tour_seen(&mut self) {
+        self.tour_seen = true;
         self.save();
     }
 

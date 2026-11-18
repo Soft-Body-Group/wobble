@@ -288,6 +288,10 @@ pub struct Editor {
     /// not a hold).
     pub(crate) hold_shift: bool,
     pub(crate) hold_chord: bool,
+    /// The first-launch hotkey tour (help > hotkey tour replays it).
+    pub(crate) tour: crate::tour::Tour,
+    /// "request a feature" (the menubar's red button).
+    pub(crate) feedback: crate::feedback::Feedback,
 }
 
 impl Editor {
@@ -376,6 +380,8 @@ impl Editor {
             d_tap: None,
             hold_shift: false,
             hold_chord: false,
+            tour: crate::tour::Tour::new(crate::panes::Panes::load(headless).tour_seen, headless),
+            feedback: crate::feedback::Feedback::default(),
         }
     }
 
@@ -2409,6 +2415,16 @@ impl Editor {
                     self.rec.snap = snap;
                 }
             });
+            ui.menu_button("help", |ui| {
+                if ui.button("hotkey tour").clicked() {
+                    self.tour.replay();
+                    ui.close();
+                }
+                if ui.button("request a feature…").clicked() {
+                    self.feedback.request();
+                    ui.close();
+                }
+            });
             ui.menu_button("edit", |ui| {
                 if ui.button("undo  (cmd Z)").clicked() {
                     self.undo(false);
@@ -2458,6 +2474,8 @@ impl Editor {
                 }
                 None => {}
             }
+            // Feedback, in red at the far right (as wobble has it).
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.feedback.button(ui));
         });
     }
 
@@ -2632,7 +2650,10 @@ impl imfram::shell::UiApp for Editor {
         let wob_keys = self.fold_has_keys(ui);
         #[cfg(not(feature = "fold"))]
         let wob_keys = false;
-        if !wob_keys {
+        // The tour's card and the feature form keep the keys to themselves.
+        if self.tour.open || self.feedback.up() {
+            self.hold = None;
+        } else if !wob_keys {
             self.keys(ui);
         }
         // The record playhead may sit one past the last frame (where the
@@ -2706,6 +2727,10 @@ impl imfram::shell::UiApp for Editor {
             self.quit = true;
         }
         self.settings_window(ui.ctx());
+        self.feedback.windows(ui.ctx());
+        if self.tour.show(ui.ctx()) && !self.panes.tour_seen {
+            self.panes.set_tour_seen();
+        }
         self.export_windows(ui.ctx());
         self.posts_ui(ui.ctx());
         self.speed_window(ui.ctx());
