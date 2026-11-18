@@ -4,6 +4,37 @@ Shown once, on the first launch of a new version (`app/src/whatsnew.rs`).
 Newest first: a `## <version>` heading over `- ` bullets, a `**bold**` lead
 drawn strong. Plain words for the people using wobble, not commit messages.
 
+## 0.1.0-alpha.13
+- **Refract** (new): a plate or latlong through bumpy glass, from a height or normal map. IOR, dispersion, roughness.
+- **Splat** (new): Gaussian splat captures (.ply, .spz) through a Camera, with RGBA and depth out.
+- **Morph Dissolve** (new): A and B warp toward each other along their optical flow while they cross-dissolve.
+- **Compare** (new): A or B, or a draggable wipe that can be animated.
+- **Turn** (new): 90 CW, 90 CCW or 180, the format turned with it, no resampling.
+- **Uncrop** (new): puts a render of a Crop's box back into the full format.
+- **Project Load** (new): footage picked by project and shot instead of a path. Comps open and save the same way.
+- **ACES 1.2**: sRGB and Rec.709 (ACES) views, Output - Rec.709 and sRGB input and output spaces.
+- **GenAI**: one node per model in the AI menu. New image, video, upscale, outpaint, depth, normals, relight and image-to-3D models.
+- **GenAI**: video models take clip inputs, with masked video inpaint and video edit.
+- **GenAI Pipeline**: steps are nodes you dive into. Comp nodes work inside, and a model step runs from its own node.
+- **GenAI Pipeline**: templates, app mode, prompt tools, one prompt through several models, batches over prompts, seeds or frames, and prompt groups.
+- **GenAI**: take history, a gallery of results on every model step, and progress on the node.
+- **GenAI**: a take at another frame rate is conformed by a Speed node.
+- **Roto**: pen-tool drawing, drag a new point to pull its tangents. Enter dives in: each shape is a node, Axis nodes group and move them in 3D, and a Camera input projects them.
+- **Load**: its own proxy scale, 1, 0.75, 0.5 or 0.25, applied before every cache.
+- **Reformat**: size by factor.
+- **Sammie**: tracking 4x faster, matting resolution control, weights download shown.
+- **Scrub**: now its own app, shipped beside Wobble on all three OSes. The scrub button starts it. A hotkey tour runs on first launch and from help > hotkey tour.
+- **Graph**: pasting file paths or script Read blocks makes Load nodes at the cursor. F frames, R is hold+drag rotate only.
+- **Viewer**: pixel readout moved to Z, shift+Z pins it.
+- **Eyedropper**: a drag follows the pixel under the pointer, shift-drag averages a box.
+- **Number fields**: Tab commits the typed value, and typed arithmetic (100/2) commits its answer.
+- **Paint**: brush size is in full-res pixels. Clone: hold alt/cmd to move the source.
+- **Timeline**: a clear in/out button on the transport row.
+- **New comp**: a "new" button and ⌘N, asking first over unsaved changes.
+- Fixed: a save or autosave inside a dive wrote only that node, not the whole comp.
+- Fixed: the playhead inside a dive left the comp's range.
+- Fixed: a GenAI take landing while inside its pipeline was lost.
+
 ## 0.1.0-alpha.12
 - **Particles** (new): 2D particle system.
 - **Plasma** (new): solar corona. Presets: corona, eclipse, prominences.

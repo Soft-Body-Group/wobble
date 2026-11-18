@@ -3,7 +3,7 @@ name = "app"
 # THE version: SemVer with a pre-release tag (0.1.0-alpha.1, -alpha.2, …,
 # -beta.1, then 0.1.0). Shown in the title bar + welcome window, in zip
 # names, and compared by the new-build check. Bump with tools/bump_version.sh.
-version = "0.1.0-alpha.12"
+version = "0.1.0-alpha.13"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
