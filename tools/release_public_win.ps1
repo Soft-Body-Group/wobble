@@ -43,8 +43,9 @@ if (-not $env:WOBBLE_INGEST_KEY -and (Test-Path tools\feedback-worker\.secrets))
 if (-not $env:WOBBLE_INGEST_KEY) { Write-Warning "no WOBBLE_INGEST_KEY; this build will not upload reports" }
 cargo build --release -p app --no-default-features @features
 if ($LASTEXITCODE) { throw "cargo build failed" }
-# Scrub with its own defaults (the clip browser); same env, same target dir.
-cargo build --release -p scrub_app
+# Scrub with its own defaults (the clip browser) plus `fold` (clips can be
+# Wobble comps, wobble hosted in process); same env, same target dir.
+cargo build --release -p scrub_app --features fold
 if ($LASTEXITCODE) { throw "cargo build (scrub) failed" }
 
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }

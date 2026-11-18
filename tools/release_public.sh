@@ -59,13 +59,14 @@ CFLAGS="-ffile-prefix-map=$HOME=~" \
 CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
 CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
   cargo build --release -p app --no-default-features ${FEATURES:+--features $FEATURES}
-# Scrub with its own defaults (the clip browser); same env, same target dir.
+# Scrub with its own defaults (the clip browser) plus `fold` (clips can be
+# Wobble comps, wobble hosted in process); same env, same target dir.
 CARGO_TARGET_DIR=$TARGET \
 RUSTFLAGS="--remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
 CFLAGS="-ffile-prefix-map=$HOME=~" \
 CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
 CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
-  cargo build --release -p scrub_app
+  cargo build --release -p scrub_app --features fold
 rm -rf "$OUT"
 mkdir -p "$OUT"
 WOBBLE_BIN=$TARGET/release/wobble WOBBLE_APP_OUT="$OUT/Wobble.app" sh tools/bundle_app.sh

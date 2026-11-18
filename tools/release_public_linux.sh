@@ -50,12 +50,13 @@ CARGO_PROFILE_RELEASE_DEBUG=false \
 RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/lib'" --remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
 CFLAGS="-ffile-prefix-map=$HOME=~" \
   cargo build --release -p app --no-default-features ${FEATURES:+--features $FEATURES}
-# Scrub with its own defaults (the clip browser); same env, same target dir.
+# Scrub with its own defaults (the clip browser) plus `fold` (clips can be
+# Wobble comps, wobble hosted in process); same env, same target dir.
 CARGO_TARGET_DIR=target/public \
 CARGO_PROFILE_RELEASE_DEBUG=false \
 RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/lib'" --remap-path-prefix=$HOME=~ --remap-path-prefix=$PWD=wobble" \
 CFLAGS="-ffile-prefix-map=$HOME=~" \
-  cargo build --release -p scrub_app
+  cargo build --release -p scrub_app --features fold
 
 rm -rf "$OUT"
 ST="$OUT/$NAME"
