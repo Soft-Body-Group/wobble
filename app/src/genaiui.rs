@@ -1017,9 +1017,10 @@ pub(crate) fn cost_note(usd: Option<f64>) -> String {
 /// going says so rather than queueing money.
 pub struct Runs {
     pub cfg: Config,
-    /// Stop at a quote before anything billed is sent. The `commerce`
-    /// feature; without it a run goes straight to the service on the
-    /// user's own key. `--test-genai` turns it on to walk the quote stages.
+    /// Ask the service for a quote before anything billed is sent. The
+    /// `commerce` feature; without it there is no quote, and a run that
+    /// would send something stops at a plain "Run this on fal?" instead.
+    /// `--test-genai` turns it on to walk the quote stages.
     quotes: bool,
     /// The run being PREPARED (capturing, pricing, waiting for pay & run)
     /// — one at a time: they share the capture bake — or the last one
@@ -1849,7 +1850,8 @@ fn run_ui(
     // which is the request and the charge. `what` = "this step" / "the
     // pipeline".
     //
-    // Without `commerce` there is neither: one button, and the run goes.
+    // Without `commerce` there is neither: one button, and a confirm
+    // naming the models before anything is sent.
     let mut act = None;
     #[cfg(feature = "commerce")]
     let step = |ui: &mut Ui, n: u8, on: bool, text: &str| {
@@ -1903,9 +1905,36 @@ fn run_ui(
                 act = Some(cancel());
             }
         }
-        // Never reached without `commerce`, outside `--test-genai`.
         #[cfg(not(feature = "commerce"))]
-        ViewState::Ready { .. } => {}
+        ViewState::Ready { stale, what: models, .. } => {
+            ui.weak(small("waiting for your ok"));
+            let r = egui::Modal::new(egui::Id::new("genai-confirm-run")).show(ui.ctx(), |ui| {
+                ui.set_max_width(320.0);
+                ui.heading("Run this on fal?");
+                ui.add_space(6.0);
+                ui.label(models.join(", "));
+                if *stale {
+                    ui.add_space(4.0);
+                    ui.colored_label(theme::warn(), "the network changed since you pressed run");
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let go = ui.button(if *stale { "start again" } else { "Run" });
+                    crate::widgets::note_rect(ui, egui::Id::new("genai-confirm-go"), go.rect);
+                    if go.clicked() {
+                        act = Some(if *stale { prepare() } else { Action::Confirm });
+                    }
+                    let no = ui.button("Cancel");
+                    crate::widgets::note_rect(ui, egui::Id::new("genai-confirm-cancel"), no.rect);
+                    if no.clicked() {
+                        act = Some(cancel());
+                    }
+                });
+            });
+            if act.is_none() && r.should_close() {
+                act = Some(cancel());
+            }
+        }
         #[cfg(feature = "commerce")]
         ViewState::Ready { quote, billed, stale, what: billed_for } => {
             step(ui, 1, false, "price received");
@@ -2417,7 +2446,17 @@ impl Gfx {
                         && self.genai_params(node).is_none_or(|p| p.vary != r.vary));
                 let billed = plan.billed(&r.pipeline).len()
                     + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
-                let what = plan.billed(&r.pipeline).iter().filter_map(|i| r.pipeline.steps.get(*i)).map(|s| s.op.name().to_string()).collect();
+                #[cfg_attr(feature = "commerce", allow(unused_mut))]
+                let mut what: Vec<String> = plan.billed(&r.pipeline).iter().filter_map(|i| r.pipeline.steps.get(*i)).map(|s| s.op.name().to_string()).collect();
+                // The confirm names every model the run will call.
+                #[cfg(not(feature = "commerce"))]
+                for (p, plan, _) in &r.more {
+                    for name in plan.billed(p).iter().filter_map(|i| p.steps.get(*i)).map(|s| s.op.name().to_string()) {
+                        if !what.contains(&name) {
+                            what.push(name);
+                        }
+                    }
+                }
                 ViewState::Ready { quote: quote.clone(), billed, stale, what }
             }
             Some(Phase::Running { .. }) => ViewState::Running,
@@ -3109,7 +3148,7 @@ impl Gfx {
             .collect();
         let mut all = vec![(lead.clone(), plan.clone())];
         all.extend(r.more.iter().map(|(p, plan, _)| (p.clone(), plan.clone())));
-        if !self.jobs.genai.quotes || all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
+        if all.iter().all(|(p, plan)| plan.billed(p).is_empty()) {
             let mut variants = vec![run::Variant { pipeline: lead, plan, approved: vec![], inputs: None }];
             variants.extend(r.more.iter().cloned().map(|(pipeline, plan, inputs)| run::Variant {
                 pipeline,
@@ -3119,6 +3158,11 @@ impl Gfx {
             }));
             let job = run::start_many(variants, inputs, run::Services::from_config(&self.jobs.genai.cfg), dir);
             r.phase = Phase::Running { job };
+            return;
+        }
+        if !self.jobs.genai.quotes {
+            // Nothing to ask the service: straight to the confirm.
+            r.phase = Phase::Ready { plan, inputs, quote: Ok(Quote { items: vec![], balance_usd: None }) };
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4358,8 +4402,12 @@ pub mod fake {
     }
 }
 
-/// `--test-genai`'s stage that runs with quotes off.
+/// `--test-genai`'s stages that run with quotes off: stop at the confirm,
+/// cancel, ask again, confirm, land.
 const DIRECT: u32 = 100;
+const DIRECT_CANCELLED: u32 = 101;
+const DIRECT_AGAIN: u32 = 102;
+const DIRECT_SENT: u32 = 103;
 
 /// `--test-genai`'s state.
 pub struct TestGenai {
@@ -4406,9 +4454,9 @@ impl Gfx {
             println!("GENAI TEST FAIL: {m}");
             std::process::exit(1);
         };
-        // The quote stages run in every build; `DIRECT` is the one stage
-        // that runs as a build without `commerce` does.
-        self.jobs.genai.quotes = t.stage != DIRECT;
+        // The quote stages run in every build; the `DIRECT` ones run as a
+        // build without `commerce` does.
+        self.jobs.genai.quotes = !(DIRECT..=DIRECT_SENT).contains(&t.stage);
         // The LIVE end-to-end run (`WOBBLE_TEST_GENAI_LIVE=1`): the real
         // fal, the user's own key, real money (cents). Opt-in by name.
         if std::env::var_os("WOBBLE_TEST_GENAI_LIVE").is_some() {
@@ -4536,13 +4584,42 @@ impl Gfx {
                     next(&mut t, DIRECT);
                 }
             }
-            DIRECT => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+            DIRECT | DIRECT_AGAIN => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
                 Some(Phase::Failed(e)) => fail(format!("the run without a quote failed: {e}")),
-                Some(Phase::Quoting { .. } | Phase::Ready { .. }) => fail("a run without quotes stopped for one".into()),
+                Some(Phase::Quoting { .. }) => fail("a run without quotes asked for one".into()),
+                Some(Phase::Running { .. } | Phase::Done(_)) => fail("a run went without its confirm".into()),
+                Some(Phase::Ready { .. }) => {
+                    let submits = t.fake.as_ref().unwrap().submits();
+                    if submits != 0 {
+                        fail(format!("{submits} request(s) submitted before the confirm"));
+                    }
+                    if t.stage == DIRECT {
+                        self.genai_action(t.pipe, Action::Cancel);
+                        next(&mut t, DIRECT_CANCELLED);
+                    } else {
+                        self.genai_action(t.pipe, Action::Confirm);
+                        next(&mut t, DIRECT_SENT);
+                    }
+                }
+                _ => {}
+            },
+            DIRECT_CANCELLED if wait(&t, 300) => {
+                if self.jobs.genai.run.is_some() {
+                    fail("cancelling the confirm left a run behind".into());
+                }
+                let submits = t.fake.as_ref().unwrap().submits();
+                if submits != 0 {
+                    fail(format!("cancelling the confirm still sent {submits} request(s)"));
+                }
+                self.genai_action(t.pipe, Action::Prepare);
+                next(&mut t, DIRECT_AGAIN);
+            }
+            DIRECT_SENT => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the confirmed run failed: {e}")),
                 Some(Phase::Done(_)) => {
                     let fake = t.fake.as_ref().unwrap();
                     if fake.submits() != 1 {
-                        fail(format!("the run without a quote submitted {} requests, expected one", fake.submits()));
+                        fail(format!("the confirmed run submitted {} requests, expected one", fake.submits()));
                     }
                     fake.submits.store(0, std::sync::atomic::Ordering::SeqCst);
                     let g = t.pipe;
@@ -5431,6 +5508,49 @@ mod tests {
             take_missing: true,
             fps: 24.0,
             texts: BTreeMap::new(),
+        }
+    }
+
+    /// Without `commerce`, the confirm is what starts a run: its Run
+    /// confirms, its Cancel cancels, and showing it does neither.
+    #[cfg(not(feature = "commerce"))]
+    #[test]
+    fn the_confirm_runs_or_cancels_on_a_click() {
+        let v = view(ViewState::Ready {
+            quote: Ok(Quote { items: vec![], balance_usd: None }),
+            billed: 1,
+            stale: false,
+            what: vec!["FLUX.1 [dev]".into()],
+        });
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let frame = |ctx: &egui::Context, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut act = None;
+            let _ = ctx.run_ui(raw, |ui| {
+                act = run_ui(ui, &v, &[], "the pipeline", || Action::Prepare, || Action::Cancel, || Action::Dismiss);
+            });
+            act
+        };
+        for (id, confirms) in [("genai-confirm-go", true), ("genai-confirm-cancel", false)] {
+            let ctx = egui::Context::default();
+            for _ in 0..3 {
+                assert!(frame(&ctx, vec![]).is_none(), "the confirm acted by itself");
+            }
+            let (r, _) = crate::widgets::noted_rect(&ctx, egui::Id::new(id)).expect("the confirm was not drawn");
+            let pos = r.center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let mut got = frame(&ctx, vec![egui::Event::PointerMoved(pos)]);
+            got = got.or(frame(&ctx, vec![button(true)]));
+            got = got.or(frame(&ctx, vec![button(false)]));
+            assert!(
+                if confirms { matches!(got, Some(Action::Confirm)) } else { matches!(got, Some(Action::Cancel)) },
+                "{id} did the wrong thing"
+            );
         }
     }
 
