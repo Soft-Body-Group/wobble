@@ -1647,8 +1647,23 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   shows, what a comp node below it works on, and its tick is where a
   video result plays from — this replaced the in-memory step keys, so it
   survives a restart. The step's panel draws it (`gallery`): click picks
-  (`Action::PickMade`), "pop out" makes a Load of the file in the OUTER
-  graph (`MadeToLoad`, `genai_file_to_load`). A picked OLDER result is
+  (`Action::PickMade`), "pop out" makes a RESULT node of it INSIDE the
+  network (`MadeToLoad` -> `genai_pop_out`, `Op::Result { key, file,
+  tick }`): a free source whose plan key IS the result's key, shown and
+  worked on by comp nodes through the owner's reader exactly as a
+  model's result is (`models_above` lists it, `genai_step_result` /
+  `genai_step_tick` read the op). Copy/paste carries it across the
+  boundary (`convert_pasted`, called from the graph's paste): a Result
+  pasted outside is a Load of the same file, a Load of a results-dir file
+  pasted inside is a Result. Outside a dive `MadeToLoad` still makes a
+  Load beside the node (`genai_file_to_load`).
+- **The big gallery is a window** (`big_gallery`, opened by "gallery" on
+  a step's results or a group's contact sheet; state `BigGallery` in
+  egui temp data per node): LARGE (one picture, `hist::picture`, a strip
+  under it) or CONTACT SHEET. Left / Right are its keys while it is up:
+  it reads `Act::StepBack/StepForward` and stamps `gallery_keys_id` each
+  frame, which the playhead step in `lib.rs` stands down for (the
+  browser's rule). A picked OLDER result is
   not what a downstream MODEL step reads (that is the plan's).
 - **A PROMPT GROUP is a backdrop plus one node** (`Op::Group { text,
   members }`): the node holds the prompt and takes `prompt`, `image 1`,

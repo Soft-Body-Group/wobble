@@ -283,6 +283,8 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
             // A group makes nothing: nothing reads it, so it is never in
             // a plan's order.
             Op::Group { .. } => (h(&["group"]), 0.0),
+            // A popped-out result is its file: the key it was made under.
+            Op::Result { key, .. } => (key.clone(), comp_mp),
             Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
                 return Err(OLD_STEP.into())
             }
@@ -1065,6 +1067,13 @@ fn execute(
                 Val::Image(path)
             }
             Op::Group { .. } => Val::Text(String::new()),
+            Op::Result { key, file, .. } => {
+                let path = dir.join(key).join(file);
+                if !path.exists() {
+                    bail!("a Result node's file is not on this machine");
+                }
+                Val::Image(path)
+            }
             Op::PromptIn | Op::Reference | Op::Matte | Op::Second | Op::ClipIn { .. } | Op::MatteClip => {
                 bail!(OLD_STEP)
             }

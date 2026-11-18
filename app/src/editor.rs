@@ -7265,6 +7265,7 @@ impl NodeEditor {
                     let ids = paste_nodes(graph, &text, at, next_read_slot)
                         .or_else(|| paste_loads(graph, &text, at, next_read_slot));
                     if let Some(ids) = ids {
+                        crate::genaiui::convert_pasted(graph, &ids, self.in_genai, next_read_slot);
                         *selection = ids;
                         self.sel_port = None;
                         self.pasted = true;

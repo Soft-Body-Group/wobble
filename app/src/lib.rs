@@ -14410,7 +14410,11 @@ impl Gfx {
             // Left / Right step the hand one frame, held keys repeating.
             // Stepping pauses (Blender's), and stops at the ends of the
             // viewer range the bar draws rather than wrapping.
-            if self.browser.is_none() {
+            // (And to a GenAI gallery window while one is up.)
+            let gallery_up = ctx
+                .data(|d| d.get_temp::<f64>(genaiui::gallery_keys_id()))
+                .is_some_and(|t| ctx.input(|i| i.time) - t < 0.25);
+            if self.browser.is_none() && !gallery_up {
                 let (back_k, fwd_k) = ctx.input(|i| {
                     (
                         keymap::pressed_or_repeat(i, Act::StepBack),
@@ -24736,7 +24740,14 @@ impl Gfx {
                             self.playback_dirty = true;
                         }
                     }
+                    // "Pop out", inside: a Result node of that picture, in
+                    // here beside the node whose panel it is.
+                    let popped = match (&a, owner) {
+                        (genaiui::Action::MadeToLoad(k), Some(o)) => self.genai_pop_out(o, key, *k),
+                        _ => false,
+                    };
                     match owner {
+                        _ if popped => {}
                         Some(o) => self.genai_in_comp(|me| me.genai_action(o, a)),
                         None => self.genai_action(key, a),
                     }

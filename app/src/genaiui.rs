@@ -406,7 +406,7 @@ pub(crate) fn stand_in(
         // A model's result: the pipeline node itself, whose reader the
         // caller points at that result's file (`genai_dive_show` for the
         // view, `genai_capture_next` for a run).
-        Op::Generate { .. } | Op::Comfy { .. } => Some(owner),
+        Op::Generate { .. } | Op::Comfy { .. } | Op::Result { .. } => Some(owner),
         Op::Shape { node, .. } => {
             let mut n = shape_node(node);
             if let NodeKind::Spline(sp) = &mut n.kind {
@@ -536,10 +536,24 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
 /// (the result picked in that model's gallery), under its name. Click one
 /// to look at that model; "pop out" makes a Load of it in the outer graph.
 fn contact_sheet(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
-    let mut act = None;
     ui.separator();
     let made = v.sheet.iter().filter(|s| s.2.is_some()).count();
-    ui.label(small(format!("contact sheet: {made} of {} models have a result", v.sheet.len())));
+    let mut big = BigGallery::load(ui, node);
+    ui.horizontal(|ui| {
+        ui.label(small(format!("contact sheet: {made} of {} models have a result", v.sheet.len())));
+        let b = ui.add_enabled(made > 0, egui::Button::new(small("gallery")).small());
+        crate::widgets::note_rect(ui, big_gallery_id(node), b.rect);
+        if b.on_hover_text("the results, large or as a contact sheet, in a window of their own").clicked() {
+            big.open = true;
+        }
+    });
+    let pics: Vec<Pic> = v
+        .sheet
+        .iter()
+        .filter_map(|(step, name, shot)| shot.as_ref().map(|s| Pic { shot: s, caption: name.clone(), step: Some(*step) }))
+        .collect();
+    let mut act = big_gallery(ui, node, &mut big, &pics);
+    big.store(ui, node);
     let size = egui::vec2(112.0, 63.0);
     ui.horizontal_wrapped(|ui| {
         for (step, name, shot) in &v.sheet {
@@ -564,13 +578,226 @@ fn contact_sheet(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
                 ui.add(egui::Label::new(small(name.as_str())).truncate());
                 if let Some(s) = shot {
                     let b = ui.add_enabled(s.here, egui::Button::new(small("pop out")).small());
-                    if b.on_hover_text("a Load of this result, beside the pipeline node in the outer graph").clicked() {
+                    if b.on_hover_text(POP_OUT).clicked() {
                         act = Some(Action::MadeToLoad(s.k));
                     }
                 }
             });
         }
     });
+    act
+}
+
+const POP_OUT: &str = "a Result node of this picture, in here beside the model.\ncopy it and paste it in the comp outside for a Load of the same file";
+
+/// Where the big gallery of `node`'s results is, and how it shows them.
+#[derive(Clone, Copy, Default)]
+struct BigGallery {
+    open: bool,
+    /// A contact sheet rather than one large picture.
+    sheet: bool,
+    /// The picture the large view is on.
+    at: usize,
+}
+
+/// The id a suite aims at: the "gallery" button of `node`'s panel.
+pub fn big_gallery_id(node: u64) -> egui::Id {
+    egui::Id::new(("genai-big-gallery", node))
+}
+
+/// Set (to the time) every frame a big gallery is up: Left / Right move
+/// through its pictures then, not the playhead.
+pub(crate) fn gallery_keys_id() -> egui::Id {
+    egui::Id::new("genai-big-gallery-keys")
+}
+
+impl BigGallery {
+    fn load(ui: &Ui, node: u64) -> Self {
+        ui.data(|d| d.get_temp(big_gallery_id(node))).unwrap_or_default()
+    }
+    fn store(self, ui: &Ui, node: u64) {
+        ui.data_mut(|d| d.insert_temp(big_gallery_id(node), self));
+    }
+}
+
+/// One picture in the big gallery.
+struct Pic<'a> {
+    shot: &'a Shot,
+    caption: String,
+    /// A prompt group's sheet: the model step it belongs to.
+    step: Option<usize>,
+}
+
+/// The big gallery: a window of a node's results, either ONE LARGE
+/// picture with a strip to move through (Left / Right too) or a CONTACT
+/// SHEET of them all. Click one to select it; "use this" makes it the
+/// step's result, "pop out" makes a Result node of it.
+fn big_gallery(ui: &mut Ui, node: u64, st: &mut BigGallery, pics: &[Pic]) -> Option<Action> {
+    if !st.open || pics.is_empty() {
+        st.open = false;
+        return None;
+    }
+    st.at = st.at.min(pics.len() - 1);
+    let mut act = None;
+    let mut open = true;
+    let ctx = ui.ctx().clone();
+    // Left / Right are this window's while it is up (the frame-step keys,
+    // so a remap carries).
+    let (back, fwd) = ctx.input(|i| {
+        (
+            crate::keymap::pressed_or_repeat(i, crate::keymap::Act::StepBack),
+            crate::keymap::pressed_or_repeat(i, crate::keymap::Act::StepForward),
+        )
+    });
+    if back && st.at > 0 {
+        st.at -= 1;
+    }
+    if fwd && st.at + 1 < pics.len() {
+        st.at += 1;
+    }
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| d.insert_temp(gallery_keys_id(), now));
+    let fit = |tex: &egui::TextureHandle, max: Vec2| {
+        let s = tex.size_vec2();
+        let k = (max.x / s.x.max(1.0)).min(max.y / s.y.max(1.0));
+        s * k
+    };
+    let pick_buttons = |ui: &mut Ui, p: &Pic, act: &mut Option<Action>| {
+        match p.step {
+            Some(step) => {
+                if ui.button(small("view this model")).clicked() {
+                    *act = Some(Action::ViewStep(step));
+                }
+            }
+            None => {
+                let b = ui.add_enabled(!p.shot.picked, egui::Button::new(small(if p.shot.picked { "in use" } else { "use this" })));
+                if b.on_hover_text("make this the step's result").clicked() {
+                    *act = Some(Action::PickMade(p.shot.k));
+                }
+            }
+        }
+        if ui.add_enabled(p.shot.here, egui::Button::new(small("pop out"))).on_hover_text(POP_OUT).clicked() {
+            *act = Some(Action::MadeToLoad(p.shot.k));
+        }
+    };
+    egui::Window::new("results")
+        .id(egui::Id::new(("genai-big-gallery-win", node)))
+        .open(&mut open)
+        .default_size([900.0, 620.0])
+        .min_size([420.0, 320.0])
+        .collapsible(false)
+        .show(&ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.selectable_label(!st.sheet, small("large")).clicked() {
+                    st.sheet = false;
+                }
+                if ui.selectable_label(st.sheet, small("contact sheet")).clicked() {
+                    st.sheet = true;
+                }
+                ui.weak(small(format!("{} of {}  ·  left / right to move", st.at + 1, pics.len())));
+            });
+            ui.add_space(4.0);
+            if st.sheet {
+                egui::ScrollArea::vertical().id_salt(("genai-big-sheet", node)).auto_shrink([false, false]).show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, p) in pics.iter().enumerate() {
+                            ui.vertical(|ui| {
+                                let cell = egui::vec2(240.0, 135.0);
+                                ui.set_width(cell.x);
+                                let (rect, r) = ui.allocate_exact_size(cell, egui::Sense::click());
+                                ui.painter().rect_filled(rect, 3.0, theme::well());
+                                match hist::thumb(ui.ctx(), &p.shot.path, true).filter(|_| p.shot.here) {
+                                    Some(tex) => {
+                                        let sz = fit(&tex, cell);
+                                        egui::Image::new(&tex).paint_at(ui, egui::Rect::from_center_size(rect.center(), sz));
+                                    }
+                                    None => {
+                                        ui.painter().text(
+                                            rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            if p.shot.here { "…" } else { "file missing" },
+                                            egui::FontId::proportional(11.0),
+                                            theme::text_weak(),
+                                        );
+                                    }
+                                }
+                                if i == st.at || p.shot.picked && p.step.is_none() {
+                                    let w = if i == st.at { 2.0 } else { 1.0 };
+                                    ui.painter().rect_stroke(rect, 3.0, Stroke::new(w, theme::selection()), egui::StrokeKind::Outside);
+                                }
+                                if r.clicked() {
+                                    st.at = i;
+                                }
+                                if r.double_clicked() {
+                                    st.sheet = false;
+                                }
+                                ui.add(egui::Label::new(small(p.caption.as_str())).truncate());
+                                ui.horizontal(|ui| pick_buttons(ui, p, &mut act));
+                            });
+                        }
+                    });
+                });
+            } else {
+                let p = &pics[st.at];
+                let strip_h = 78.0;
+                let room = (ui.available_size() - egui::vec2(0.0, strip_h + 34.0)).max(egui::vec2(200.0, 120.0));
+                ui.horizontal(|ui| {
+                    let side = 26.0;
+                    if ui.add_enabled(st.at > 0, egui::Button::new("<").min_size(egui::vec2(side, room.y))).clicked() {
+                        st.at -= 1;
+                    }
+                    let area = egui::vec2(room.x - 2.0 * side - 16.0, room.y);
+                    let (rect, _) = ui.allocate_exact_size(area, egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 3.0, theme::well());
+                    let p = &pics[st.at];
+                    // The large picture; the sheet-size one while it decodes.
+                    let tex = hist::picture(ui.ctx(), &p.shot.path).or_else(|| hist::thumb(ui.ctx(), &p.shot.path, true));
+                    match tex.filter(|_| p.shot.here) {
+                        Some(tex) => {
+                            let sz = fit(&tex, area);
+                            egui::Image::new(&tex).paint_at(ui, egui::Rect::from_center_size(rect.center(), sz));
+                        }
+                        None => {
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                if p.shot.here { "…" } else { "file missing" },
+                                egui::FontId::proportional(13.0),
+                                theme::text_weak(),
+                            );
+                        }
+                    }
+                    if ui.add_enabled(st.at + 1 < pics.len(), egui::Button::new(">").min_size(egui::vec2(side, room.y))).clicked() {
+                        st.at += 1;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(small(p.caption.as_str()));
+                    pick_buttons(ui, p, &mut act);
+                });
+                egui::ScrollArea::horizontal().id_salt(("genai-big-strip", node)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for (i, p) in pics.iter().enumerate() {
+                            let cell = egui::vec2(96.0, 54.0);
+                            let (rect, r) = ui.allocate_exact_size(cell, egui::Sense::click());
+                            ui.painter().rect_filled(rect, 2.0, theme::well());
+                            if let Some(tex) = hist::thumb(ui.ctx(), &p.shot.path, false).filter(|_| p.shot.here) {
+                                let sz = fit(&tex, cell);
+                                egui::Image::new(&tex).paint_at(ui, egui::Rect::from_center_size(rect.center(), sz));
+                            }
+                            if i == st.at {
+                                ui.painter().rect_stroke(rect, 2.0, Stroke::new(2.0, theme::selection()), egui::StrokeKind::Inside);
+                                r.scroll_to_me(None);
+                            }
+                            if r.on_hover_text(p.caption.as_str()).clicked() {
+                                st.at = i;
+                            }
+                        }
+                    });
+                });
+            }
+        });
+    st.open = open;
     act
 }
 
@@ -583,10 +810,28 @@ fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
     if v.gallery.is_empty() {
         return None;
     }
-    let mut act = None;
     ui.separator();
-    ui.label(small(format!("results ({}): click to pick, pop out for a Load", v.gallery.len())));
     let now = hist::now();
+    let mut big = BigGallery::load(ui, node);
+    ui.horizontal(|ui| {
+        ui.label(small(format!("results ({}): click to pick", v.gallery.len())));
+        let b = ui.add(egui::Button::new(small("gallery")).small());
+        crate::widgets::note_rect(ui, big_gallery_id(node), b.rect);
+        if b.on_hover_text("the results, large or as a contact sheet, in a window of their own").clicked() {
+            big.open = true;
+        }
+    });
+    let pics: Vec<Pic> = v
+        .gallery
+        .iter()
+        .rev()
+        .map(|s| {
+            let cost = s.usd.map(|u| format!(" · {}", service::usd(u))).unwrap_or_default();
+            Pic { shot: s, caption: format!("{}{cost}", hist::ago(s.when, now)), step: None }
+        })
+        .collect();
+    let mut act = big_gallery(ui, node, &mut big, &pics);
+    big.store(ui, node);
     egui::ScrollArea::horizontal().id_salt(("genai-gallery", node)).show(ui, |ui| {
         ui.horizontal(|ui| {
             for s in v.gallery.iter().rev() {
@@ -611,7 +856,7 @@ fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
                     }
                     let b = ui.add_enabled(s.here, egui::Button::new(small("pop out")).small());
                     crate::widgets::note_rect(ui, egui::Id::new(("genai-shot-out", node, s.k)), b.rect);
-                    if b.on_hover_text("a Load of this result, beside the pipeline node in the outer graph").clicked() {
+                    if b.on_hover_text(POP_OUT).clicked() {
                         act = Some(Action::MadeToLoad(s.k));
                     }
                 });
@@ -619,6 +864,38 @@ fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
         });
     });
     act
+}
+
+/// What a clip pasted into a graph should be THERE: a Result node pasted
+/// outside a GenAI network becomes a Load of the same file, and a Load of
+/// a result's file pasted into one becomes a Result node.
+pub(crate) fn convert_pasted(graph: &mut crate::editor::EditorGraph, ids: &[u64], in_genai: bool, next_read_slot: &mut usize) {
+    let dir = config::results_dir();
+    for id in ids {
+        let Some(n) = graph.nodes.get_mut(id) else { continue };
+        match (&n.kind, in_genai) {
+            (NodeKind::GenAiStep(Op::Result { key, file, .. }), false) => {
+                let path = dir.join(key).join(file).to_string_lossy().into_owned();
+                n.kind = NodeKind::read(*next_read_slot, &path);
+                *next_read_slot += 1;
+                n.tv = crate::editor::new_read_tv(&n.kind);
+            }
+            (NodeKind::Read { path, .. }, true) => {
+                let rel = std::path::Path::new(path).strip_prefix(&dir).ok().map(|p| p.to_path_buf());
+                let parts: Option<(String, String)> = rel.and_then(|p| {
+                    let mut c = p.components();
+                    let key = c.next()?.as_os_str().to_str()?.to_string();
+                    let file = c.next()?.as_os_str().to_str()?.to_string();
+                    c.next().is_none().then_some((key, file))
+                });
+                if let Some((key, file)) = parts {
+                    n.kind = NodeKind::GenAiStep(Op::Result { key, file, tick: 0 });
+                    n.tv = false;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 // ------------------------------------------------------------ graph marks
@@ -1221,6 +1498,22 @@ fn model_info(m: &catalog::RemoteModel, ports: &[String]) -> Vec<String> {
 fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, pick_model: bool) -> Option<&'static str> {
     let mut model_change: Option<&'static str> = None;
     match op {
+        Op::Result { key, file, .. } => {
+            let path = config::results_dir().join(&*key).join(&*file);
+            match hist::thumb(ui.ctx(), &path, true).filter(|_| path.exists()) {
+                Some(tex) => {
+                    let w = ui.available_width().min(320.0);
+                    let sz = tex.size_vec2();
+                    ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, w * sz.y / sz.x.max(1.0))));
+                }
+                None if !path.exists() => {
+                    ui.colored_label(theme::warn(), small("this result's file is not on this machine"));
+                }
+                None => {}
+            }
+            ui.label(small("a result popped out of a model's gallery: wire it like any picture in here"));
+            ui.weak(small("copy it and paste it in the comp outside for a Load of the same file"));
+        }
         Op::Prompt { text } => {
             ui.add(
                 egui::TextEdit::multiline(text)
@@ -2330,7 +2623,7 @@ impl Gfx {
                 }
                 if let Some(&a) = above.first() {
                     let name = one.steps[a].op.name();
-                    match self.genai_step_result(node, a, name) {
+                    match self.genai_step_result(node, a, &one.steps[a].op) {
                         Some((key, _)) => {
                             if !used.iter().any(|u| u.0 == a) {
                                 used.push((a, key));
@@ -2338,9 +2631,13 @@ impl Gfx {
                         }
                         None => {
                             let what = one.steps[step].op.name();
-                            refused = Some(format!(
-                                "{what} works on {name}'s result, and it has none yet: run {name} first, from its own node inside"
-                            ));
+                            refused = Some(if matches!(one.steps[a].op, Op::Result { .. }) {
+                                format!("{what} works on a Result node whose file is not on this machine")
+                            } else {
+                                format!(
+                                    "{what} works on {name}'s result, and it has none yet: run {name} first, from its own node inside"
+                                )
+                            });
                             break 'all;
                         }
                     }
@@ -2426,14 +2723,14 @@ impl Gfx {
                 if port & SHAPE != 0 {
                     if let Some(&a) = pl.models_above(input_of_port(port)).first() {
                         let path = self
-                            .genai_step_result(node, a, pl.steps[a].op.name())
+                            .genai_step_result(node, a, &pl.steps[a].op)
                             .map(|(_, p)| p.to_string_lossy().into_owned());
                         let Some(path) = path else {
                             return self.genai_fail(node, pl, "a model's result went missing mid-run");
                         };
                         if self.loaded.get(&node).map(|l| l.path.as_str()) != Some(path.as_str()) {
                             // A video result plays from where it was made.
-                            match self.genai_made_of(node, a).map(|m| m.tick).filter(|_| genai::pipeline::is_video_file(&path)) {
+                            match self.genai_step_tick(node, a, &pl.steps[a].op).filter(|_| genai::pipeline::is_video_file(&path)) {
                                 Some(t) => self.jobs.genai.shown.insert(node, t),
                                 None => self.jobs.genai.shown.remove(&node),
                             };
@@ -2463,10 +2760,50 @@ impl Gfx {
 
     /// Where step `i` of `node`'s pipeline last left its result, if it is
     /// still on disk and still that step (`name`): (cache key, file).
-    fn genai_step_result(&self, node: u64, i: usize, name: &str) -> Option<(String, std::path::PathBuf)> {
+    fn genai_step_result(&self, node: u64, i: usize, op: &Op) -> Option<(String, std::path::PathBuf)> {
+        // A popped-out result is its own file.
+        if let Op::Result { key, file, .. } = op {
+            let path = config::results_dir().join(key).join(file);
+            return path.exists().then(|| (key.clone(), path));
+        }
+        let name = op.name();
         let m = self.genai_made_of(node, i).filter(|m| m.name == name)?;
         let path = m.path(&config::results_dir());
         path.exists().then(|| (m.key.clone(), path))
+    }
+
+    /// "Pop out" inside the open pipeline of `owner`: result `k` of its
+    /// gallery becomes a Result node in the dive, beside node `by` (the
+    /// model or group whose panel asked). False when it could not be made.
+    pub(crate) fn genai_pop_out(&mut self, owner: u64, by: u64, k: usize) -> bool {
+        let made = self
+            .dive
+            .last()
+            .and_then(|d| d.graph.node(owner))
+            .and_then(|n| params(&n.kind))
+            .and_then(|p| p.pipeline.made.get(k))
+            .cloned();
+        let Some(m) = made else { return false };
+        if !m.path(&config::results_dir()).exists() {
+            self.render_status = Some("that result's file is not on this machine".into());
+            return true;
+        }
+        let pos = self.egraph.node(by).map(|n| n.pos).unwrap_or(egui::Pos2::ZERO);
+        // Staggered by how many are already out.
+        let out = self.egraph.nodes.values().filter(|n| matches!(n.kind, NodeKind::GenAiStep(Op::Result { .. }))).count();
+        let at = pos + egui::vec2(190.0 + 150.0 * (out % 4) as f32, 110.0 * (out / 4) as f32);
+        let id = self.egraph.add(NodeKind::GenAiStep(Op::Result { key: m.key, file: m.file, tick: m.tick }), at);
+        self.selected = vec![id];
+        self.playback_dirty = true;
+        true
+    }
+
+    /// Where step `i`'s VIDEO result plays from: the tick it was made at.
+    fn genai_step_tick(&self, node: u64, i: usize, op: &Op) -> Option<i64> {
+        match op {
+            Op::Result { tick, .. } => Some(*tick),
+            _ => self.genai_made_of(node, i).map(|m| m.tick),
+        }
     }
 
     /// The result of step `i` of `node`'s pipeline that is PICKED in its
@@ -3382,23 +3719,24 @@ impl Gfx {
         let viewed = self.egraph.active_view().and_then(|v| {
             let i = ids.iter().position(|&x| x == v)?;
             match &self.egraph.node(v)?.kind {
-                NodeKind::GenAiStep(op @ (Op::Generate { .. } | Op::Comfy { .. })) => Some((i, op.name())),
+                NodeKind::GenAiStep(op @ (Op::Generate { .. } | Op::Comfy { .. } | Op::Result { .. })) => Some((i, op.clone())),
                 // A comp node below a model shows that model's result
                 // through itself: the reader holds the model's.
                 k if comp_ok(k) => {
                     let pl = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![], made: vec![] };
                     let a = *pl.models_above(i).first()?;
-                    Some((a, pl.steps[a].op.name()))
+                    Some((a, pl.steps[a].op.clone()))
                 }
                 _ => None,
             }
         });
-        let ran = viewed.and_then(|(i, name)| {
-            self.genai_step_result(owner, i, name).map(|(_, p)| p).filter(|p| playable(p)).map(|p| (p, i))
+        let ran = viewed.as_ref().and_then(|(i, op)| {
+            self.genai_step_result(owner, *i, op).map(|(_, p)| p).filter(|p| playable(p)).map(|p| (p, *i))
         });
         // A step's VIDEO plays from the tick it was made at.
         let tick = ran.as_ref().and_then(|(p, i)| {
-            genai::pipeline::is_video_file(&p.to_string_lossy()).then(|| self.genai_made_of(owner, *i).map(|m| m.tick)).flatten()
+            let op = &viewed.as_ref()?.1;
+            genai::pipeline::is_video_file(&p.to_string_lossy()).then(|| self.genai_step_tick(owner, *i, op)).flatten()
         });
         if self.jobs.genai.shown.get(&owner).copied() != tick {
             match tick {
@@ -3408,7 +3746,8 @@ impl Gfx {
             self.playback_dirty = true;
         }
         let ran = ran.map(|(p, _)| p);
-        let stage = ran.or_else(|| viewed.and_then(|(i, name)| {
+        let stage = ran.or_else(|| viewed.and_then(|(i, op)| {
+            let name = op.name();
             let take = take.as_ref()?;
             if !self.jobs.genai.stages.contains_key(&take.key) {
                 let got = genai::history::load_stages(&dir, &take.key)?;
@@ -3725,7 +4064,7 @@ impl crate::Gfx {
                 }
                 for (model, name) in [("fal/wan-2.7-video-edit", "Wan 2.7 video edit"), ("fal/flux-schnell", "FLUX.1 [schnell]")] {
                     let i = step_of(self, model);
-                    match self.genai_step_result(t.pipe, i, name) {
+                    match self.genai_step_result(t.pipe, i, &Op::Generate { model: model.into(), seed: 1, opts: Opts::default() }) {
                         Some((_, path)) => println!("GENAI LIVE: {name} result: {}", path.display()),
                         None => fail(format!("{name} ran and left no result to view")),
                     }
@@ -4500,7 +4839,8 @@ impl Gfx {
                     if made != Some(1) {
                         fail(format!("the step's result is not in its gallery, picked ({made:?})"));
                     }
-                    // "Pop out": a Load of that result, in the OUTER graph.
+                    // "Pop out": a Result node of it, IN HERE (the click's
+                    // route), which a paste outside turns into a Load.
                     let k = self
                         .dive
                         .last()
@@ -4513,13 +4853,45 @@ impl Gfx {
                     };
                     let had = loads(self);
                     let owner = t.pipe;
-                    self.genai_in_comp(|me| me.genai_action(owner, Action::MadeToLoad(k)));
-                    if loads(self) != had + 1 {
-                        fail("pop out did not make a Load of the result in the outer graph".into());
+                    let by = self.egraph.nodes.iter().find(|(_, n)| matches!(&n.kind, NodeKind::GenAiStep(Op::Generate { .. }))).map(|(id, _)| *id).unwrap();
+                    if !self.genai_pop_out(owner, by, k) {
+                        fail("pop out did nothing".into());
                     }
-                    if self.egraph.nodes.values().any(|n| matches!(n.kind, NodeKind::Read { .. })) {
-                        fail("pop out put its Load inside the pipeline".into());
+                    let popped: Vec<u64> = self
+                        .egraph
+                        .nodes
+                        .iter()
+                        .filter(|(_, n)| matches!(n.kind, NodeKind::GenAiStep(Op::Result { .. })))
+                        .map(|(id, _)| *id)
+                        .collect();
+                    if popped.len() != 1 || self.selected != popped {
+                        fail("pop out did not make one selected Result node inside the pipeline".into());
                     }
+                    if loads(self) != had {
+                        fail("pop out put a Load in the outer graph".into());
+                    }
+                    // Its file is the model's result, and it plans free.
+                    let live = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![], made: vec![] };
+                    let ri = live.steps.iter().position(|s| matches!(s.op, Op::Result { .. })).unwrap();
+                    if self.genai_step_result(owner, ri, &live.steps[ri].op).is_none() {
+                        fail("a popped-out Result node has no file".into());
+                    }
+                    // Copied outside it is a Load of the same file.
+                    let mut outer = crate::editor::EditorGraph::default();
+                    let rid = outer.add(self.egraph.node(popped[0]).unwrap().kind.clone(), egui::Pos2::ZERO);
+                    convert_pasted(&mut outer, &[rid], false, &mut 900);
+                    let want = self.genai_step_result(owner, ri, &live.steps[ri].op).map(|(_, p)| p.to_string_lossy().into_owned());
+                    if !matches!(&outer.node(rid).unwrap().kind, NodeKind::Read { path, .. } if Some(path) == want.as_ref()) {
+                        fail("a Result node pasted outside is not a Load of its file".into());
+                    }
+                    // And back in, a Result again.
+                    convert_pasted(&mut outer, &[rid], true, &mut 900);
+                    if !matches!(outer.node(rid).unwrap().kind, NodeKind::GenAiStep(Op::Result { .. })) {
+                        fail("a Load of a result pasted inside is not a Result node".into());
+                    }
+                    // Out of the way of the stages below.
+                    self.egraph.remove(popped[0]);
+                    self.selected.clear();
                     let submits = t.fake.as_ref().unwrap().submits();
                     if submits != 1 {
                         fail(format!("a step's cached run sent {} request(s)", submits - 1));

@@ -109,6 +109,18 @@ pub enum Op {
         #[serde(default)]
         members: Vec<usize>,
     },
+    /// A RESULT popped out of a model's gallery: a file already in the
+    /// results directory (`key`/`file`), as a node of its own, so two
+    /// results of one model can be used at once. It makes nothing and
+    /// costs nothing; its key IS the result's. Copied out to the comp it
+    /// becomes a Load of the same file (the host does that).
+    Result {
+        key: String,
+        file: String,
+        /// Where a video result plays from (the tick it was made at).
+        #[serde(default)]
+        tick: i64,
+    },
     /// A comp node that WORKS ON a picture inside the pipeline (a
     /// Transform, Reformat, Crop, Freeze), carried whole like a `Shape`.
     /// Its one port takes what the host can render: an Input, a Shape or
@@ -312,6 +324,7 @@ impl Op {
             Op::Prompt { .. }
             | Op::Input { .. }
             | Op::Shape { .. }
+            | Op::Result { .. }
             | Op::PromptIn
             | Op::Reference
             | Op::Matte
@@ -349,6 +362,8 @@ impl Op {
                 Some(Pipe::Text)
             }
             Op::Output | Op::Group { .. } => None,
+            Op::Result { file, .. } if is_splat_file(file) => Some(Pipe::Scene),
+            Op::Result { file, .. } if is_video_file(file) => Some(Pipe::Video),
             Op::ClipIn { .. } | Op::MatteClip => Some(Pipe::Video),
             Op::Input { clip: true, .. } | Op::Shape { clip: true, .. } | Op::Comp { clip: true, .. } => {
                 Some(Pipe::Video)
@@ -416,6 +431,7 @@ impl Op {
             Op::Input { matte: true, clip: true, .. } => "Matte Clip In",
             Op::Shape { .. } => "Spline",
             Op::Group { .. } => "Prompt Group",
+            Op::Result { .. } => "Result",
             Op::Comp { kind, .. } => intern(kind),
             Op::PromptIn => "Prompt In",
             Op::Reference => "Input",
@@ -456,6 +472,7 @@ impl Op {
             Op::Shape { clip: true, .. } => "spline clip".into(),
             Op::Comp { kind, .. } => kind.to_lowercase(),
             Op::Group { members, .. } => format!("group of {}", members.len()),
+            Op::Result { .. } => "result".into(),
             Op::PromptIn => "prompt in".into(),
             Op::Reference => "input".into(),
             Op::Matte => "matte".into(),
@@ -1306,7 +1323,7 @@ impl Pipeline {
                 continue;
             }
             match &self.steps[j].op {
-                Op::Generate { .. } | Op::Comfy { .. } => out.push(j),
+                Op::Generate { .. } | Op::Comfy { .. } | Op::Result { .. } => out.push(j),
                 Op::Comp { .. } => stack.extend(self.steps[j].inputs.iter().flatten().copied()),
                 _ => {}
             }
@@ -1798,5 +1815,20 @@ mod tests {
         // An old file knows nothing of groups; a new one round-trips.
         let j = serde_json::to_string(&p).unwrap();
         assert_eq!(serde_json::from_str::<Pipeline>(&j).unwrap(), p);
+    }
+
+    #[test]
+    fn a_result_node_is_a_free_source_a_comp_node_can_work_on() {
+        let mut p = Pipeline::bare(vec![]);
+        let still = p.push(Op::Result { key: "abc".into(), file: "result.png".into(), tick: 0 }, [0.0, 0.0]);
+        let clip = p.push(Op::Result { key: "def".into(), file: "result.mp4".into(), tick: 1001 }, [0.0, 0.0]);
+        assert_eq!(p.steps[still].op.output(), Some(Pipe::Image));
+        assert_eq!(p.steps[clip].op.output(), Some(Pipe::Video));
+        assert!(p.steps[still].op.ports().is_empty() && !p.steps[still].op.is_remote());
+        let comp = p.push(Op::Comp { kind: "Crop".into(), node: serde_json::Value::Null, clip: false, inputs: 1 }, [0.0, 0.0]);
+        p.steps[comp].inputs[0] = Some(still);
+        assert_eq!(p.models_above(comp), vec![still]);
+        let back: Pipeline = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.steps[clip].op, p.steps[clip].op);
     }
 }

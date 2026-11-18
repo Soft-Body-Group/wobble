@@ -44,8 +44,8 @@ enum Slot {
 #[derive(Default)]
 struct Thumbs {
     /// By file and by size: a history thumbnail, or a sheet picture.
-    map: HashMap<(PathBuf, bool), Slot>,
-    done: Vec<((PathBuf, bool), Option<egui::ColorImage>)>,
+    map: HashMap<(PathBuf, u8), Slot>,
+    done: Vec<((PathBuf, u8), Option<egui::ColorImage>)>,
 }
 
 fn thumbs() -> &'static Mutex<Thumbs> {
@@ -86,7 +86,19 @@ fn decode(path: &Path, high: f32) -> Option<egui::ColorImage> {
 /// The thumbnail for a take's file (`big`: the sheet's larger picture),
 /// asking for it on first sight.
 pub(super) fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui::TextureHandle> {
-    let key = (path.to_path_buf(), big);
+    thumb_at(ctx, path, big as u8)
+}
+
+/// The gallery's LARGE picture of a result's file.
+pub(super) fn picture(ctx: &egui::Context, path: &Path) -> Option<egui::TextureHandle> {
+    thumb_at(ctx, path, 2)
+}
+
+/// A large picture's height on screen, in points; decoded at twice that.
+const LARGE_H: f32 = 540.0;
+
+fn thumb_at(ctx: &egui::Context, path: &Path, tier: u8) -> Option<egui::TextureHandle> {
+    let key = (path.to_path_buf(), tier);
     let mut t = thumbs().lock().unwrap();
     for (p, img) in std::mem::take(&mut t.done) {
         let slot = match img {
@@ -115,7 +127,7 @@ pub(super) fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui:
             let ok = (!genai::pipeline::is_video_file(&name) || video_ok())
                 && !genai::pipeline::is_splat_file(&name)
                 && path.exists();
-            let img = if ok { decode(&path, if big { SHEET_H } else { THUMB_H }) } else { None };
+            let img = if ok { decode(&path, [THUMB_H, SHEET_H, LARGE_H][tier.min(2) as usize]) } else { None };
             drop(name);
             thumbs().lock().unwrap().done.push((key, img));
             ctx.request_repaint();

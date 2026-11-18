@@ -3582,7 +3582,11 @@ to a model. Step 2, **pay $X & run**, is the request and the charge. A
 model node inside a pipeline has the same two steps for itself, an **info**
 button (what it takes, what it gives back, its licence), and a gallery of
 every result it has made: click one to make it the step's result, **pop
-out** for a Load of it in the outer graph.
+out** for a Result node of it inside the network (wire it like any
+picture; copy it and paste it in the comp outside and it is a Load of the
+same file). **gallery** opens the results in a window: one large picture
+with a strip to move through (Left / Right), or a contact sheet; either
+way a result can be selected or popped out from there.
 A **prompt group** (add menu, inside a pipeline) runs one prompt on
 several models: select the model nodes, add it, and they sit on its
 backdrop. Wire a prompt, up to two images and a mask into the group node
