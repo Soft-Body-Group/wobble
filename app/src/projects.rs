@@ -350,15 +350,65 @@ pub fn set_managed_root(root: &str) -> Result<(), String> {
 
 /// The projects under the managed root, scanned once and kept until a
 /// refresh (`forget`) or a lookup that misses.
-static CACHE: Mutex<Option<(PathBuf, Vec<Project>)>> = Mutex::new(None);
+static CACHE: Mutex<Option<(Option<PathBuf>, Vec<Project>)>> = Mutex::new(None);
 
 pub fn projects(rescan: bool) -> Vec<Project> {
-    let Some(root) = managed_root() else { return Vec::new() };
+    let root = managed_root();
     let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if rescan || c.as_ref().is_none_or(|(r, _)| *r != root) {
-        *c = Some((root.clone(), find_projects(&root)));
+        let mut found = root.as_deref().map(find_projects).unwrap_or_default();
+        // organisicator, when it runs, knows every project wherever it is
+        // mounted on this machine — not only those under the managed root.
+        // (Not under a suite's own root: suites stay hermetic.)
+        if std::env::var_os("WOBBLE_PROJECTS_ROOT").is_none() {
+            let canon = |x: &Path| std::fs::canonicalize(x).unwrap_or_else(|_| x.to_path_buf());
+            let have: Vec<PathBuf> = found.iter().map(|f| canon(&f.root)).collect();
+            found.extend(from_api().into_iter().filter(|p| !have.contains(&canon(&p.root))));
+            found.sort_by_key(|p| p.name.to_lowercase());
+        }
+        *c = Some((root, found));
     }
     c.as_ref().map(|(_, p)| p.clone()).unwrap_or_default()
+}
+
+/// The online projects organisicator lists: each one's own manifest, or,
+/// for one without, its levels from the API (no anatomy: comps and plates
+/// then go in `comp` and `plates` folders of the shot).
+fn from_api() -> Vec<Project> {
+    let Ok(client) = crate::assets::Client::discover() else { return Vec::new() };
+    let Ok(list) = client.get("/v1/projects") else { return Vec::new() };
+    let mut out = Vec::new();
+    for p in list.as_array().into_iter().flatten() {
+        let Some(root) = p["root"].as_str().map(PathBuf::from).filter(|r| r.is_dir()) else { continue };
+        if let Some(m) = load_manifest(&root) {
+            out.push(m);
+            continue;
+        }
+        let Some(id) = p["id"].as_i64() else { continue };
+        let Ok(v) = client.get(&format!("/v1/projects/{id}")) else { continue };
+        let instances = v["instances"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| {
+                Some(Inst {
+                    id: i["id"].as_i64()?,
+                    parent: i["parent"].as_i64(),
+                    decl: String::new(),
+                    value: i["value"].as_str()?.to_string(),
+                    rel: i["rel"].as_str()?.to_string(),
+                })
+            })
+            .collect();
+        out.push(Project {
+            name: p["name"].as_str().unwrap_or_default().to_string(),
+            code: p["code"].as_str().unwrap_or_default().to_string(),
+            root,
+            folders: Vec::new(),
+            instances,
+        });
+    }
+    out
 }
 
 pub fn forget() {
