@@ -6179,7 +6179,9 @@ impl NodeKind {
             // A still take holds everywhere; a VIDEO take plays from the
             // tick it was captured at, which is where its first frame
             // belongs.
-            NodeKind::GenAi(p) => p.pipeline.picked().filter(|t| t.is_video()).map(|t| t.tick),
+            NodeKind::GenAi(p) => {
+                p.shown_tick.or_else(|| p.pipeline.picked().filter(|t| t.is_video()).map(|t| t.tick))
+            }
             _ => None,
         }
     }

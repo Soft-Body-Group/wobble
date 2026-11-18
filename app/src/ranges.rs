@@ -125,6 +125,16 @@ pub fn resolve(
             let (a, b) = p.output();
             ((a.max(0) as u64, b.max(a).max(0) as u64), Source::Override)
         }
+        // A GenAI node showing a VIDEO take: the frames the take really
+        // has, from the frame it was made at. A model may hand back fewer
+        // (its length limit) or more (its own frame rate) than it was
+        // sent, and the range the noodle carries — and "node range" in
+        // the pie — must be the frames there is a picture for.
+        NodeKind::GenAi(p) if p.pipeline.picked().is_some_and(|t| t.is_video()) && (cx.media)(id).is_some() => {
+            let at = p.pipeline.picked().map_or(0, |t| t.tick.max(0) as u64);
+            let (a, b) = (cx.media)(id).unwrap_or((0, 0));
+            ((at + a, at + b.max(a)), Source::Media)
+        }
         kind => {
             // The PLATE's span (input 0), or the span peers cover (a
             // Blend's A and B) — never an element's: a Convolve's kernel
@@ -449,5 +459,36 @@ mod tests {
             p.at = Some(10);
         }
         assert_eq!(g.resolve_dot(t), Some(r));
+    }
+
+    #[test]
+    fn a_genai_video_take_is_as_long_as_its_frames_from_where_it_was_made() {
+        let mut g = EditorGraph::default();
+        let r = g.add(NodeKind::read(0, ""), egui::Pos2::ZERO);
+        let mut p = engine::graph::GenAiParams::new(1);
+        let take = |file: &str| genai::Take {
+            key: "k".into(),
+            file: file.into(),
+            tick: 1231,
+            commercial: true,
+            usd: None,
+            label: String::new(),
+            when: 0,
+            data: false,
+        };
+        p.pipeline.takes = vec![take("result.mp4"), take("result.png")];
+        p.pipeline.take = 0;
+        let n = g.add(NodeKind::GenAi(p), egui::Pos2::ZERO);
+        g.connect(n, 0, r);
+        // The plate runs 0..=202; the take loaded in the node has 150 frames.
+        let media = move |id: u64| if id == n { Some((0u64, 149u64)) } else { Some((0u64, 202u64)) };
+        let mut out = BTreeMap::new();
+        assert_eq!(resolve(&ctx(&g, &media), n, &mut out, &mut Vec::new()), ((1231, 1380), Source::Media));
+        // A still holds everywhere: it keeps its input's range.
+        if let Some(NodeKind::GenAi(p)) = g.node_mut(n).map(|e| &mut e.kind) {
+            p.pipeline.take = 1;
+        }
+        let mut out = BTreeMap::new();
+        assert_eq!(resolve(&ctx(&g, &media), n, &mut out, &mut Vec::new()).0, (0, 202));
     }
 }

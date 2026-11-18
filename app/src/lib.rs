@@ -7709,6 +7709,7 @@ impl Gfx {
                 }
                 if let NodeKind::GenAi(p) = kind {
                     p.loaded = self.loaded.contains_key(id);
+                    p.shown_tick = self.jobs.genai.shown_tick(*id);
                 }
                 if let NodeKind::CorridorKey(p) = kind {
                     let loaded = self.loaded.get(id);
@@ -8164,6 +8165,7 @@ impl Gfx {
             // A GenAI node samples its reader only while a take is loaded.
             if let NodeKind::GenAi(p) = kind {
                 p.loaded = self.loaded.contains_key(id);
+                    p.shown_tick = self.jobs.genai.shown_tick(*id);
             }
             // A CorridorKey likewise, its files named by comp frame.
             if let NodeKind::CorridorKey(p) = kind {

@@ -599,6 +599,12 @@ pub struct Runs {
     /// A capture is waiting for the rig to take in a model's result it
     /// just pointed the node's reader at (a comp node after a model).
     pending_load: bool,
+    /// The tick each step's last run was made at, per (node, step): a
+    /// video result plays from there.
+    step_ticks: std::collections::HashMap<(u64, usize), i64>,
+    /// Nodes whose reader holds a step's VIDEO result (not the take), and
+    /// the tick it plays from (`GenAiParams::shown_tick`).
+    shown: std::collections::HashMap<u64, i64>,
     /// The node whose reader a capture pointed at a model's result: put
     /// back on its take when the capture is over.
     reader_moved: Option<u64>,
@@ -606,6 +612,11 @@ pub struct Runs {
 }
 
 impl Runs {
+    /// See `GenAiParams::shown_tick`.
+    pub fn shown_tick(&self, node: u64) -> Option<i64> {
+        self.shown.get(&node).copied()
+    }
+
     /// The bake loop's hand-off for one captured frame (field borrows only:
     /// it runs inside `step_graph_bake`). A still is kept as float for the
     /// PNG; a clip frame is converted on the spot.
@@ -683,6 +694,8 @@ impl Default for Runs {
             dive_fmt: None,
             step_keys: Default::default(),
             pending_load: false,
+            step_ticks: Default::default(),
+            shown: Default::default(),
             reader_moved: None,
             account: Account::Unknown,
         }
@@ -1969,6 +1982,11 @@ impl Gfx {
                             return self.genai_fail(node, pl, "a model's result went missing mid-run");
                         };
                         if self.loaded.get(&node).map(|l| l.path.as_str()) != Some(path.as_str()) {
+                            // A video result plays from where it was made.
+                            match self.jobs.genai.step_ticks.get(&(node, a)).copied().filter(|_| genai::pipeline::is_video_file(&path)) {
+                                Some(t) => self.jobs.genai.shown.insert(node, t),
+                                None => self.jobs.genai.shown.remove(&node),
+                            };
                             self.load_read(node, &path);
                             self.jobs.genai.pending_load = true;
                             self.jobs.genai.reader_moved = Some(node);
@@ -2425,6 +2443,7 @@ impl Gfx {
                         }
                         for (k, new) in r.keys.iter().enumerate().filter(|(_, n)| !n.1.is_empty()) {
                             keys[k] = new.clone();
+                            self.jobs.genai.step_ticks.insert((node, k), r.tick);
                         }
                         if r.to_step.is_some() {
                             // One step's run: its result to look at (and
@@ -2686,6 +2705,10 @@ impl Gfx {
 
     /// Point the node's reader at its picked take (or at nothing).
     pub(crate) fn genai_show(&mut self, node: u64) {
+        // The take's own placement again.
+        if self.jobs.genai.shown.remove(&node).is_some() {
+            self.playback_dirty = true;
+        }
         let want = self
             .egraph
             .node(node)
@@ -2800,8 +2823,20 @@ impl Gfx {
                 return None;
             }
             let m = run::cached(&dir, key)?;
-            Some(dir.join(key).join(m.file)).filter(|p| playable(p))
+            Some(dir.join(key).join(m.file)).filter(|p| playable(p)).map(|p| (p, i))
         });
+        // A step's VIDEO plays from the tick it was made at.
+        let tick = ran.as_ref().and_then(|(p, i)| {
+            genai::pipeline::is_video_file(&p.to_string_lossy()).then(|| self.jobs.genai.step_ticks.get(&(owner, *i)).copied()).flatten()
+        });
+        if self.jobs.genai.shown.get(&owner).copied() != tick {
+            match tick {
+                Some(t) => self.jobs.genai.shown.insert(owner, t),
+                None => self.jobs.genai.shown.remove(&owner),
+            };
+            self.playback_dirty = true;
+        }
+        let ran = ran.map(|(p, _)| p);
         let stage = ran.or_else(|| viewed.and_then(|(i, name)| {
             let take = take.as_ref()?;
             if !self.jobs.genai.stages.contains_key(&take.key) {

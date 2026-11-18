@@ -56,6 +56,12 @@ pub struct GenAiParams {
     /// through), exactly like a GraphBake's `baked`.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing))]
     pub loaded: bool,
+    /// TRANSIENT: the reader holds a VIDEO that is not the picked take (a
+    /// model step's own result, shown inside the pipeline), made at this
+    /// tick: it plays from there. Without it a step's clip sat at frame 0
+    /// and, viewed at the shot's frames, held its last frame like a still.
+    #[cfg_attr(feature = "serde", serde(default, skip))]
+    pub shown_tick: Option<i64>,
 }
 
 impl Default for GenAiParams {
@@ -67,6 +73,7 @@ impl Default for GenAiParams {
             vary: Default::default(),
             app: Default::default(),
             loaded: false,
+            shown_tick: None,
         }
     }
 }
@@ -266,7 +273,13 @@ mod tests {
         p.pipeline.take = 0;
         assert_eq!(crate::graph::NodeKind::GenAi(p.clone()).placement(), None);
         p.pipeline.take = 1;
-        assert_eq!(crate::graph::NodeKind::GenAi(p).placement(), Some(1012));
+        assert_eq!(crate::graph::NodeKind::GenAi(p.clone()).placement(), Some(1012));
+        // A step's own video, shown inside the pipeline with no take
+        // picked: placed where IT was made.
+        p.pipeline.take = 9;
+        assert_eq!(crate::graph::NodeKind::GenAi(p.clone()).placement(), None);
+        p.shown_tick = Some(1231);
+        assert_eq!(crate::graph::NodeKind::GenAi(p).placement(), Some(1231));
     }
 
     #[cfg(feature = "serde")]
