@@ -85,7 +85,7 @@ fn decode(path: &Path, high: f32) -> Option<egui::ColorImage> {
 
 /// The thumbnail for a take's file (`big`: the sheet's larger picture),
 /// asking for it on first sight.
-fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui::TextureHandle> {
+pub(super) fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui::TextureHandle> {
     let key = (path.to_path_buf(), big);
     let mut t = thumbs().lock().unwrap();
     for (p, img) in std::mem::take(&mut t.done) {
@@ -127,7 +127,7 @@ fn thumb(ctx: &egui::Context, path: &Path, big: bool) -> Option<egui::TextureHan
 }
 
 /// "3 h ago", from a take's unix seconds; empty when it has none.
-fn ago(when: u64, now: u64) -> String {
+pub(super) fn ago(when: u64, now: u64) -> String {
     if when == 0 || now < when {
         return String::new();
     }
@@ -139,7 +139,7 @@ fn ago(when: u64, now: u64) -> String {
     }
 }
 
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     // No clock in a page (and no takes on disk there either).
     #[cfg(target_arch = "wasm32")]
     return 0;
@@ -423,6 +423,32 @@ impl crate::Gfx {
         if wire {
             self.egraph.connect(node, 0, id);
         }
+        self.playback_dirty = true;
+    }
+}
+
+impl crate::Gfx {
+    /// "Pop out": a Load of a result's file beside GenAI node `node`, in
+    /// the graph the node lives in — so two results of one model step can
+    /// be used at once, each as its own node. `nth` staggers them.
+    pub(crate) fn genai_file_to_load(&mut self, node: u64, path: &Path, nth: usize) {
+        let Some(pos) = self.egraph.node(node).map(|n| n.pos) else { return };
+        if !path.exists() {
+            self.render_status = Some("that result's file is not on this machine".into());
+            return;
+        }
+        if genai::pipeline::is_splat_file(&path.to_string_lossy()) {
+            return self.genai_splat_node(node, path);
+        }
+        let s = path.to_string_lossy().into_owned();
+        let slot = self.next_read_slot;
+        self.next_read_slot += 1;
+        let at = pos + egui::vec2(190.0 + 150.0 * (nth % 6) as f32, 110.0 * (nth / 6) as f32);
+        let id = self.egraph.add(engine::graph::NodeKind::read(slot, &s), at);
+        if let Some(n) = self.egraph.nodes.get_mut(&id) {
+            n.tv = crate::editor::new_read_tv(&n.kind);
+        }
+        self.load_read(id, &s);
         self.playback_dirty = true;
     }
 }

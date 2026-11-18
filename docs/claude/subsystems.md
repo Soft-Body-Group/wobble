@@ -1639,6 +1639,22 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   `match_input_frames_per_second`); Wan 2.7 and Seedance answer at their
   own. A video take's range is its own frames from its tick (`ranges`),
   and a step's video shown inside is placed by `GenAiParams::shown_tick`.
+- **A model step has a GALLERY** (`Pipeline::made`, `genai::Made`, kept
+  with the node like its takes): every result each Generate/Comfy step
+  made, recorded on landing (`record_made`, once per key, newest picked),
+  matched to a step by INDEX AND NAME (indices slide; `remove_step`
+  shifts them). The picked one (`genai_made_of`) is what viewing the step
+  shows, what a comp node below it works on, and its tick is where a
+  video result plays from — this replaced the in-memory step keys, so it
+  survives a restart. The step's panel draws it (`gallery`): click picks
+  (`Action::PickMade`), "pop out" makes a Load of the file in the OUTER
+  graph (`MadeToLoad`, `genai_file_to_load`). A picked OLDER result is
+  not what a downstream MODEL step reads (that is the plan's).
+- **The run UI is two numbered steps and says which is which**
+  (`run_ui`): 1 "get price" (free, nothing sent), 2 "pay $X & run" (the
+  request and the charge), with the billed steps named
+  (`ViewState::Ready::what`). No "ok" button: a result line stays until
+  the next run. Every model step has an "info" button (`model_info`).
 - **Runs go side by side once PAID.** `Runs::run` is the one being
   prepared (capture, quote, waiting for pay & run: one at a time, they
   share the capture bake) or the last that ended; a run that reaches
@@ -2075,3 +2091,19 @@ above it too).
   cables on a shape's channels stay on the owner while dived; the in-node
   `innards` view shows and wires axes but cannot add one (add them in the
   dive).
+
+## Scrub colour parity (`scrub/colour`, `scrub/app/src/viewer.rs`, `scrub/model`)
+
+- **Scrub always has parity with wobble's colour.** Any change to input
+  spaces, working spaces, curves, view transforms, displays or looks in
+  `engine/src/color.rs` or `engine/src/viewtf*` is ported to `scrub/colour`
+  in the same work, with its menu entries.
+- `color.rs`, `viewtf/aces.rs` and `viewtf/agx.rs` are byte-for-byte copies;
+  `viewtf.rs` differs only by OpenDRT (GPLv3, stub here).
+  `scrub/colour/tests/parity.rs` fails when they drift, so copy the file
+  rather than editing Scrub's by hand.
+- `scrub/colour/tests/aces12.rs` and the `viewer.rs` tests run wobble's OCIO
+  tables (`engine/tests/aces12_ref/tables.rs`), the latter through Scrub's
+  real convert and display passes.
+- `scrub/colour/src/lut.rs` is only the cube reader AgX needs: Scrub has no
+  LUT node, so wobble's other LUT formats are not copied.

@@ -38,6 +38,6 @@ pub mod service;
 pub mod templates;
 pub mod vary;
 
-pub use pipeline::{InKind, Op, Opts, Pipe, Pipeline, Step, Take};
+pub use pipeline::{InKind, Made, Op, Opts, Pipe, Pipeline, Step, Take};
 pub use app::AppForm;
 pub use vary::Vary;

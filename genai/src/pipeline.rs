@@ -563,6 +563,40 @@ pub struct Pipeline {
     /// image, matte, prompt and second-picture inputs).
     #[serde(default)]
     pub ins: Vec<InKind>,
+    /// Every result each MODEL step has made, oldest first: the step's
+    /// gallery. Kept with the node (like its takes), so a step's result
+    /// is still its result after a restart. One per step is `picked`:
+    /// what viewing the step shows, what a comp node below it works on,
+    /// what "pop out" makes a Load of.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made: Vec<Made>,
+}
+
+/// One result a model step made (`Pipeline::made`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Made {
+    /// The step it was made by, and that step's name then: a step index
+    /// slides when steps are removed, and the name catches a result that
+    /// has ended up under another kind of step.
+    pub step: usize,
+    pub name: String,
+    /// Its cache key (the result's directory) and file.
+    pub key: String,
+    pub file: String,
+    /// The playhead its inputs were rendered at.
+    pub tick: i64,
+    #[serde(default)]
+    pub when: u64,
+    #[serde(default)]
+    pub usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub picked: bool,
+}
+
+impl Made {
+    pub fn path(&self, dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join(&self.key).join(&self.file)
+    }
 }
 
 /// What `normalize` found in a pipeline from before the input bar: where
@@ -580,7 +614,7 @@ impl Default for Pipeline {
     fn default() -> Self {
         // The Inputs go after (`sync_inputs` below): step 0 is the prompt,
         // 1 the model, 2 Output, which a lot of code and tests lean on.
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![InKind::Image, InKind::Matte] };
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![InKind::Image, InKind::Matte], made: vec![] };
         let prompt = p.push(Op::Prompt { text: String::new() }, [-0.55, -0.45]);
         let gen = p.push(
             Op::Generate { model: catalog::DEFAULT_MODEL.into(), seed: 1, opts: Opts::default() },
@@ -640,9 +674,42 @@ impl Pipeline {
         Some(p)
     }
 
+    /// A step made a result: it joins the step's gallery (once per key)
+    /// and becomes the one picked.
+    pub fn record_made(&mut self, m: Made) {
+        for x in self.made.iter_mut().filter(|x| x.step == m.step) {
+            x.picked = false;
+        }
+        match self.made.iter_mut().find(|x| x.step == m.step && x.key == m.key) {
+            Some(x) => x.picked = true,
+            None => self.made.push(Made { picked: true, ..m }),
+        }
+    }
+
+    /// Step `step`'s gallery, oldest first, as indices into `made` (only
+    /// results made by a step of this name).
+    pub fn made_by(&self, step: usize) -> Vec<usize> {
+        let Some(name) = self.steps.get(step).map(|s| s.op.name()) else { return vec![] };
+        (0..self.made.len()).filter(|&k| self.made[k].step == step && self.made[k].name == name).collect()
+    }
+
+    /// The result of step `step` that is picked.
+    pub fn picked_made(&self, step: usize) -> Option<&Made> {
+        let all = self.made_by(step);
+        all.iter().map(|&k| &self.made[k]).find(|m| m.picked).or_else(|| all.last().map(|&k| &self.made[k]))
+    }
+
+    /// Pick `made[k]` for its step.
+    pub fn pick_made(&mut self, k: usize) {
+        let Some(step) = self.made.get(k).map(|m| m.step) else { return };
+        for (j, x) in self.made.iter_mut().enumerate().filter(|(_, x)| x.step == step) {
+            x.picked = j == k;
+        }
+    }
+
     /// No steps but one Input per input in `ins`.
     pub fn bare(ins: Vec<InKind>) -> Self {
-        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins };
+        let mut p = Pipeline { steps: vec![], takes: vec![], take: 0, ins, made: vec![] };
         p.sync_inputs();
         p
     }
@@ -929,6 +996,11 @@ impl Pipeline {
 
     fn remove_step(&mut self, i: usize) {
         self.steps.remove(i);
+        // Its gallery goes with it; later steps' slide down with them.
+        self.made.retain(|m| m.step != i);
+        for m in self.made.iter_mut().filter(|m| m.step > i) {
+            m.step -= 1;
+        }
         for s in &mut self.steps {
             for inp in &mut s.inputs {
                 *inp = match *inp {
@@ -1554,5 +1626,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_step_s_gallery_keeps_every_result_and_one_is_picked() {
+        let mut p = Pipeline::default();
+        let made = |key: &str| Made {
+            step: 1,
+            name: p_name(),
+            key: key.into(),
+            file: "result.png".into(),
+            tick: 1001,
+            when: 0,
+            usd: Some(0.003),
+            picked: false,
+        };
+        fn p_name() -> String {
+            Pipeline::default().steps[1].op.name().to_string()
+        }
+        p.record_made(made("a"));
+        p.record_made(made("b"));
+        assert_eq!(p.made_by(1).len(), 2);
+        assert_eq!(p.picked_made(1).unwrap().key, "b", "the newest is picked");
+        // The same result again is not a second entry; it is picked again.
+        p.record_made(made("a"));
+        assert_eq!((p.made_by(1).len(), p.picked_made(1).unwrap().key.as_str()), (2, "a"));
+        p.pick_made(1);
+        assert_eq!(p.picked_made(1).unwrap().key, "b");
+        // Another model in that step: the old results are not its.
+        p.set_model(1, "fal/flux-dev");
+        assert!(p.made_by(1).is_empty());
+        p.set_model(1, "fal/flux-schnell");
+        // Removing a step above slides the gallery with its step.
+        assert!(p.remove(0));
+        assert_eq!(p.made_by(0).len(), 2);
+        // No gallery, no field in the file.
+        assert!(!serde_json::to_string(&Pipeline::default()).unwrap().contains("made"));
     }
 }

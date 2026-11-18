@@ -65,7 +65,7 @@ impl B {
     fn new() -> Self {
         // Built with the old source steps (Reference, Matte, Second…):
         // `Template::pipeline` normalizes them into the node's Inputs.
-        B { p: Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![] }, row: -0.2 }
+        B { p: Pipeline { steps: vec![], takes: vec![], take: 0, ins: vec![], made: vec![] }, row: -0.2 }
     }
     fn src(&mut self, op: Op, x: f32) -> usize {
         self.p.push(op, [x, -0.6])
@@ -344,7 +344,7 @@ pub fn load(path: &Path) -> Result<Saved, String> {
     if t.kind != KIND {
         return Err(format!("not a wobble GenAI template ({})", t.kind));
     }
-    let mut p = Pipeline { steps: std::mem::take(&mut t.steps), takes: vec![], take: 0, ins: vec![] };
+    let mut p = Pipeline { steps: std::mem::take(&mut t.steps), takes: vec![], take: 0, ins: vec![], made: vec![] };
     for i in 0..p.steps.len() {
         p.sync_ports(i);
     }

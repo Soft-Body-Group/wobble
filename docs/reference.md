@@ -3575,9 +3575,14 @@ nothing else; its rose wire is the text pipe (a Text node's words). A
 GenAI node used to take one on a prompt input; a comp saved that way
 loads with the String's text copied into the pipeline's prompt.
 
-**Nothing runs, and nothing is billed, without a click.** `run…` renders
-the inputs at the playhead and asks the service for the price; the panel
-shows it (and your balance, on credits); only **pay & run** sends anything.
+**Nothing runs, and nothing is billed, without a click, and the panel
+says which click is which.** Step 1, **get price**, renders the inputs at
+the playhead and asks the service what it will cost: free, nothing is sent
+to a model. Step 2, **pay $X & run**, is the request and the charge. A
+model node inside a pipeline has the same two steps for itself, an **info**
+button (what it takes, what it gives back, its licence), and a gallery of
+every result it has made: click one to make it the step's result, **pop
+out** for a Load of it in the outer graph.
 A pipeline with nothing to bill — all cached, or ComfyUI only — runs
 straight through. There is no per-frame evaluation and no auto-run on open.
 

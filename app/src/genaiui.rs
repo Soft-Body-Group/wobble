@@ -475,13 +475,60 @@ pub fn step_panel(ui: &mut Ui, node: u64, op: &mut Op, v: &View) -> Option<Actio
         ui,
         v,
         &[],
-        "run this step…",
+        "this step",
         || Action::PrepareStep(me),
         || Action::CancelStep(me),
         || Action::DismissStep(me),
     );
-    ui.weak(small("view the node to see its result; the pipeline node's run… makes the take"));
-    r
+    ui.weak(small("view the node to see its result; the pipeline node's own run makes the take"));
+    r.or_else(|| gallery(ui, node, v))
+}
+
+/// A model step's gallery: every result it has made, newest first, as
+/// pictures. Click one to make it the step's result (what viewing the
+/// step shows and what a comp node below it works on); "pop out" makes a
+/// Load of it beside the pipeline node, so two results of one step can be
+/// used at once.
+fn gallery(ui: &mut Ui, node: u64, v: &View) -> Option<Action> {
+    if v.gallery.is_empty() {
+        return None;
+    }
+    let mut act = None;
+    ui.separator();
+    ui.label(small(format!("results ({}): click to pick, pop out for a Load", v.gallery.len())));
+    let now = hist::now();
+    egui::ScrollArea::horizontal().id_salt(("genai-gallery", node)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for s in v.gallery.iter().rev() {
+                ui.vertical(|ui| {
+                    let size = egui::vec2(96.0, 54.0);
+                    let r = match hist::thumb(ui.ctx(), &s.path, false).filter(|_| s.here) {
+                        Some(tex) => ui.add(
+                            egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(size)).selected(s.picked),
+                        ),
+                        None => ui.add_sized(
+                            size,
+                            egui::Button::selectable(s.picked, small(if s.here { "…" } else { "file missing" })),
+                        ),
+                    };
+                    crate::widgets::note_rect(ui, egui::Id::new(("genai-shot", node, s.k)), r.rect);
+                    if s.picked {
+                        ui.painter().rect_stroke(r.rect, 2.0, Stroke::new(2.0, theme::selection()), egui::StrokeKind::Outside);
+                    }
+                    let cost = s.usd.map(|u| format!(" · {}", service::usd(u))).unwrap_or_default();
+                    if r.on_hover_text(format!("{}{cost}\nclick: use this as the step's result", hist::ago(s.when, now))).clicked() {
+                        act = Some(Action::PickMade(s.k));
+                    }
+                    let b = ui.add_enabled(s.here, egui::Button::new(small("pop out")).small());
+                    crate::widgets::note_rect(ui, egui::Id::new(("genai-shot-out", node, s.k)), b.rect);
+                    if b.on_hover_text("a Load of this result, beside the pipeline node in the outer graph").clicked() {
+                        act = Some(Action::MadeToLoad(s.k));
+                    }
+                });
+            }
+        });
+    });
+    act
 }
 
 // ------------------------------------------------------------ graph marks
@@ -599,9 +646,6 @@ pub struct Runs {
     /// A capture is waiting for the rig to take in a model's result it
     /// just pointed the node's reader at (a comp node after a model).
     pending_load: bool,
-    /// The tick each step's last run was made at, per (node, step): a
-    /// video result plays from there.
-    step_ticks: std::collections::HashMap<(u64, usize), i64>,
     /// Nodes whose reader holds a step's VIDEO result (not the take), and
     /// the tick it plays from (`GenAiParams::shown_tick`).
     shown: std::collections::HashMap<u64, i64>,
@@ -694,7 +738,6 @@ impl Default for Runs {
             dive_fmt: None,
             step_keys: Default::default(),
             pending_load: false,
-            step_ticks: Default::default(),
             shown: Default::default(),
             reader_moved: None,
             account: Account::Unknown,
@@ -777,6 +820,8 @@ pub struct View {
     pub busy_elsewhere: bool,
     /// Per node input, whether something is wired into it, for the hints.
     pub wired: Vec<bool>,
+    /// A step's panel: every result that step has made, oldest first.
+    pub gallery: Vec<Shot>,
     /// The take on screen is at another frame rate than the comp's, and a
     /// retime below the node conforms it: (the take's fps, it is RIFE).
     pub conform: Option<(f32, bool)>,
@@ -795,11 +840,24 @@ pub struct View {
     pub texts: BTreeMap<usize, String>,
 }
 
+/// One result in a model step's gallery.
+pub struct Shot {
+    /// Its index in `Pipeline::made`.
+    pub k: usize,
+    pub path: std::path::PathBuf,
+    pub picked: bool,
+    pub when: u64,
+    pub usd: Option<f64>,
+    /// Its file is on this machine.
+    pub here: bool,
+}
+
 pub enum ViewState {
     Idle,
     Capturing,
     Quoting,
-    Ready { quote: Result<Quote, String>, billed: usize, stale: bool },
+    /// `what`: the steps that will be billed, by name.
+    Ready { quote: Result<Quote, String>, billed: usize, stale: bool, what: Vec<String> },
     Running,
     Failed(String),
     Done(String),
@@ -827,6 +885,10 @@ pub enum Action {
     /// Run ONE step (its index), from inside the pipeline: its inputs
     /// are captured and everything above it run or found cached.
     PrepareStep(usize),
+    /// A step's gallery: show this result (`Pipeline::made[k]`) on the
+    /// step, and make a Load of it beside the node ("pop out").
+    PickMade(usize),
+    MadeToLoad(usize),
     /// Swap the conform Speed below the node for a Rifetime at the same
     /// rate (real in-between frames; it renders on a click).
     ConformRife,
@@ -1003,6 +1065,53 @@ fn pipeline_column(ui: &mut Ui, p: &GenAiParams, v: &View) {
     }
 }
 
+/// The ports a model step has, by name, with "(optional)" on the ones
+/// that may be left unwired.
+fn op_ports(m: &catalog::RemoteModel, opts: &Opts) -> Vec<String> {
+    let base = genai::pipeline::task_ports(m.task);
+    let mut v: Vec<String> = base
+        .iter()
+        .map(|(pipe, name)| match pipe {
+            genai::Pipe::Video => format!("{name} (a clip)"),
+            _ => name.to_string(),
+        })
+        .collect();
+    v.extend(m.dialect.extra_ports(opts.refs).iter().map(|n| format!("{n} (optional)")));
+    v
+}
+
+/// What a model IS, in plain lines, for its info button: what it does,
+/// what it takes and gives back, who made it available and on what terms.
+fn model_info(m: &catalog::RemoteModel, ports: &[String]) -> Vec<String> {
+    let gives = if m.task.is_text() {
+        "text (words for another step's prompt)"
+    } else if m.task.is_3d() {
+        "a 3D capture (lands as a Splat node)"
+    } else if m.task.is_video() {
+        "a video clip"
+    } else if m.task.is_data() {
+        "a data picture (depth or normals, not colour)"
+    } else {
+        "a still picture"
+    };
+    let mut v = vec![
+        format!("{}: {}", m.label, m.about),
+        format!("kind: {}", m.task.label()),
+        format!("takes: {}", if ports.is_empty() { "nothing".to_string() } else { ports.join(", ") }),
+        format!("gives back: {gives}"),
+        format!("runs at: {} ({})", m.endpoint, "paid per run: get the price first"),
+        format!("licence: {}", m.licence),
+    ];
+    v.push(
+        if m.commercial {
+            "commercial use: yes".to_string()
+        } else {
+            "commercial use: NO (tagged downstream; a Render warns)".to_string()
+        },
+    );
+    v
+}
+
 /// One step's fields. `pick_model` offers the model menu on a model step
 /// (the free-form pipeline); a one-model node passes false. Returns the
 /// model picked from that menu, if one was.
@@ -1073,7 +1182,28 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
         Op::Generate { model, seed, opts } => {
             let cur = catalog::get(model);
             if !pick_model {
-                ui.label(egui::RichText::new(cur.map(|m| m.label).unwrap_or("unknown model")).strong());
+                // The model's name, and an info button: what it is, what
+                // it takes, what it gives back, its licence.
+                let open_id = id("info-open");
+                let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(cur.map(|m| m.label).unwrap_or("unknown model")).strong());
+                    if let Some(m) = cur {
+                        let r = ui.add(egui::Button::selectable(open, small("info")));
+                        crate::widgets::note_rect(ui, id("info"), r.rect);
+                        if r.on_hover_text(model_info(m, &op_ports(m, opts)).join("\n")).clicked() {
+                            open = !open;
+                        }
+                    }
+                });
+                ui.data_mut(|d| d.insert_temp(open_id, open));
+                if let (true, Some(m)) = (open, cur) {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        for line in model_info(m, &op_ports(m, opts)) {
+                            ui.add(egui::Label::new(small(line)).wrap());
+                        }
+                    });
+                }
             } else {
                 egui::ComboBox::from_id_salt(id("model"))
                     .width(ui.available_width())
@@ -1250,64 +1380,75 @@ fn run_ui(
     ui: &mut Ui,
     v: &View,
     names: &[String],
-    label: &str,
+    what: &str,
     prepare: impl Fn() -> Action,
     cancel: impl Fn() -> Action,
-    dismiss: impl Fn() -> Action,
+    _dismiss: impl Fn() -> Action,
 ) -> Option<Action> {
+    // Two steps, and it always says which one you are on: (1) GET THE
+    // PRICE, which is free and sends nothing to a model; (2) PAY & RUN,
+    // which is the request and the charge. `what` = "this step" / "the
+    // pipeline".
     let mut act = None;
+    let step = |ui: &mut Ui, n: u8, on: bool, text: &str| {
+        let t = small(format!("{n}  {text}"));
+        ui.label(if on { t.strong() } else { t.weak() });
+    };
     match &v.state {
         ViewState::Idle | ViewState::Failed(_) | ViewState::Done(_) => {
             if let ViewState::Failed(e) = &v.state {
-                ui.colored_label(theme::error(), small(e));
+                ui.colored_label(theme::error(), small(format!("failed: {e}")));
             }
             if let ViewState::Done(s) = &v.state {
-                ui.weak(small(s));
+                ui.colored_label(theme::selection(), small(format!("done: {s}")));
             }
+            step(ui, 1, true, "get the price: free, nothing is sent to a model yet");
             let busy = v.busy_elsewhere;
-            let b = ui.add_enabled(!busy, egui::Button::new(label));
+            let b = ui.add_enabled(!busy, egui::Button::new(format!("get price for {what}")));
             let b = if busy {
-                b.on_disabled_hover_text("another GenAI node is running")
+                b.on_disabled_hover_text("another GenAI run is being priced: finish or cancel that one first")
             } else {
-                b.on_hover_text("renders the inputs at the playhead and asks the price; nothing is billed until you confirm")
+                b.on_hover_text(
+                    "renders the inputs it needs at the playhead and asks the service what it will cost. \
+                     Free. Nothing is sent to a model and nothing is charged until you press pay & run.",
+                )
             };
             if b.clicked() {
                 act = Some(prepare());
             }
+            step(ui, 2, false, "pay & run: appears here with the price");
         }
-        ViewState::Capturing => {
+        ViewState::Capturing | ViewState::Quoting => {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(small(format!("rendering the inputs at the playhead… {}", clock(v.run_secs))));
+                let doing = if matches!(v.state, ViewState::Capturing) { "rendering the inputs" } else { "asking the service" };
+                ui.label(small(format!("1  getting the price (free): {doing}… {}", clock(v.run_secs))).strong());
             });
+            step(ui, 2, false, "pay & run: next");
             if ui.small_button("cancel").clicked() {
                 act = Some(cancel());
             }
         }
-        ViewState::Quoting => {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(small(format!("asking the price… {}", clock(v.run_secs))));
-            });
-            if ui.small_button("cancel").clicked() {
-                act = Some(cancel());
-            }
-        }
-        ViewState::Ready { quote, billed, stale } => {
-            let calls = if *billed == 1 { "1 billed call".to_string() } else { format!("{billed} billed calls") };
+        ViewState::Ready { quote, billed, stale, what: billed_for } => {
+            step(ui, 1, false, "price received");
+            let price = match quote {
+                Ok(q) => match q.total() {
+                    Some(t) if q.exact() => Some(service::usd(t)),
+                    Some(t) => Some(format!("≈ {}", service::usd(t))),
+                    None => None,
+                },
+                Err(_) => None,
+            };
+            let calls = if *billed == 1 { "1 billed request".to_string() } else { format!("{billed} billed requests") };
+            let for_what = if billed_for.is_empty() { String::new() } else { format!(": {}", billed_for.join(", ")) };
+            ui.label(small(format!("2  {} · {calls}{for_what}", price.as_deref().unwrap_or("price unknown"))).strong());
             match quote {
                 Ok(q) => {
-                    let price = match q.total() {
-                        Some(t) if q.exact() => service::usd(t),
-                        Some(t) => format!("≈ {}", service::usd(t)),
-                        None => "price unknown".into(),
-                    };
-                    ui.label(small(format!("{calls}: {price}")));
                     let unpriced = q.items.iter().filter(|p| p.is_none()).count();
                     if unpriced > 0 {
                         ui.colored_label(
                             theme::warn(),
-                            small(format!("{unpriced} call(s) have no price from the service: running bills what it bills")),
+                            small(format!("{unpriced} request(s) have no price from the service: running bills what it bills")),
                         );
                     }
                     if let Some(b) = q.balance_usd.filter(|_| cfg!(feature = "commerce")) {
@@ -1315,24 +1456,32 @@ fn run_ui(
                     }
                 }
                 Err(e) => {
-                    ui.label(small(calls));
                     ui.colored_label(theme::warn(), small(format!("no price: {e}")));
                 }
             }
             if *stale {
-                ui.colored_label(theme::warn(), small("the pipeline changed since: run… again"));
+                ui.colored_label(theme::warn(), small("something changed since this price: get the price again"));
             }
             ui.horizontal(|ui| {
-                let label = if quote.is_ok() { "pay & run" } else { "run without a price" };
-                if ui.add_enabled(!*stale, egui::Button::new(label)).clicked() {
+                let label = match &price {
+                    Some(p) => format!("pay {p} & run"),
+                    None => "run without a price".to_string(),
+                };
+                let b = ui.add_enabled(!*stale, egui::Button::new(egui::RichText::new(label).strong()));
+                if b
+                    .on_hover_text("THIS sends the request to the service and charges it. Nothing has been sent or charged so far.")
+                    .clicked()
+                {
                     act = Some(Action::Confirm);
                 }
-                if ui.small_button("cancel").clicked() {
+                if ui.small_button("cancel").on_hover_text("nothing was sent, nothing is charged").clicked() {
                     act = Some(cancel());
                 }
             });
+            ui.weak(small("nothing has been sent or charged yet"));
         }
         ViewState::Running => {
+            ui.label(small("2  sent: running at the service").strong());
             for (i, s) in &v.steps {
                 let name = names.get(*i).cloned().unwrap_or_default();
                 let going = !matches!(s, StepState::Done | StepState::Cached);
@@ -1358,9 +1507,6 @@ fn run_ui(
         let more = if words.chars().count() > 160 { "…" } else { "" };
         ui.add(egui::Label::new(small(format!("{name}: {short}{more}")).weak()).wrap())
             .on_hover_text(words.as_str());
-    }
-    if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("ok").clicked() {
-        act = Some(dismiss());
     }
     act
 }
@@ -1433,7 +1579,7 @@ fn run_column(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Option<A
 
     // --- the run
     let names: Vec<String> = p.pipeline.steps.iter().map(|s| s.op.label()).collect();
-    if let Some(a) = run_ui(ui, v, &names, "run…", || Action::Prepare, || Action::Cancel, || Action::Dismiss) {
+    if let Some(a) = run_ui(ui, v, &names, "the pipeline", || Action::Prepare, || Action::Cancel, || Action::Dismiss) {
         act = Some(a);
     }
     ui.separator();
@@ -1779,7 +1925,8 @@ impl Gfx {
                         && self.genai_params(node).is_none_or(|p| p.vary != r.vary));
                 let billed = plan.billed(&r.pipeline).len()
                     + r.more.iter().map(|(p, plan, _)| plan.billed(p).len()).sum::<usize>();
-                ViewState::Ready { quote: quote.clone(), billed, stale }
+                let what = plan.billed(&r.pipeline).iter().filter_map(|i| r.pipeline.steps.get(*i)).map(|s| s.op.name().to_string()).collect();
+                ViewState::Ready { quote: quote.clone(), billed, stale, what }
             }
             Some(Phase::Running { .. }) => ViewState::Running,
             Some(Phase::Failed(e)) => ViewState::Failed(e.clone()),
@@ -1804,6 +1951,7 @@ impl Gfx {
             // shared); paid ones go on beside it.
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
             wired: self.genai_wired(&self.egraph, node),
+            gallery: vec![],
             conform: conform_of(&self.egraph, node).and_then(|c| {
                 let fps = self.loaded.get(&node).and_then(|l| l.movie_fps)? as f32;
                 ((fps - self.fps).abs() > 0.01)
@@ -1856,6 +2004,27 @@ impl Gfx {
             Action::Show => {
                 self.genai_show(node);
                 self.genai_conform(node);
+            }
+            Action::PickMade(k) => {
+                if let Some(p) = self.genai_params_anywhere(node) {
+                    p.pipeline.pick_made(k);
+                    self.playback_dirty = true;
+                }
+            }
+            Action::MadeToLoad(k) => {
+                let made = self.genai_params(node).and_then(|p| p.pipeline.made.get(k)).map(|m| m.path(&config::results_dir()));
+                if let Some(path) = made {
+                    // Staggered by how many Loads of this node's results
+                    // are already out.
+                    let dir = config::results_dir();
+                    let out = self
+                        .egraph
+                        .nodes
+                        .values()
+                        .filter(|n| matches!(&n.kind, NodeKind::Read { path, .. } if std::path::Path::new(path).starts_with(&dir)))
+                        .count();
+                    self.genai_file_to_load(node, &path, out);
+                }
             }
             Action::ConformRife => {
                 if let Some(c) = conform_of(&self.egraph, node) {
@@ -2088,7 +2257,7 @@ impl Gfx {
                         };
                         if self.loaded.get(&node).map(|l| l.path.as_str()) != Some(path.as_str()) {
                             // A video result plays from where it was made.
-                            match self.jobs.genai.step_ticks.get(&(node, a)).copied().filter(|_| genai::pipeline::is_video_file(&path)) {
+                            match self.genai_made_of(node, a).map(|m| m.tick).filter(|_| genai::pipeline::is_video_file(&path)) {
                                 Some(t) => self.jobs.genai.shown.insert(node, t),
                                 None => self.jobs.genai.shown.remove(&node),
                             };
@@ -2119,13 +2288,20 @@ impl Gfx {
     /// Where step `i` of `node`'s pipeline last left its result, if it is
     /// still on disk and still that step (`name`): (cache key, file).
     fn genai_step_result(&self, node: u64, i: usize, name: &str) -> Option<(String, std::path::PathBuf)> {
-        let (n, key) = self.jobs.genai.step_keys.get(&node)?.get(i)?;
-        if n != name || key.is_empty() {
-            return None;
-        }
-        let dir = config::results_dir();
-        let m = run::cached(&dir, key)?;
-        Some((key.clone(), dir.join(key).join(m.file)))
+        let m = self.genai_made_of(node, i).filter(|m| m.name == name)?;
+        let path = m.path(&config::results_dir());
+        path.exists().then(|| (m.key.clone(), path))
+    }
+
+    /// The result of step `i` of `node`'s pipeline that is PICKED in its
+    /// gallery (`Pipeline::made`, kept with the node): what viewing the
+    /// step shows and what a comp node below it works on.
+    fn genai_made_of(&self, node: u64, i: usize) -> Option<&genai::Made> {
+        let p = self.genai_params(node)?;
+        // Inside its open pipeline the steps are the dive's, live; the
+        // gallery is still the node's, matched by index and name.
+        let all: Vec<&genai::Made> = p.pipeline.made.iter().filter(|m| m.step == i).collect();
+        all.iter().copied().find(|m| m.picked).or_else(|| all.last().copied())
     }
 
     /// Put step `step`'s Spline in the comp as a stand-in node the capture
@@ -2536,7 +2712,12 @@ impl Gfx {
                 }
                 match end {
                     Some(Ok(t)) => {
-                        let spent = t.usd.map(|u| format!(", {}", service::usd(u))).unwrap_or_default();
+                        // What it cost, said either way: a charge, or
+                        // that there was nothing new to pay for.
+                        let spent = match t.usd {
+                            Some(u) => format!(", {} charged", service::usd(u)),
+                            None => ", free (nothing new to pay for)".to_string(),
+                        };
                         let n = 1 + r.more.len();
                         // Where every step's result is now: what viewing
                         // a step inside shows.
@@ -2548,7 +2729,36 @@ impl Gfx {
                         }
                         for (k, new) in r.keys.iter().enumerate().filter(|(_, n)| !n.1.is_empty()) {
                             keys[k] = new.clone();
-                            self.jobs.genai.step_ticks.insert((node, k), r.tick);
+                        }
+                        // And into each model step's gallery, kept with the
+                        // node: every result it has made, this one picked.
+                        let dir = config::results_dir();
+                        let lead = r.lead.as_ref().unwrap_or(&r.pipeline);
+                        let made: Vec<genai::Made> = r
+                            .keys
+                            .iter()
+                            .enumerate()
+                            .filter(|(k, n)| {
+                                !n.1.is_empty() && matches!(lead.steps.get(*k).map(|s| &s.op), Some(Op::Generate { .. } | Op::Comfy { .. }))
+                            })
+                            .filter_map(|(k, (name, key))| {
+                                let m = run::cached(&dir, key)?;
+                                Some(genai::Made {
+                                    step: k,
+                                    name: name.clone(),
+                                    key: key.clone(),
+                                    file: m.file,
+                                    tick: r.tick,
+                                    when: hist::now(),
+                                    usd: m.usd,
+                                    picked: true,
+                                })
+                            })
+                            .collect();
+                        if let Some(p) = self.genai_params_anywhere(node) {
+                            for m in made {
+                                p.pipeline.record_made(m);
+                            }
                         }
                         if r.to_step.is_some() {
                             // One step's run: its result to look at (and
@@ -2828,7 +3038,28 @@ impl Gfx {
         let step_ids: Vec<u64> = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).map(|(id, _)| *id).collect();
         // The selected step's OWN run (several can be going at once).
         let me = step_ids.iter().position(|x| *x == sel);
-        View { wired: self.genai_wired(g, owner), step_ids, ..self.genai_view_of(owner, me) }
+        // Its gallery, off the node (which keeps it with the setup).
+        let dir = config::results_dir();
+        let name = self.egraph.node(sel).and_then(|n| match &n.kind {
+            NodeKind::GenAiStep(op) => Some(op.name()),
+            _ => None,
+        });
+        let picked = me.and_then(|i| self.genai_made_of(owner, i)).map(|m| m.key.clone());
+        let gallery: Vec<Shot> = match (me, g.node(owner).and_then(|n| params(&n.kind))) {
+            (Some(i), Some(p)) => p
+                .pipeline
+                .made
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.step == i && Some(m.name.as_str()) == name)
+                .map(|(k, m)| {
+                    let path = m.path(&dir);
+                    Shot { k, here: path.exists(), path, picked: Some(&m.key) == picked.as_ref(), when: m.when, usd: m.usd }
+                })
+                .collect(),
+            _ => vec![],
+        };
+        View { wired: self.genai_wired(g, owner), step_ids, gallery, ..self.genai_view_of(owner, me) }
     }
 
     /// Point the node's reader at its picked take (or at nothing).
@@ -2938,7 +3169,7 @@ impl Gfx {
                 // A comp node below a model shows that model's result
                 // through itself: the reader holds the model's.
                 k if comp_ok(k) => {
-                    let pl = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![] };
+                    let pl = Pipeline { steps: from_editor(&self.egraph), takes: vec![], take: 0, ins: vec![], made: vec![] };
                     let a = *pl.models_above(i).first()?;
                     Some((a, pl.steps[a].op.name()))
                 }
@@ -2946,16 +3177,11 @@ impl Gfx {
             }
         });
         let ran = viewed.and_then(|(i, name)| {
-            let (n, key) = self.jobs.genai.step_keys.get(&owner)?.get(i)?;
-            if n != name || key.is_empty() {
-                return None;
-            }
-            let m = run::cached(&dir, key)?;
-            Some(dir.join(key).join(m.file)).filter(|p| playable(p)).map(|p| (p, i))
+            self.genai_step_result(owner, i, name).map(|(_, p)| p).filter(|p| playable(p)).map(|p| (p, i))
         });
         // A step's VIDEO plays from the tick it was made at.
         let tick = ran.as_ref().and_then(|(p, i)| {
-            genai::pipeline::is_video_file(&p.to_string_lossy()).then(|| self.jobs.genai.step_ticks.get(&(owner, *i)).copied()).flatten()
+            genai::pipeline::is_video_file(&p.to_string_lossy()).then(|| self.genai_made_of(owner, *i).map(|m| m.tick)).flatten()
         });
         if self.jobs.genai.shown.get(&owner).copied() != tick {
             match tick {
@@ -4048,8 +4274,34 @@ impl Gfx {
                     }
                     let takes_in = |me: &Self| me.dive.last().and_then(|d| d.graph.node(t.pipe)).and_then(|n| params(&n.kind)).map(|p| p.pipeline.takes.len());
                     let before = takes_in(self);
-                    if !self.jobs.genai.step_keys.get(&t.pipe).is_some_and(|k| k.iter().any(|(n, key)| n == "FLUX.1 [schnell]" && !key.is_empty())) {
-                        fail("the step's result was not recorded for viewing".into());
+                    let made = self
+                        .dive
+                        .last()
+                        .and_then(|d| d.graph.node(t.pipe))
+                        .and_then(|n| params(&n.kind))
+                        .map(|p| p.pipeline.made.iter().filter(|m| m.name == "FLUX.1 [schnell]" && m.picked).count());
+                    if made != Some(1) {
+                        fail(format!("the step's result is not in its gallery, picked ({made:?})"));
+                    }
+                    // "Pop out": a Load of that result, in the OUTER graph.
+                    let k = self
+                        .dive
+                        .last()
+                        .and_then(|d| d.graph.node(t.pipe))
+                        .and_then(|n| params(&n.kind))
+                        .and_then(|p| p.pipeline.made.iter().position(|m| m.name == "FLUX.1 [schnell]"))
+                        .unwrap();
+                    let loads = |me: &Self| {
+                        me.dive.last().map_or(0, |d| d.graph.nodes.values().filter(|n| matches!(n.kind, NodeKind::Read { .. })).count())
+                    };
+                    let had = loads(self);
+                    let owner = t.pipe;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::MadeToLoad(k)));
+                    if loads(self) != had + 1 {
+                        fail("pop out did not make a Load of the result in the outer graph".into());
+                    }
+                    if self.egraph.nodes.values().any(|n| matches!(n.kind, NodeKind::Read { .. })) {
+                        fail("pop out put its Load inside the pipeline".into());
                     }
                     let submits = t.fake.as_ref().unwrap().submits();
                     if submits != 1 {
@@ -4359,6 +4611,7 @@ mod tests {
             steps: BTreeMap::new(),
             busy_elsewhere: false,
             wired: vec![true, false],
+            gallery: vec![],
             conform: None,
             elapsed: BTreeMap::new(),
             run_secs: 0.0,
@@ -4407,7 +4660,7 @@ mod tests {
                 items: vec![Some(service::Price { usd: 0.025, exact: true, note: "per image".into() })],
                 balance_usd: Some(12.5),
             });
-            let v = view(ViewState::Ready { quote, billed: 1, stale: true });
+            let v = view(ViewState::Ready { quote, billed: 1, stale: true, what: vec!["FLUX.1 [dev]".into()] });
             let over = std::cell::Cell::new(0.0f32);
             let wide = std::cell::Cell::new(0.0f32);
             let shot = crate::snapshot::shoot(w, hgt, |ui| {
@@ -4458,6 +4711,41 @@ mod tests {
         }
     }
 
+    /// `genai_step_panel_render` draws a model step's panel inside the
+    /// pipeline in its three run states (idle, priced, running), with a
+    /// gallery, to `target/genai-step-<n>.png`.
+    #[test]
+    #[ignore]
+    fn genai_step_panel_render() {
+        let span = |n: usize| crate::widgets::TILE * n as f32 + crate::widgets::TILE_GAP * (n as f32 - 1.0);
+        let quote = Ok(Quote {
+            items: vec![Some(service::Price { usd: 0.2, exact: true, note: "2 s".into() })],
+            balance_usd: None,
+        });
+        let states = [
+            ViewState::Idle,
+            ViewState::Ready { quote, billed: 1, stale: false, what: vec!["Wan 2.7 video edit".into()] },
+            ViewState::Running,
+        ];
+        for (k, state) in states.into_iter().enumerate() {
+            let mut v = view(state);
+            v.step_ids = vec![7];
+            v.to_step = Some(0);
+            v.steps.insert(0, StepState::Running);
+            v.elapsed.insert(0, 72.0);
+            v.run_secs = 80.0;
+            v.gallery = (0..3)
+                .map(|k| Shot { k, path: format!("/nowhere/{k}/result.png").into(), picked: k == 2, when: 0, usd: Some(0.2), here: false })
+                .collect();
+            let mut op = Op::Generate { model: "fal/wan-2.7-video-edit".into(), seed: 1, opts: Opts::default() };
+            let name: &'static str = ["genai-step-0", "genai-step-1", "genai-step-2"][k];
+            let out = crate::uishot::render(name, span(1), span(3), 2.0, 4, |ui, _| {
+                let _ = step_panel(ui, 7, &mut op, &v);
+            });
+            println!("{:?}", out.map(|p| p.display().to_string()));
+        }
+    }
+
     #[test]
     #[ignore]
     fn genai_panel_render() {
@@ -4483,7 +4771,7 @@ mod tests {
             items: vec![Some(service::Price { usd: 0.025, exact: true, note: "per image".into() })],
             balance_usd: Some(12.5),
         });
-        let v = view(ViewState::Ready { quote, billed: 1, stale: false });
+        let v = view(ViewState::Ready { quote, billed: 1, stale: false, what: vec!["FLUX.1 [dev]".into()] });
         let out = crate::uishot::render("genai-panel-gpu", span(TILES), span(TILE_ROWS), 2.0, 4, |ui, _| {
             innards::select(ui.ctx(), 1, 1);
             let _ = panel(ui, 1, &mut p, &v);
