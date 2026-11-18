@@ -82,6 +82,7 @@ fn dwell(s: &Step) -> f64 {
     LOOPS * one + REST
 }
 
+#[derive(Default)]
 pub struct Tour {
     pub open: bool,
     step: usize,
@@ -89,6 +90,12 @@ pub struct Tour {
     t0: Option<f64>,
     /// Stepped by hand: no more auto advance.
     manual: bool,
+    /// Where the pointer was drawn last frame, and where the current pass
+    /// starts it from: it never jumps home, it carries on from there.
+    ptr: Option<Pos2>,
+    from: Option<Pos2>,
+    /// The animation pass `from` was taken for.
+    pass: Option<u64>,
 }
 
 impl Tour {
@@ -97,20 +104,21 @@ impl Tour {
     /// (headless too, for shots); `SCRUB_NO_TOUR` keeps it shut.
     pub fn new(seen: bool, headless: bool) -> Self {
         if let Some(n) = std::env::var("SCRUB_TOUR").ok().and_then(|s| s.parse::<usize>().ok()) {
-            return Tour { open: true, step: n.min(STEPS.len() - 1), t0: None, manual: false };
+            return Tour { open: true, step: n.min(STEPS.len() - 1), t0: None, manual: false, ..Default::default() };
         }
         let off = seen || headless || std::env::var_os("SCRUB_NO_TOUR").is_some();
-        Tour { open: !off, step: 0, t0: None, manual: false }
+        Tour { open: !off, step: 0, t0: None, manual: false, ..Default::default() }
     }
 
     /// help > hotkey tour.
     pub fn replay(&mut self) {
-        *self = Tour { open: true, step: 0, t0: None, manual: false };
+        *self = Tour { open: true, step: 0, t0: None, manual: false, ..Default::default() };
     }
 
     fn go(&mut self, step: usize) {
         self.step = step.min(STEPS.len() - 1);
         self.t0 = None;
+        self.pass = None;
     }
 
     /// Draw the card. Returns true on the frame it closes (the caller keeps
@@ -123,6 +131,12 @@ impl Tour {
         let t0 = *self.t0.get_or_insert(now);
         let t = now - t0;
         let step = &STEPS[self.step];
+        // Each pass starts the pointer where the last one left it.
+        let pass = (t / PASS) as u64;
+        if self.pass != Some(pass) {
+            self.pass = Some(pass);
+            self.from = self.ptr;
+        }
         if !self.manual && t > dwell(step) && self.step + 1 < STEPS.len() {
             self.go(self.step + 1);
         }
@@ -172,7 +186,7 @@ impl Tour {
             let painter = ui.painter_at(kb.union(stage));
             let pressed = pressed_now(step, t);
             keyboard(&painter, kb, step, &pressed, t);
-            act(&painter, stage, step, t);
+            self.ptr = act(&painter, stage, step, t, self.from);
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -373,7 +387,8 @@ fn keyboard(p: &egui::Painter, area: Rect, step: &Step, pressed: &[&str], t: f64
 
 /// The dummy: a little timeline (and a viewer for scrubbing), the pointer
 /// acting on it.
-fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
+/// Returns where the pointer was drawn.
+fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64, from: Option<Pos2>) -> Option<Pos2> {
     let area = area.shrink2(vec2(24.0, 8.0));
     p.rect_filled(area.expand(6.0), 6.0, Color32::from_gray(26));
     let lane_h = 34.0;
@@ -421,6 +436,9 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
         }
     };
     let rest = pos2(area.right() - 30.0, area.bottom() - 6.0);
+    // The pass starts the pointer where the last one left it (if that is on the stage).
+    let start = from.filter(|q| area.expand(12.0).contains(*q)).unwrap_or(rest);
+    let mut drawn: Option<Pos2> = None;
     match step.anim {
         Anim::Trim | Anim::Ripple => {
             ruler(p);
@@ -431,6 +449,7 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             let grab = pos2(at(50.0), lane.center().y);
             let d = ease((ph - 0.3) / 0.45) * 10.0 * if out { -1.0 } else { 1.0 };
             let dragging = (0.3..0.8).contains(&ph);
+            let dp = d;
             let d = if ph >= 0.9 { 0.0 } else { d };
             let (mut b0, mut b1, mut c0, mut c1) = (35.0, 65.0, 65.0, 95.0);
             let mut src = 1001;
@@ -456,7 +475,7 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             clip(p, 5.0, 35.0, "A", 1001, false, None);
             clip(p, b0, b1, "B", src, dragging, down.then_some((!out, col)));
             clip(p, c0, c1, "C", 1001, false, None);
-            let ptr = pointer_path(ph, rest, grab, pos2(grab.x + d * ux, grab.y));
+            let ptr = pointer_path(ph, start, grab, pos2(grab.x + dp * ux, grab.y));
             if down {
                 let op = match (ripple, out) {
                     (false, false) => "trim in",
@@ -467,12 +486,14 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
                 label_by_pointer(p, ptr, op);
             }
             pointer(p, ptr, dragging);
+            drawn = Some(ptr);
         }
         Anim::Slip => {
             ruler(p);
             let ph = phase(t);
             let grab = pos2(at(50.0), lane.center().y);
             let d = (ease((ph - 0.3) / 0.25) - ease((ph - 0.55) / 0.2)) * 12.0;
+            let dp = d;
             let dragging = (0.3..0.8).contains(&ph);
             let src = 1001 - (d * 3.0) as i64;
             clip(p, 5.0, 35.0, "A", 1001, false, None);
@@ -485,17 +506,19 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
                 let shown = Rect::from_min_max(pos2(at(35.0), full.top()), pos2(at(65.0), full.bottom()));
                 p.rect_filled(shown, 2.0, CLIP_HI);
             }
-            let ptr = pointer_path(ph, rest, grab, pos2(grab.x + d * ux, grab.y));
+            let ptr = pointer_path(ph, start, grab, pos2(grab.x + dp * ux, grab.y));
             if (0.08..0.9).contains(&ph) {
                 label_by_pointer(p, ptr, &format!("slip  {src}–{}", src + 59));
             }
             pointer(p, ptr, dragging);
+            drawn = Some(ptr);
         }
         Anim::Speed => {
             ruler(p);
             let ph = phase(t);
             let grab = pos2(at(50.0), lane.center().y);
             let d = ease((ph - 0.3) / 0.45) * 12.0;
+            let dp = d;
             let d = if ph >= 0.9 { 0.0 } else { d };
             let dragging = (0.3..0.8).contains(&ph);
             let len = 30.0 + d;
@@ -504,11 +527,12 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             clip(p, 35.0, 35.0 + len, &format!("B  ×{speed:.2}"), 1001, dragging, None);
             clip(p, 35.0 + len, 65.0 + d.max(0.0), "C", 1001, false, None);
             playhead(p, at(35.0));
-            let ptr = pointer_path(ph, rest, grab, pos2(grab.x + d * ux, grab.y));
+            let ptr = pointer_path(ph, start, grab, pos2(grab.x + dp * ux, grab.y));
             if (0.08..0.9).contains(&ph) {
                 label_by_pointer(p, ptr, &format!("speed ×{speed:.2}"));
             }
             pointer(p, ptr, dragging);
+            drawn = Some(ptr);
         }
         Anim::Shuttle => {
             ruler(p);
@@ -625,8 +649,9 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             let hx = view.left() + ((frame - 1001 + 30) as f32 / 90.0).clamp(0.0, 1.0) * view.width();
             p.line_segment([pos2(hx, bar.top() - 3.0), pos2(hx, bar.bottom() + 3.0)], Stroke::new(2.0, TRIM));
             let grab = view.center();
-            let ptr = pointer_path(ph, rest, grab, grab + vec2(d, 0.0));
+            let ptr = pointer_path(ph, start, grab, grab + vec2(d, 0.0));
             pointer(p, ptr, dragging);
+            drawn = Some(ptr);
         }
         Anim::Panels => {
             // Four panels; Q solos the hovered one, W closes it, H the hints.
@@ -656,7 +681,9 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
                     p.text(rect.center_bottom() + vec2(0.0, -8.0), Align2::CENTER_BOTTOM, "J K L   I O   , .", FontId::monospace(10.0), INK.gamma_multiply(0.6));
                 }
             }
-            pointer(p, panes[1].center() + vec2(10.0, 0.0), false);
+            let ptr = pointer_path(phase(t), start, panes[1].center() + vec2(10.0, 0.0), panes[1].center() + vec2(10.0, 0.0));
+            pointer(p, ptr, false);
+            drawn = Some(ptr);
         }
         Anim::Intro => {
             // The idea in one picture: a held key and a drag.
@@ -664,32 +691,39 @@ fn act(p: &egui::Painter, area: Rect, step: &Step, t: f64) {
             ruler(p);
             let grab = pos2(at(50.0), lane.center().y);
             let d = ease((ph - 0.3) / 0.45) * -10.0;
+            let dp = d;
             let d = if ph >= 0.9 { 0.0 } else { d };
             let down = (0.08..0.9).contains(&ph);
             clip(p, 5.0, 35.0, "A", 1001, false, None);
             clip(p, 35.0, 65.0 + d, "B", 1001, (0.3..0.8).contains(&ph), down.then_some((false, TRIM)));
             clip(p, 65.0, 95.0, "C", 1001, false, None);
-            let ptr = pointer_path(ph, rest, grab, pos2(grab.x + d * ux, grab.y));
+            let ptr = pointer_path(ph, start, grab, pos2(grab.x + dp * ux, grab.y));
             if down {
                 label_by_pointer(p, ptr, "hold D + drag: trim out");
             }
             pointer(p, ptr, (0.3..0.8).contains(&ph));
+            drawn = Some(ptr);
         }
         Anim::Done => {
             p.text(area.center(), Align2::CENTER_CENTER, "help > hotkey tour  ·  H toggles the key hints", FontId::proportional(14.0), DIM);
         }
     }
+    // Steps without a drag leave the pointer resting where it was.
+    let at = drawn.unwrap_or_else(|| {
+        pointer(p, start, false);
+        start
+    });
+    Some(at)
 }
 
-/// Rest → grab (by 0.3) → follows the drag → back to rest after 0.85.
-fn pointer_path(ph: f64, rest: Pos2, grab: Pos2, dragged: Pos2) -> Pos2 {
+/// From where the pointer was → grab (by 0.3) → follows the drag, and
+/// stays where the drag left it (the next pass carries on from there).
+fn pointer_path(ph: f64, from: Pos2, grab: Pos2, dragged: Pos2) -> Pos2 {
     let s = |x: f64| -> f32 { let x = x.clamp(0.0, 1.0); (x * x * (3.0 - 2.0 * x)) as f32 };
     if ph < 0.3 {
-        rest.lerp(grab, s((ph - 0.05) / 0.25))
-    } else if ph < 0.85 {
-        dragged
+        from.lerp(grab, s(ph / 0.28))
     } else {
-        dragged.lerp(rest, s((ph - 0.85) / 0.15))
+        dragged
     }
 }
 
@@ -746,7 +780,7 @@ mod tests {
     fn an_untouched_step_moves_on_when_its_loops_are_done() {
         for from in 0..STEPS.len() - 1 {
             let ctx = egui::Context::default();
-            let mut tour = Tour { open: true, step: from, t0: None, manual: false };
+            let mut tour = Tour { open: true, step: from, t0: None, manual: false, ..Default::default() };
             let end = dwell(&STEPS[from]);
             frame(&ctx, &mut tour, 0.0);
             frame(&ctx, &mut tour, end - 0.01);
@@ -759,7 +793,7 @@ mod tests {
     #[test]
     fn a_step_chosen_by_hand_stays() {
         let ctx = egui::Context::default();
-        let mut tour = Tour { open: true, step: 1, t0: None, manual: true };
+        let mut tour = Tour { open: true, step: 1, t0: None, manual: true, ..Default::default() };
         frame(&ctx, &mut tour, 0.0);
         frame(&ctx, &mut tour, 100.0);
         assert_eq!(tour.step, 1);
