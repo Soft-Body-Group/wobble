@@ -28,6 +28,7 @@ pub use crate::nodes::flipflop::{FlipFlopParams, FlipMode};
 pub use crate::nodes::turn::{TurnMode, TurnParams};
 pub use crate::nodes::uncrop::UncropParams;
 pub use crate::nodes::compare::{CompareFit, CompareMode, CompareParams};
+pub use crate::nodes::morphdissolve::MorphDissolveParams;
 pub use crate::nodes::mirror::{MirrorParams, MirrorSide};
 pub use crate::nodes::gamma::GammaParams;
 pub use crate::nodes::tonemap::{ToneMapParams, ToneMode, ToneOp};
@@ -459,6 +460,9 @@ pub enum NodeKind {
     /// Two pictures, A / B or split by a wipe, scaled into the larger
     /// one's format. See [`crate::nodes::compare`].
     Compare(CompareParams),
+    /// A transition: A and B warped toward each other along their optical
+    /// flow while they cross-dissolve. `crate::nodes::morphdissolve`.
+    MorphDissolve(MorphDissolveParams),
     /// A power curve per channel, `x^(1/γ)`, master times r/g/b (alpha its
     /// own), negatives untouched. See [`crate::nodes::gamma`].
     Gamma(GammaParams),
@@ -6129,6 +6133,7 @@ impl NodeKind {
             NodeKind::CorridorKey(p) => Some(p.source),
             NodeKind::Sammie(p) => Some(p.source),
             NodeKind::Flow(p) => Some(p.source),
+            NodeKind::MorphDissolve(p) => Some(p.source),
             NodeKind::Rifetime(p) => Some(p.source),
             NodeKind::FrameFix(p) => Some(p.source),
             NodeKind::Upscale(p) => Some(p.source),
@@ -6169,6 +6174,7 @@ impl NodeKind {
             NodeKind::CorridorKey(p) => p.start,
             NodeKind::Sammie(p) => p.start,
             NodeKind::Flow(p) => p.start,
+            NodeKind::MorphDissolve(p) => p.start,
             NodeKind::Rifetime(p) => p.start,
             NodeKind::FrameFix(p) => p.start,
             NodeKind::Upscale(p) => p.start,
@@ -6308,6 +6314,7 @@ impl NodeKind {
             NodeKind::Turn(_) => TurnParams::INPUTS,
             NodeKind::Uncrop(_) => UncropParams::INPUTS,
             NodeKind::Compare(_) => CompareParams::INPUTS,
+            NodeKind::MorphDissolve(_) => MorphDissolveParams::INPUTS,
             NodeKind::Gamma(_) => GammaParams::INPUTS,
             NodeKind::ToneMap(_) => ToneMapParams::INPUTS,
             NodeKind::UvWarp(_) => UvWarpParams::INPUTS,
@@ -6416,6 +6423,7 @@ impl NodeKind {
             NodeKind::Turn(_) => TurnParams::MASK_INPUT,
             NodeKind::Uncrop(_) => UncropParams::MASK_INPUT,
             NodeKind::Compare(_) => CompareParams::MASK_INPUT,
+            NodeKind::MorphDissolve(_) => MorphDissolveParams::MASK_INPUT,
             NodeKind::Gamma(_) => GammaParams::MASK_INPUT,
             NodeKind::ToneMap(_) => ToneMapParams::MASK_INPUT,
             NodeKind::UvWarp(_) => UvWarpParams::MASK_INPUT,
@@ -6638,6 +6646,7 @@ impl NodeKind {
             self,
             NodeKind::Blend { .. }
                 | NodeKind::Mix(_)
+                | NodeKind::MorphDissolve(_)
                 | NodeKind::MatteCombine(_)
                 | NodeKind::Switch(_)
                 | NodeKind::Recombine(_)
@@ -6734,6 +6743,7 @@ impl NodeKind {
             NodeKind::UvWarp(_) => (input == 1).then_some("uv"),
             NodeKind::Uncrop(_) => (input == crate::nodes::uncrop::REF_INPUT).then_some("f"),
             NodeKind::Compare(_) => Some(if input == 0 { "A" } else { "B" }),
+            NodeKind::MorphDissolve(_) => (input < 2).then_some(if input == 0 { "A" } else { "B" }),
             // The surface map wears N: which port is the glass.
             NodeKind::Refract(_) => (input == crate::nodes::refract::MAP_INPUT).then_some("n"),
             // The vectors port wears its letter: which wire says how
@@ -6923,6 +6933,11 @@ impl NodeKind {
                        foreground's edge")
                 }
             }
+            NodeKind::MorphDissolve(_) => match input {
+                0 => s("A: the outgoing picture, what the transition starts on"),
+                1 => s("B: the incoming picture, what the transition lands on"),
+                _ => s("where the transition applies; outside it, A"),
+            },
             NodeKind::Compare(_) => {
                 if input == 0 {
                     s("A: shown alone, or on the front of the wipe (left of a vertical line)")
@@ -7173,6 +7188,11 @@ impl NodeKind {
             NodeKind::Uncrop(_) => {
                 if input == 0 { "cropped" } else { "full format" }
             }
+            NodeKind::MorphDissolve(_) => match input {
+                0 => "A",
+                1 => "B",
+                _ => "matte",
+            },
             NodeKind::Compare(_) => {
                 if input == 0 { "A" } else { "B" }
             }
@@ -7561,6 +7581,7 @@ impl NodeKind {
             NodeKind::Stabilize(p) => p.models(),
             NodeKind::CamTrack(p) => p.models(),
             NodeKind::Flow(p) => p.models(),
+            NodeKind::MorphDissolve(p) => p.models(),
             NodeKind::Rifetime(p) => p.models(),
             NodeKind::FrameFix(p) => p.models(),
             _ => &[],
@@ -7650,6 +7671,7 @@ impl NodeKind {
             NodeKind::Turn(_) => TurnParams::NAME,
             NodeKind::Uncrop(_) => UncropParams::NAME,
             NodeKind::Compare(_) => CompareParams::NAME,
+            NodeKind::MorphDissolve(_) => MorphDissolveParams::NAME,
             NodeKind::Gamma(_) => GammaParams::NAME,
             NodeKind::ToneMap(_) => ToneMapParams::NAME,
             NodeKind::UvWarp(_) => UvWarpParams::NAME,
@@ -7888,6 +7910,7 @@ impl NodeKind {
             NodeKind::Turn(p) => p.topo_tag(),
             NodeKind::Uncrop(p) => p.topo_tag(),
             NodeKind::Compare(p) => p.topo_tag(),
+            NodeKind::MorphDissolve(p) => 0xF20_0000 + (p.source as u64) * 2 + p.topo_tag(),
             NodeKind::Gamma(p) => p.topo_tag(),
             NodeKind::ToneMap(p) => p.topo_tag(),
             NodeKind::UvWarp(p) => p.topo_tag(),

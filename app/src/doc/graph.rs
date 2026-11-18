@@ -1910,6 +1910,10 @@ pub(crate) fn reslot(kind: &mut NodeKind, next_read_slot: &mut usize) {
             p.source = *next_read_slot;
             *next_read_slot += 1;
         }
+        NodeKind::MorphDissolve(p) => {
+            p.source = *next_read_slot;
+            *next_read_slot += 1;
+        }
         NodeKind::Rifetime(p) => {
             p.source = *next_read_slot;
             *next_read_slot += 1;

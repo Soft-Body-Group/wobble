@@ -44,6 +44,7 @@ pub mod flipflop;
 pub mod turn;
 pub mod uncrop;
 pub mod compare;
+pub mod morphdissolve;
 pub mod gamma;
 pub mod tonemap;
 pub mod lightwrap;
@@ -134,6 +135,7 @@ pub fn channels() -> impl Iterator<Item = crate::anim::Channel> {
         .chain(burnin::CHANNELS)
         .chain(mirror::CHANNELS)
         .chain(compare::CHANNELS)
+        .chain(morphdissolve::CHANNELS)
         .chain(lensdistort::CHANNELS)
         .chain(gamma::CHANNELS)
         .chain(tonemap::CHANNELS)
@@ -184,6 +186,7 @@ pub fn label(ch: crate::anim::Channel) -> Option<&'static str> {
         .or_else(|| burnin::label(ch))
         .or_else(|| mirror::label(ch))
         .or_else(|| compare::label(ch))
+        .or_else(|| morphdissolve::label(ch))
         .or_else(|| lensdistort::label(ch))
         .or_else(|| gamma::label(ch))
         .or_else(|| tonemap::label(ch))

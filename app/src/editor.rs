@@ -1125,6 +1125,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         e(Matte, "EdgeExtend", false, |_| NodeKind::EdgeExtend(Default::default())),
         // --- composite --------------------------------------------------
         e(Composite, "Blend", false, |_| NodeKind::blend()),
+        // A transition: A and B warped along their optical flow while they
+        // dissolve. Solved on a click, played back like a bake.
+        e(Composite, "Morph Dissolve", true, |s| NodeKind::MorphDissolve(engine::graph::MorphDissolveParams::new(s))),
         e(Composite, "Mix", false, |_| NodeKind::Mix(Default::default())),
         e(Composite, "Layer", false, |_| NodeKind::layer()),
         // --- time -------------------------------------------------------
@@ -2034,6 +2037,7 @@ pub fn type_color(kind: &NodeKind) -> Color32 {
         NodeKind::SoftCrop(_) => t::node_soft_crop(),
         NodeKind::Uncrop(_) => t::node_uncrop(),
         NodeKind::Compare(_) => t::node_compare(),
+        NodeKind::MorphDissolve(_) => t::node_morph_dissolve(),
         NodeKind::MotionBlur(_) => t::node_motion_blur(),
         NodeKind::Flow(_) => t::node_flow(),
         NodeKind::Rifetime(_) => t::node_rifetime(),
@@ -2587,6 +2591,7 @@ pub(crate) fn paint_body(
         }
         NodeKind::Uncrop(_) => crate::nodes::uncrop::glyph(&painter, sp, r, fill, stroke),
         NodeKind::Compare(_) => crate::nodes::compare::glyph(&painter, sp, r, fill, stroke),
+        NodeKind::MorphDissolve(_) => crate::nodes::morphdissolve::glyph(&painter, sp, r, fill, stroke),
         NodeKind::MotionBlur(_) => {
             crate::nodes::motionblur::glyph(&painter, sp, r, fill, stroke)
         }
@@ -8081,6 +8086,7 @@ impl NodeEditor {
                                 | Some(NodeKind::CorridorKey(_))
                                 | Some(NodeKind::Sammie(_))
                                 | Some(NodeKind::Flow(_))
+                                | Some(NodeKind::MorphDissolve(_))
                                 | Some(NodeKind::Rifetime(_))
                                 | Some(NodeKind::FrameFix(_))
                         ) {

@@ -345,6 +345,7 @@ fn vec4_slots_for(kind: &NodeKind) -> usize {
         NodeKind::Turn(_) => crate::graph::TurnParams::VEC4_SLOTS,
         NodeKind::Uncrop(_) => crate::graph::UncropParams::VEC4_SLOTS,
         NodeKind::Compare(_) => crate::graph::CompareParams::VEC4_SLOTS,
+        NodeKind::MorphDissolve(_) => crate::graph::MorphDissolveParams::VEC4_SLOTS,
         NodeKind::Gamma(_) => GammaParams::VEC4_SLOTS,
         NodeKind::ToneMap(_) => ToneMapParams::VEC4_SLOTS,
         NodeKind::UvWarp(_) => UvWarpParams::VEC4_SLOTS,
@@ -1677,6 +1678,14 @@ impl<'e, 'a> Emit<'e, 'a> {
         }
     }
 
+    /// Reader slot `source` as seen by this node, as a WGSL texture name —
+    /// what a node playing frames off disk samples.
+    pub fn reader(&mut self, source: usize) -> String {
+        let slot = self.cx.graph.slot_for(self.node, self.tkey, source);
+        let idx = self.cx.bind(SourceBinding::Reader(slot));
+        format!("src{idx}")
+    }
+
     /// The node being emitted — what a node naming its own WGSL functions
     /// keys them on.
     pub fn node_id(&self) -> NodeId {
@@ -2827,6 +2836,7 @@ fn emit(
         NodeKind::Turn(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Uncrop(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Compare(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
+        NodeKind::MorphDissolve(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::Gamma(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::ToneMap(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
         NodeKind::UvWarp(p) => p.emit(&mut Emit::new(cx, node, tkey, pos, body, tmp, on_path)),
@@ -4486,6 +4496,9 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 p.pack(f, &mut v[base..base + 4]);
             }
             NodeKind::Flow(p) => p.pack(graph.proxy_scale(), &mut v[base..base + 4]),
+            NodeKind::MorphDissolve(p) => {
+                p.pack(graph.proxy_scale(), &mut v[base..base + crate::graph::MorphDissolveParams::VEC4_SLOTS * 4])
+            }
             NodeKind::VectorWarp(p) => p.pack(&mut v[base..base + 4]),
             NodeKind::GenAi(_) => {
                 let f = graph

@@ -50,6 +50,22 @@ pub struct Job {
     pub backward: bool,
 }
 
+/// What a Morph Dissolve solves: two clips, the motion BETWEEN them at each
+/// tick rather than along either one.
+pub struct PairJob {
+    pub engine: FlowEngine,
+    pub weights: PathBuf,
+    /// A's frames and B's, same length, index for index the same tick.
+    pub a: Vec<PathBuf>,
+    pub b: Vec<PathBuf>,
+    /// One file per tick, named after A's frame: `rg` = A→B, `ba` = B→A.
+    pub out: PathBuf,
+    pub divisor: usize,
+    /// Multiplies the vectors on the way out: full-res pixels per rendered
+    /// pixel, so a solve made under proxy is in the same units as any other.
+    pub scale: f32,
+}
+
 /// Decode one frame to `[3][h][w]` planes, sRGB-encoded and clamped to 0..1
 /// for the network.
 pub(crate) fn load(dec: &crate::decode::AnyDecoder, path: &Path) -> Result<(usize, usize, Vec<f32>)> {
@@ -208,6 +224,88 @@ fn write(path: &Path, w: usize, h: usize, fwd: &[f32], bwd: &[f32]) -> Result<()
     Ok(())
 }
 
+/// The divisor actually used: the one asked for, or a coarser one when a
+/// GPU's buffers cannot hold the picture. Scale down rather than refuse
+/// (manifesto rule 3).
+fn analysis_divisor(device: &wgpu::Device, engine: FlowEngine, w: usize, h: usize, asked: usize) -> usize {
+    let mut d = asked.max(1);
+    if engine == FlowEngine::SeaRaft {
+        let max = device.limits().max_storage_buffer_binding_size as u64;
+        while crate::searaft::largest_buffer(w.div_ceil(d), h.div_ceil(d)) > max && d < 16 {
+            d *= 2;
+        }
+        if d != asked.max(1) {
+            log::warn!("flow: {w}x{h} analysed at 1/{d}, the most this GPU's buffers hold");
+        }
+    }
+    d
+}
+
+fn open_net(
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    engine: FlowEngine,
+    weights: &Path,
+    sw: usize,
+    sh: usize,
+) -> Result<Net> {
+    Ok(match engine {
+        FlowEngine::Rife => {
+            let m = RifeModel::load_pkl(weights).context("loading the RIFE weights")?;
+            Net::Rife(RifeGpu::new(device, queue, &m, sw, sh)?)
+        }
+        FlowEngine::SeaRaft => {
+            let m = crate::searaft::Model::load(weights).context("loading the SEA-RAFT weights")?;
+            Net::SeaRaft(crate::searaft::Gpu::new(device, queue, &m, sw, sh)?)
+        }
+    })
+}
+
+/// Solve A against B at every tick of `job`, both directions, reporting
+/// `(done, total)` after each. A tick whose two pictures match the previous
+/// tick's (held frames, stills) reuses its vectors instead of solving again.
+pub fn run_pair(
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    job: &PairJob,
+    progress: &mut dyn FnMut(usize, usize),
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let total = job.a.len();
+    anyhow::ensure!(total >= 1, "nothing to solve");
+    anyhow::ensure!(job.b.len() == total, "{total} frames of A against {} of B", job.b.len());
+    std::fs::create_dir_all(&job.out).with_context(|| format!("creating {}", job.out.display()))?;
+    let dec = crate::decode::AnyDecoder::default();
+    let first = dec.read_header(&job.a[0]).with_context(|| format!("reading {}", job.a[0].display()))?;
+    let (w, h) = (first.width as usize, first.height as usize);
+    let d = analysis_divisor(&device, job.engine, w, h, job.divisor);
+    let (sw, sh) = (w.div_ceil(d), h.div_ceil(d));
+    let get = |p: &Path| -> Result<Vec<f32>> {
+        let (fw, fh, rgb) = load(&dec, p)?;
+        anyhow::ensure!((fw, fh) == (w, h), "{} is {fw}x{fh}, the first frame was {w}x{h}", p.display());
+        Ok(shrink(&rgb, 3, w, h, d).2)
+    };
+    let net = open_net(device, queue, job.engine, &job.weights, sw, sh)?;
+    let mut last: Option<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> = None;
+    for i in 0..total {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("cancelled");
+        }
+        let (a, b) = (get(&job.a[i])?, get(&job.b[i])?);
+        let (ab, ba) = match &last {
+            Some((pa, pb, ab, ba)) if *pa == a && *pb == b => (ab.clone(), ba.clone()),
+            _ => (motion(&net, &a, &b, sw, sh)?, motion(&net, &b, &a, sw, sh)?),
+        };
+        let full = |f: &[f32]| -> Vec<f32> { grow(f, sw, sh, w, h, d).iter().map(|v| v * job.scale).collect() };
+        let name = job.a[i].file_name().context("a frame without a name")?;
+        write(&job.out.join(name), w, h, &full(&ab), &full(&ba))?;
+        last = Some((a, b, ab, ba));
+        progress(i + 1, total);
+    }
+    crate::bakes::mark_baked(&job.out).context("marking the vectors done")?;
+    Ok(())
+}
+
 /// Solve every frame of `job`, reporting `(done, total)` after each.
 pub fn run(
     device: Arc<wgpu::Device>,
@@ -224,18 +322,7 @@ pub fn run(
         .read_header(&job.frames[0])
         .with_context(|| format!("reading {}", job.frames[0].display()))?;
     let (w, h) = (first.width as usize, first.height as usize);
-    let mut d = job.divisor.max(1);
-    if job.engine == FlowEngine::SeaRaft {
-        // Scale down rather than refuse: a GPU whose buffers cannot hold
-        // the picture analyses a smaller one (manifesto rule 3).
-        let max = device.limits().max_storage_buffer_binding_size as u64;
-        while crate::searaft::largest_buffer(w.div_ceil(d), h.div_ceil(d)) > max && d < 16 {
-            d *= 2;
-        }
-        if d != job.divisor.max(1) {
-            log::warn!("flow: {w}x{h} analysed at 1/{d}, the most this GPU's buffers hold");
-        }
-    }
+    let d = analysis_divisor(&device, job.engine, w, h, job.divisor);
     let (sw, sh) = (w.div_ceil(d), h.div_ceil(d));
     let n = sw * sh;
 
@@ -248,16 +335,7 @@ pub fn run(
     let mut cur = get(0)?;
     let mut next = Some(get(1)?);
     let mut prev: Option<Vec<f32>> = None;
-    let net = match job.engine {
-        FlowEngine::Rife => {
-            let m = RifeModel::load_pkl(&job.weights).context("loading the RIFE weights")?;
-            Net::Rife(RifeGpu::new(device, queue, &m, sw, sh)?)
-        }
-        FlowEngine::SeaRaft => {
-            let m = crate::searaft::Model::load(&job.weights).context("loading the SEA-RAFT weights")?;
-            Net::SeaRaft(crate::searaft::Gpu::new(device, queue, &m, sw, sh)?)
-        }
-    };
+    let net = open_net(device, queue, job.engine, &job.weights, sw, sh)?;
     let mut last_fwd: Option<Vec<f32>> = None;
     let neg = |v: &[f32]| v.iter().map(|x| -x).collect::<Vec<f32>>();
 
@@ -425,6 +503,40 @@ mod tests {
         eprintln!("{engine:?}: mean vectors {m:?}, true forward ({dx}, {dy})");
         assert!((m[0] - dx).abs() < tol && (m[1] - dy).abs() < tol, "{engine:?} forward {m:?}");
         assert!((m[2] + dx).abs() < tol && (m[3] + dy).abs() < tol, "{engine:?} backward {m:?}");
+
+        // Two CLIPS, a Morph Dissolve's solve: frame 0 against frame 2 at
+        // both ticks (twice the move, and the repeat reuses the solve),
+        // written in full-res units for a half-res proxy render.
+        let pair = PairJob {
+            engine,
+            weights: weights.into(),
+            a: vec![frames[0].clone(), frames[0].clone()],
+            b: vec![frames[2].clone(), frames[2].clone()],
+            out: dir.join(format!("pair-{engine:?}")),
+            divisor: 1,
+            scale: 2.0,
+        };
+        let mut reports = 0;
+        run_pair(ctx.device.clone(), ctx.queue.clone(), &pair, &mut |_, _| reports += 1, &AtomicBool::new(false)).unwrap();
+        assert_eq!(reports, 2);
+        assert!(crate::bakes::is_baked(&pair.out));
+        let p = pair.out.join("f_00000.exr");
+        let info = dec.read_header(&p).unwrap();
+        dec.decode_into(&p, info, stride, &mut buf).unwrap();
+        let mut acc = [0f32; 4];
+        for y in 32..h - 32 {
+            for x in 32..w - 32 {
+                for (c, a) in acc.iter_mut().enumerate() {
+                    *a += buf[y * stride + x * 4 + c].to_f32();
+                }
+            }
+        }
+        let m = acc.map(|a| a / n);
+        let want = [4.0 * dx, 4.0 * dy];
+        eprintln!("{engine:?}: A->B / B->A means {m:?}, true A->B {want:?}");
+        let tol = tol * 4.0;
+        assert!((m[0] - want[0]).abs() < tol && (m[1] - want[1]).abs() < tol, "{engine:?} A->B {m:?}");
+        assert!((m[2] + want[0]).abs() < tol && (m[3] + want[1]).abs() < tol, "{engine:?} B->A {m:?}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

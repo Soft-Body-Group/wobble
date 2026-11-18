@@ -112,6 +112,13 @@ pub enum Channel {
     CompareX,
     CompareY,
     CompareAngle,
+    /// Morph Dissolve: progress, how much motion is followed, the dissolve's
+    /// lead and width, how far the occlusion weights are trusted.
+    MorphMix,
+    MorphWarp,
+    MorphLead,
+    MorphWidth,
+    MorphOcclusion,
     /// Lens Distortion: radial, tangential, principal point (normalised),
     /// squeeze, zoom, red and blue magnification.
     LensK1,
@@ -2475,6 +2482,7 @@ pub fn get(kind: &NodeKind, ch: Channel) -> Option<f32> {
         (NodeKind::Burnin(p), _) => return crate::nodes::burnin::get(p, ch),
         (NodeKind::Mirror(p), _) => return crate::nodes::mirror::get(p, ch),
         (NodeKind::Compare(p), _) => return crate::nodes::compare::get(p, ch),
+        (NodeKind::MorphDissolve(p), _) => return crate::nodes::morphdissolve::get(p, ch),
         (NodeKind::LensDistort(p), _) => return crate::nodes::lensdistort::get(p, ch),
         (NodeKind::Gamma(p), _) => return crate::nodes::gamma::get(p, ch),
         (NodeKind::ToneMap(p), _) => return crate::nodes::tonemap::get(p, ch),
@@ -2776,6 +2784,7 @@ pub fn set(kind: &mut NodeKind, ch: Channel, v: f32) {
         (NodeKind::Burnin(p), _) => crate::nodes::burnin::set(p, ch, v),
         (NodeKind::Mirror(p), _) => crate::nodes::mirror::set(p, ch, v),
         (NodeKind::Compare(p), _) => crate::nodes::compare::set(p, ch, v),
+        (NodeKind::MorphDissolve(p), _) => crate::nodes::morphdissolve::set(p, ch, v),
         (NodeKind::LensDistort(p), _) => crate::nodes::lensdistort::set(p, ch, v),
         (NodeKind::Gamma(p), _) => crate::nodes::gamma::set(p, ch, v),
         (NodeKind::ToneMap(p), _) => crate::nodes::tonemap::set(p, ch, v),

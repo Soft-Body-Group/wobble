@@ -34,6 +34,7 @@ pub mod flipflop;
 pub mod turn;
 pub mod uncrop;
 pub mod compare;
+pub mod morphdissolve;
 pub mod mirror;
 pub mod flow;
 pub mod rifetime;

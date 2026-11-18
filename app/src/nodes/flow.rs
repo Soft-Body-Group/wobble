@@ -13,7 +13,6 @@ pub const TILE_ROWS: usize = 1;
 /// The properties panel. The click it hands back is acted on after the
 /// node borrow ends.
 pub fn panel(ui: &mut Ui, node: u64, p: &mut FlowParams, v: &View) -> Option<Action> {
-    let mut act = None;
     ui.horizontal(|ui| {
         ui.label("engine");
         egui::ComboBox::from_id_salt(("flow-engine", node))
@@ -41,6 +40,19 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut FlowParams, v: &View) -> Option<Act
             .on_hover_text("also solve where each pixel came FROM (a second pass a frame); off, it is the forward vector reversed");
     });
     ui.weak("out: rg = forward, ba = backward motion, in pixels");
+    run_rows(
+        ui,
+        v,
+        "not analysed: no motion yet",
+        "renders the input over its range, solves motion between every pair of frames on the GPU, and plays the vectors here. Keyed on everything upstream: an edit shows as STALE, nothing re-runs behind your back",
+    )
+}
+
+/// The run's progress, what is loaded and the analyse button: every node
+/// that plays vectors from this runner shows the same rows. `idle` is what
+/// an unanalysed node says, `tip` what the button does.
+pub fn run_rows(ui: &mut Ui, v: &View, idle: &str, tip: &str) -> Option<Action> {
+    let mut act = None;
     let running = matches!(v.state, ViewState::Rendering(..) | ViewState::Solving(..));
     match &v.state {
         ViewState::Idle => {}
@@ -68,7 +80,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut FlowParams, v: &View) -> Option<Act
             ui.colored_label(theme::error(), "STALE — the input or a setting changed (still playing the old vectors)");
         }
         None if !running => {
-            ui.weak(if v.on_disk { "vectors for this input are on disk — load them" } else { "not analysed: no motion yet" });
+            ui.weak(if v.on_disk { "vectors for this input are on disk — load them" } else { idle });
         }
         None => {}
     }
@@ -84,9 +96,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut FlowParams, v: &View) -> Option<Act
                 _ => "analyse",
             };
             let can = v.has_input && (v.weights || v.on_disk) && !v.busy_elsewhere;
-            let b = ui.add_enabled(can, egui::Button::new(label)).on_hover_text(
-                "renders the input over its range, solves motion between every pair of frames on the GPU, and plays the vectors here. Keyed on everything upstream: an edit shows as STALE, nothing re-runs behind your back",
-            );
+            let b = ui.add_enabled(can, egui::Button::new(label)).on_hover_text(tip);
             if b.clicked() {
                 act = Some(Action::Analyse);
             }

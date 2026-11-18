@@ -92,7 +92,7 @@ pub enum Action {
 /// pipeline — and what differs between them: the result key, the folder,
 /// the weights.
 pub fn is_runner(kind: &NodeKind) -> bool {
-    matches!(kind, NodeKind::Flow(_) | NodeKind::Rifetime(_) | NodeKind::FrameFix(_))
+    matches!(kind, NodeKind::Flow(_) | NodeKind::Rifetime(_) | NodeKind::FrameFix(_) | NodeKind::MorphDissolve(_))
 }
 
 /// `times`: a curve-mode Rifetime's sampled source positions, which are
@@ -102,6 +102,7 @@ fn recipe_of(kind: &NodeKind, times: Option<&[f64]>) -> Option<Vec<u8>> {
         NodeKind::Flow(p) => serde_json::to_vec(&p.recipe()).ok(),
         NodeKind::Rifetime(p) => serde_json::to_vec(&("retime", p.recipe(), times)).ok(),
         NodeKind::FrameFix(p) => serde_json::to_vec(&("framefix", p.recipe())).ok(),
+        NodeKind::MorphDissolve(p) => serde_json::to_vec(&("morph", p.recipe())).ok(),
         _ => None,
     }
 }
@@ -120,8 +121,19 @@ fn model_of(kind: &NodeKind) -> &'static str {
         NodeKind::Flow(p) => p.engine.model(),
         NodeKind::Rifetime(p) => p.models()[0],
         NodeKind::FrameFix(_) => engine::nodes::framefix::MODEL,
+        NodeKind::MorphDissolve(p) => p.engine.model(),
         _ => "",
     }
+}
+
+/// Where a Morph Dissolve's two renders land, by port.
+const MORPH_DIRS: [&str; 2] = ["A", "B"];
+
+/// What the worker thread runs.
+enum Work {
+    Flow(engine::flowsolve::Job),
+    Rifetime(engine::rifetime::Job),
+    Morph(engine::flowsolve::PairJob),
 }
 
 impl Gfx {
@@ -131,10 +143,16 @@ impl Gfx {
         let kind = &self.egraph.node(node)?.kind;
         let input = self.egraph.input_of(node, 0)?;
         let k0 = self.subtree_key_of(input)?;
-        let (from, len) = self.flow_range(input);
+        let (from, len) = self.run_range(node)?;
         let times = self.rifetime_times(node);
         let recipe = serde_json::to_vec(&(recipe_of(kind, times.as_deref())?, from, len)).ok()?;
-        let key = engine::diskcache::content_hash(&[&k0.to_le_bytes(), &recipe]);
+        let key = if matches!(kind, NodeKind::MorphDissolve(_)) {
+            // Both pictures shape the vectors.
+            let k1 = self.subtree_key_of(self.egraph.input_of(node, 1)?)?;
+            engine::diskcache::content_hash(&[&k0.to_le_bytes(), &k1.to_le_bytes(), &recipe])
+        } else {
+            engine::diskcache::content_hash(&[&k0.to_le_bytes(), &recipe])
+        };
         let root = match &self.disk_cache {
             Some(c) => c.root().join("flow"),
             None => engine::paths::temp_dir().join("wobble-flow"),
@@ -170,6 +188,38 @@ impl Gfx {
         (a.saturating_sub(self.handles.0), b.saturating_add(self.handles.1) + 1)
     }
 
+    /// The frames a run of `node` renders and solves.
+    fn run_range(&self, node: u64) -> Option<(u64, u64)> {
+        if matches!(self.egraph.node(node)?.kind, NodeKind::MorphDissolve(_)) {
+            self.morph_span(node)
+        } else {
+            Some(self.flow_range(self.egraph.input_of(node, 0)?))
+        }
+    }
+
+    /// What a Morph Dissolve solves: the frames A and B share, narrowed to
+    /// those where a keyed `mix` is really between its ends (outside them
+    /// the node shows one input untouched, so vectors there would never be
+    /// read). None when A and B are not both wired or share no frame.
+    pub(crate) fn morph_span(&self, node: u64) -> Option<(u64, u64)> {
+        let n = self.egraph.node(node)?;
+        let (a0, a1) = self.flow_range(self.egraph.input_of(node, 0)?);
+        let (b0, b1) = self.flow_range(self.egraph.input_of(node, 1)?);
+        let (from, len) = (a0.max(b0), a1.min(b1));
+        if from >= len {
+            return None;
+        }
+        let Some(curve) = n.anim.get(&crate::anim::Channel::MorphMix).filter(|c| !c.keys.is_empty()) else {
+            return Some((from, len));
+        };
+        let moving = |t: &u64| curve.eval(*t).is_some_and(|v| v > 0.0 && v < 1.0);
+        match ((from..len).find(moving), (from..len).rev().find(moving)) {
+            (Some(a), Some(b)) => Some((a, b + 1)),
+            // Keyed, but it only ever sits at an end.
+            _ => Some((from, len)),
+        }
+    }
+
     pub(crate) fn flow_view(&self, node: u64) -> View {
         let mine = self.jobs.flow.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
@@ -192,7 +242,9 @@ impl Gfx {
         });
         View {
             state,
-            has_input: self.egraph.input_of(node, 0).is_some(),
+            has_input: self.egraph.input_of(node, 0).is_some()
+                && (self.egraph.input_of(node, 1).is_some()
+                    || !matches!(self.egraph.node(node).map(|n| &n.kind), Some(NodeKind::MorphDissolve(_)))),
             weights: self.egraph.node(node).is_some_and(|n| engine::models::ready_path(model_of(&n.kind)).is_ok()),
             loaded,
             on_disk: want.as_ref().is_some_and(|d| engine::bakes::is_baked(d)),
@@ -240,9 +292,9 @@ impl Gfx {
         #[cfg(target_arch = "wasm32")]
         return self.flow_fail(node, "the analysis needs a worker thread: not in the web build");
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
-        let Some(input) = self.egraph.input_of(node, 0) else {
+        if self.egraph.input_of(node, 0).is_none() {
             return self.flow_fail(node, "wire a picture into the input");
-        };
+        }
         let Some(dir) = self.flow_dir(node) else {
             return self.flow_fail(node, "the input is not renderable yet");
         };
@@ -259,19 +311,24 @@ impl Gfx {
             return self.flow_fail(node, &format!("{e}"));
         }
         self.jobs.flow.run = Some(Run { node, dir: dir.clone(), phase: Phase::Render });
-        if let Err(e) = self.flow_render(node, input, dir) {
+        if let Err(e) = self.flow_render(node, 0, dir) {
             self.flow_fail(node, &e);
         }
     }
 
-    /// A `SubtreeBake` of `input` into `<dir>/Input`.
-    fn flow_render(&mut self, node: u64, input: u64, dir: PathBuf) -> Result<(), String> {
-        let sub = dir.join("Input");
+    /// A `SubtreeBake` of input `port`: into `<dir>/Input`, or a Morph
+    /// Dissolve's `<dir>/A` and `<dir>/B`.
+    fn flow_render(&mut self, node: u64, port: usize, dir: PathBuf) -> Result<(), String> {
+        let morph = matches!(self.egraph.node(node).map(|n| &n.kind), Some(NodeKind::MorphDissolve(_)));
+        let input = self.egraph.input_of(node, port).ok_or("wire a picture into the input")?;
+        let sub = dir.join(if morph { MORPH_DIRS[port] } else { "Input" });
         std::fs::create_dir_all(&sub).map_err(|e| format!("{e}"))?;
         let key = self.subtree_key_of(input).ok_or("the input is not renderable yet")?;
         let (w, h) = self.comp.output_size().ok_or("nothing is rendering yet")?;
-        let (from, len) = self.flow_range(input);
-        if len.saturating_sub(from) < 2 {
+        let (from, len) = self.run_range(node).ok_or("A and B share no frames")?;
+        // Motion ALONG a clip needs a pair of frames; between two clips one
+        // tick is enough.
+        if !morph && len.saturating_sub(from) < 2 {
             return Err("this needs at least two frames; the input's range has one".into());
         }
         self.playing = false;
@@ -300,7 +357,7 @@ impl Gfx {
             next,
             readback,
             info,
-            sink: crate::BakeSink::Flow,
+            sink: if morph { crate::BakeSink::Morph { port } } else { crate::BakeSink::Flow },
         };
         if bake.next >= bake.len {
             self.finish_graph_bake(bake);
@@ -333,10 +390,6 @@ impl Gfx {
         // The input's first comp frame: where a retime's output starts.
         let first = self.egraph.input_of(node, 0).map(|i| self.flow_range(i).0).unwrap_or(0);
         let out = dir.join(out_dir_name(&kind));
-        enum Work {
-            Flow(engine::flowsolve::Job),
-            Rifetime(engine::rifetime::Job),
-        }
         let work = match &kind {
             NodeKind::Flow(p) => Work::Flow(engine::flowsolve::Job {
                 engine: p.engine,
@@ -362,6 +415,47 @@ impl Gfx {
             }
             _ => return self.flow_fail(node, "not a Flow, Rifetime or Frame Fix node"),
         };
+        self.flow_spawn(node, work);
+    }
+
+    /// A Morph Dissolve's render of input `port` finished: B next, then
+    /// solve A against B at every tick.
+    pub(crate) fn morph_render_finished(&mut self, node: u64, port: usize) {
+        let Some(r) = self.jobs.flow.run.as_ref().filter(|r| r.node == node) else { return };
+        let dir = r.dir.clone();
+        if port == 0 {
+            if let Err(e) = self.flow_render(node, 1, dir) {
+                self.flow_fail(node, &e);
+            }
+            return;
+        }
+        let Some(NodeKind::MorphDissolve(p)) = self.egraph.node(node).map(|n| n.kind.clone()) else {
+            return self.flow_fail(node, "the node is gone");
+        };
+        let weights = match engine::models::ready_path(p.engine.model()) {
+            Ok(w) => w,
+            Err(e) => return self.flow_fail(node, &format!("{e}")),
+        };
+        let Some((from, len)) = self.morph_span(node) else {
+            return self.flow_fail(node, "A and B share no frames");
+        };
+        let list = |sub: &str| -> Vec<PathBuf> { (from..len).map(|t| dir.join(sub).join(frame_name(t))).collect() };
+        let job = engine::flowsolve::PairJob {
+            engine: p.engine,
+            weights,
+            a: list(MORPH_DIRS[0]),
+            b: list(MORPH_DIRS[1]),
+            out: dir.join(out_dir_name(&NodeKind::MorphDissolve(p.clone()))),
+            divisor: p.detail.divisor(),
+            // Rendered under proxy, the vectors are proxy pixels; the node
+            // wants full-res ones (it scales them back on the way out).
+            scale: 1.0 / self.proxy.clamp(0.01, 1.0),
+        };
+        self.flow_spawn(node, Work::Morph(job));
+    }
+
+    /// Run `work` on a thread; `flow_poll` takes it from there.
+    fn flow_spawn(&mut self, node: u64, work: Work) {
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let (device, queue, stop) = (self.ctx.device.clone(), self.ctx.queue.clone(), cancel.clone());
@@ -372,6 +466,7 @@ impl Gfx {
             let r = match &work {
                 Work::Flow(job) => engine::flowsolve::run(device, queue, job, &mut progress, &stop),
                 Work::Rifetime(job) => engine::rifetime::run(device, queue, job, &mut progress, &stop),
+                Work::Morph(job) => engine::flowsolve::run_pair(device, queue, job, &mut progress, &stop),
             };
             let _ = tx.send(match r {
                 Ok(()) => Msg::Done,

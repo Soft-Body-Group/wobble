@@ -453,6 +453,11 @@ Shader node reads them like any input. Two nodes are built for them:
   `samples`, and a matte on port `~` that scales the shutter. One pass, red
   in the graph. It smears what moved IN THE PLATE — the thing MotionBlur
   cannot.
+- **Morph Dissolve** (Composite) — a transition between A and B: each is
+  warped toward the other along the optical flow between them while they
+  cross-dissolve. Key `mix` from 0 to 1 and press `analyse`, which solves both
+  directions at each frame where `mix` is between its ends. Unanalysed it is a
+  plain dissolve; once analysed, moving `mix` or any slider solves nothing.
 - **VectorWarp** (Transform) — the picture sampled where the vectors point,
   `amount` frames along them (+ forward, − backward). Amount 1 over the NEXT
   frame (a TimeOffset of +1 upstream) pulls that frame back onto this one:

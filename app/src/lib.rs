@@ -4276,6 +4276,9 @@ enum BakeSink {
     /// A GraphBake node caching its subtree: fixed names in a keyed cache
     /// dir, adopted as that node's reader when it completes.
     Cache,
+    /// A Morph Dissolve's render of input `port` (0 = A, 1 = B), the pair
+    /// its motion is solved between.
+    Morph { port: usize },
     /// A Write node rendering to the user's path: their names, their frame
     /// numbering, and nothing is adopted — the output is the point.
     Write {
@@ -4342,6 +4345,10 @@ impl SubtreeBake {
             BakeSink::Sammie | BakeSink::Flow | BakeSink::Upscale | BakeSink::HdrCnn | BakeSink::SeedVr | BakeSink::Depth | BakeSink::LtxHdr => {
                 self.dir.join("Input").join(corridorkey::frame_name(tick))
             }
+            BakeSink::Morph { port } => self
+                .dir
+                .join(if *port == 0 { "A" } else { "B" })
+                .join(corridorkey::frame_name(tick)),
             BakeSink::Stabilize { port } | BakeSink::CamTrack { port } => self
                 .dir
                 .join(if *port == 0 { "Input" } else { "Matte" })
@@ -5591,6 +5598,13 @@ fn repair_reader_slots(g: &mut EditorGraph) -> usize {
                 }
             }
             NodeKind::FrameFix(p) => {
+                if p.source != usize::MAX && !seen.insert(p.source) {
+                    p.source = next;
+                    seen.insert(next);
+                    next += 1;
+                }
+            }
+            NodeKind::MorphDissolve(p) => {
                 if p.source != usize::MAX && !seen.insert(p.source) {
                     p.source = next;
                     seen.insert(next);
@@ -7726,6 +7740,11 @@ impl Gfx {
                     p.loaded = loaded.is_some();
                     p.start = loaded.and_then(|l| l.first_frame);
                 }
+                if let NodeKind::MorphDissolve(p) = kind {
+                    let loaded = self.loaded.get(id);
+                    p.loaded = loaded.is_some();
+                    p.start = loaded.and_then(|l| l.first_frame);
+                }
                 if let NodeKind::Rifetime(p) = kind {
                     let loaded = self.loaded.get(id);
                     p.loaded = loaded.is_some();
@@ -7918,7 +7937,7 @@ impl Gfx {
                 BakeSink::Sammie => Some(engine::color::Colorspace::LINEAR_REC709),
                 // The motion solve reads a picture: linear Rec.709, which
                 // it encodes to sRGB for the network.
-                BakeSink::Flow => Some(engine::color::Colorspace::LINEAR_REC709),
+                BakeSink::Flow | BakeSink::Morph { .. } => Some(engine::color::Colorspace::LINEAR_REC709),
                 // The upscale reads a picture: linear Rec.709, encoded to
                 // sRGB around the network.
                 BakeSink::Upscale => Some(engine::color::Colorspace::LINEAR_REC709),
@@ -8109,6 +8128,10 @@ impl Gfx {
             self.flow_render_finished(bake.node);
             return;
         }
+        if let BakeSink::Morph { port } = bake.sink {
+            self.morph_render_finished(bake.node, port);
+            return;
+        }
         if let BakeSink::Stabilize { port } = bake.sink {
             self.stab_render_finished(bake.node, port);
             return;
@@ -8181,6 +8204,11 @@ impl Gfx {
             }
             // And a Flow's vectors.
             if let NodeKind::Flow(p) = kind {
+                let loaded = self.loaded.get(id);
+                p.loaded = loaded.is_some();
+                p.start = loaded.and_then(|l| l.first_frame);
+            }
+            if let NodeKind::MorphDissolve(p) = kind {
                 let loaded = self.loaded.get(id);
                 p.loaded = loaded.is_some();
                 p.start = loaded.and_then(|l| l.first_frame);
@@ -9661,6 +9689,7 @@ impl Gfx {
                 // A key's frames are already on NVMe, as the tool wrote them.
                 NodeKind::CorridorKey(_)
                 | NodeKind::Sammie(_)
+                | NodeKind::MorphDissolve(_)
                 | NodeKind::Flow(_)
                 | NodeKind::Rifetime(_)
                 | NodeKind::FrameFix(engine::graph::FrameFixParams { mode: engine::graph::FrameFixMode::Flow, .. })
@@ -13925,6 +13954,7 @@ impl Gfx {
                             | NodeKind::GraphBake { .. }
                             | NodeKind::CorridorKey(_)
                             | NodeKind::Sammie(_)
+                            | NodeKind::MorphDissolve(_)
                             | NodeKind::Flow(_)
                             | NodeKind::Rifetime(_)
                             | NodeKind::FrameFix(_)
@@ -23096,6 +23126,7 @@ impl Gfx {
                 let mut sammie_click: Option<sammie::Action> = None;
                 let flow_view = self.flow_view(node);
                 let mut flow_click: Option<flowui::Action> = None;
+                let morph_span = self.morph_span(node);
                 let stab_view = self.stab_view(node);
                 let mut stab_click: Option<nodes::stabilize::Click> = None;
                 let ct_view = self.ct_view(node);
@@ -23810,6 +23841,13 @@ impl Gfx {
                     }
                     NodeKind::Flow(fp) => {
                         flow_click = nodes::flow::panel(ui, node, fp, &flow_view);
+                    }
+                    NodeKind::MorphDissolve(mp) => {
+                        let (h, click) = nodes::morphdissolve::panel(ui, &mut rcx, mp, &flow_view, morph_span);
+                        flow_click = click;
+                        if let Some(h) = h {
+                            hud_drag_out = Some(h);
+                        }
                     }
                     NodeKind::Stabilize(sp) => {
                         stab_click = nodes::stabilize::panel(ui, &mut rcx, sp, &stab_view, &mut hud_drag_out);
@@ -25914,6 +25952,7 @@ fn motion_blur_samples(
                                     NodeKind::GraphBake { .. }
                                         | NodeKind::CorridorKey(_)
                                         | NodeKind::Sammie(_)
+                                        | NodeKind::MorphDissolve(_)
                                         | NodeKind::Flow(_)
                                         | NodeKind::Rifetime(_)
                                         | NodeKind::FrameFix(_)

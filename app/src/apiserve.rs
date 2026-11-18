@@ -2042,7 +2042,7 @@ impl Gfx {
             NodeKind::Tracker(_) | NodeKind::PlanarTrack(_) => "track",
             NodeKind::CorridorKey(_) => "key",
             NodeKind::Sammie(_) => "track",
-            NodeKind::Flow(_) => "analyse",
+            NodeKind::Flow(_) | NodeKind::MorphDissolve(_) => "analyse",
             NodeKind::Stabilize(_) => "analyse",
             NodeKind::CamTrack(_) => "solve",
             NodeKind::Rifetime(_) => "render",
@@ -2126,7 +2126,7 @@ impl Gfx {
                 }
             }
             (NodeKind::Sammie(_), "cancel") => self.sammie_action(id, crate::sammie::Action::Cancel),
-            (NodeKind::Flow(_), "analyse") => {
+            (NodeKind::Flow(_) | NodeKind::MorphDissolve(_), "analyse") => {
                 self.flow_action(id, crate::flowui::Action::Analyse);
                 if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.flow.run.as_ref().map(|r| &r.phase) {
                     return Err(ApiError::app(e.clone()));
@@ -2139,7 +2139,7 @@ impl Gfx {
                 }
             }
             (NodeKind::Rifetime(_) | NodeKind::FrameFix(_), "cancel") => self.flow_action(id, crate::flowui::Action::Cancel),
-            (NodeKind::Flow(_), "cancel") => self.flow_action(id, crate::flowui::Action::Cancel),
+            (NodeKind::Flow(_) | NodeKind::MorphDissolve(_), "cancel") => self.flow_action(id, crate::flowui::Action::Cancel),
             (NodeKind::Stabilize(_), "analyse") => {
                 self.stab_action(id, crate::flowui::Action::Analyse);
                 if let Some(crate::flowui::Phase::Failed(e)) = self.jobs.stab.run.as_ref().map(|r| &r.phase) {
@@ -2231,6 +2231,7 @@ impl Gfx {
                 crate::BakeSink::Corridor { .. } => "key-inputs",
                 crate::BakeSink::Sammie => "track-plate",
                 crate::BakeSink::Flow => "flow-input",
+                crate::BakeSink::Morph { .. } => "morph-input",
                 crate::BakeSink::Upscale => "upscale-input",
                 crate::BakeSink::HdrCnn => "hdrcnn-input",
                 crate::BakeSink::SeedVr => "seedvr-input",

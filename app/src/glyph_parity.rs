@@ -96,6 +96,7 @@ fn icon_of(kind: &NodeKind) -> Option<Icon> {
         NodeKind::SoftCrop(_) => Icon::SoftCrop,
         NodeKind::Uncrop(_) => Icon::Uncrop,
         NodeKind::Compare(_) => Icon::Compare,
+        NodeKind::MorphDissolve(_) => Icon::MorphDissolve,
         NodeKind::Spline(_) => Icon::Spline,
         NodeKind::LumaKey(_) => Icon::LumaKey,
         NodeKind::Keyer(_) => Icon::Keyer,

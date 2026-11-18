@@ -104,6 +104,7 @@ pub enum Icon {
     SoftCrop,
     Uncrop,
     Compare,
+    MorphDissolve,
     UvWarp,
     Env,
     Refract,
@@ -264,6 +265,7 @@ pub const NODES: &[Node] = &[
     n(Icon::ChannelSelect, "ChannelSelect", Slot::node_channel_select),
     n(Icon::Shuffle, "Reorder", Slot::node_shuffle),
     n(Icon::Blend, "Blend", Slot::node_blend),
+    n(Icon::MorphDissolve, "Morph Dissolve", Slot::node_morph_dissolve),
     n(Icon::Mix, "Mix", Slot::node_mix),
     n(Icon::Layer, "Layer", Slot::node_layer),
     n(Icon::Switch, "Switch", Slot::node_switch),
@@ -738,6 +740,7 @@ fn body(painter: &Painter, icon: Icon, sp: Pos2, r: f32, scale: f32, fill: Color
         }
         Icon::Uncrop => uncrop(painter, sp, r, fill, stroke),
         Icon::Compare => compare(painter, sp, r, fill, stroke),
+        Icon::MorphDissolve => morphdissolve(painter, sp, r, fill, stroke),
         Icon::MotionBlur => {
             motionblur(painter, sp, r, fill, stroke)
         }
@@ -2106,6 +2109,17 @@ fn vectorblur(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke)
     painter.line_segment([a, b], ink);
     painter.line_segment([b, b - Vec2::new(r * 0.16, r * 0.1)], ink);
     painter.line_segment([b, b - Vec2::new(r * 0.12, -r * 0.16)], ink);
+}
+
+/// `app/src/nodes/morphdissolve.rs` `glyph`.
+fn morphdissolve(painter: &Painter, c: Pos2, r: f32, fill: Color32, stroke: Stroke) {
+    painter.circle(c - Vec2::new(r * 0.32, 0.0), r * 0.62, fill, stroke);
+    painter.circle(c + Vec2::new(r * 0.32, 0.0), r * 0.62, fill, stroke);
+    let ink = Stroke::new((r * 0.12).max(1.0), crate::theme::node_ink());
+    let (a, b) = (c - Vec2::new(r * 0.5, 0.0), c + Vec2::new(r * 0.5, 0.0));
+    painter.line_segment([a, b], ink);
+    painter.line_segment([b, b + Vec2::new(-r * 0.2, -r * 0.18)], ink);
+    painter.line_segment([b, b + Vec2::new(-r * 0.2, r * 0.18)], ink);
 }
 
 /// `app/src/nodes/vectorwarp.rs` `glyph`.

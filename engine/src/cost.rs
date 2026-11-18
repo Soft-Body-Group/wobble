@@ -257,6 +257,8 @@ mod tests {
             NodeKind::Turn(Default::default()),
             NodeKind::Uncrop(Default::default()),
             NodeKind::Compare(Default::default()),
+            NodeKind::MorphDissolve(Default::default()),
+            NodeKind::MorphDissolve(crate::graph::MorphDissolveParams { loaded: true, ..Default::default() }),
             NodeKind::Gamma(Default::default()),
             NodeKind::ToneMap(Default::default()),
             NodeKind::UvWarp(Default::default()),

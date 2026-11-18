@@ -472,6 +472,27 @@ user-facing story. The things that cost time, so nobody pays twice:
   pixel pairs so a coordinate halves EXACTLY per level. A sampling
   convention slip here reads as a constant 0.7 px error, not as a bug.
 
+## Morph Dissolve (`engine/src/nodes/morphdissolve.rs`, `app/src/nodes/morphdissolve.rs`, `flowsolve::run_pair`)
+
+A and B warped toward each other along their optical flow while they
+dissolve. A client of the Flow runner (`flowui`). What must stay true:
+
+- **It fuses.** The solve is the explicit slow step; playback is flow taps
+  and two `input_at`s, so `speed_of` is Fast and it takes no stage. Do not give
+  it a pass without a measurement that says so.
+- **Both ends are the inputs, exactly**, whatever the vectors hold: at
+  `mix` 0 A's lookup is the pixel and B's weight is zero, and the reverse at 1.
+  `dissolve()` keeps that for every `lead` / `width`.
+- **`mix` and the look sliders are uniforms and stay out of `recipe()`.** Only
+  the keyed span of `mix` reaches the result key (`Gfx::morph_span`): frames
+  outside it show one input untouched, so nothing there is solved.
+- **Vectors are per TICK, A against B** (`rg` = A→B, `ba` = B→A), in Flow's
+  file format and full-res units; `PairJob::scale` converts a proxy render.
+- **A failed round trip is not a failed lookup.** A pixel only one picture has
+  fails forward-backward consistency and is still the right answer, so it keeps
+  a small weight that beats a lookup that missed. `engine/tests/morphdissolve.rs`
+  pins it with a moving square.
+
 ## Flow + motion vectors (`engine/src/searaft*`, `engine/src/rife*`, `engine/src/flowsolve.rs`, `engine/src/nodes/flow.rs`, `app/src/flowui.rs`)
 
 Two flow networks in WGSL behind the Flow node (`FlowEngine`): SEA-RAFT

@@ -430,6 +430,7 @@ slots! {
         node_geo: "2dini + geometry" = shade(S::family_source, rgb(0xc4, 0x6f, 0x8a));
         node_bake: "Bake" = shade(S::family_time, rgb(0x8f, 0x8f, 0x4f));
         node_blend: "Blend" = shade(S::family_merge, gray(0x77));
+        node_morph_dissolve: "Morph Dissolve" = shade(S::family_merge, rgb(0x6f, 0x86, 0x9c));
         node_blender: "Blender" = shade(S::family_source, rgb(0x4f, 0x8f, 0xd6));
         // Slate, not a hue of its own (it was magenta): the `$` badge and
         // the progress ring say what a GenAI node is doing. Cooler and

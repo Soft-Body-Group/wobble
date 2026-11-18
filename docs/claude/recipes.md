@@ -140,7 +140,7 @@ templates:
 Nodes that already live in `nodes/`: LUT, Text (a per-glyph layer, see **Text node**) and Burnin (a per-node
 distance-field glyph atlas from `engine::textraster`, `SourceBinding::Text`;
 size, place, colour and the frame are uniforms, only the words
-re-rasterise), Flow, Lens Distortion, Stabilize, VectorBlur, VectorWarp, Saturation, Contrast (fused; its optional local-contrast pyramid is a stage only while `local` is on), ScreenKey, CorridorKey (a process-backed reader, see **CorridorKey** below), Sammie (the same, see **Sammie**), Depth (the same, see **Depth node**), Blur, Dilate, Glow, Glint, Diffuse, EdgeDetect, Median, HighlightRebuild, Convolve,
+re-rasterise), Flow, Morph Dissolve, Lens Distortion, Stabilize, VectorBlur, VectorWarp, Saturation, Contrast (fused; its optional local-contrast pyramid is a stage only while `local` is on), ScreenKey, CorridorKey (a process-backed reader, see **CorridorKey** below), Sammie (the same, see **Sammie**), Depth (the same, see **Depth node**), Blur, Dilate, Glow, Glint, Diffuse, EdgeDetect, Median, HighlightRebuild, Convolve,
 SoftCrop, UV Warp, ToData, ToRgba, ColorCompress, MotionBlur, ColorSlice (shown as the Tinter), HueRotate, Gamma, Expression, Despill, Lightwrap, Gradient, Grain. Every other node still carries its body
 inside the central files (Defocus, Loop and Shader build their passes by
 hand in `compositor.rs` — the next stages to move).
