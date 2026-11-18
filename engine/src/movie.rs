@@ -670,6 +670,12 @@ pub fn encode_mp4(path: &Path, frames: &[Vec<u8>], w: u32, h: u32, fps: f32) -> 
         let mut packet = ff::Packet::empty();
         while enc.receive_packet(&mut packet).is_ok() {
             packet.set_stream(index);
+            // One frame long, each: left at zero the LAST frame has no
+            // length, and 48 frames at 24 read as 1.958 s, not 2 — which a
+            // model with a two-second minimum refuses (Wan 2.7 did).
+            if packet.duration() == 0 {
+                packet.set_duration(1);
+            }
             packet.rescale_ts(tb, stream_tb);
             packet.write_interleaved(octx)?;
         }

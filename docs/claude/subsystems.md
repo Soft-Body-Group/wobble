@@ -1590,6 +1590,9 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   (`sync_time_maps` inside the swap in `redraw`): step ids reuse comp
   ids, and the pipeline node's own reader was being looked up as a step
   and never shown in there.
+- **A clip keys on its FRAMES** (`Clip::key` = `run::frames_key`), not on
+  the mp4's bytes: an encoder never writes the same file twice, and the
+  bytes re-billed every re-capture (found by the live run, $0.20 a time).
 - **Runs go side by side once PAID.** `Runs::run` is the one being
   prepared (capture, quote, waiting for pay & run: one at a time, they
   share the capture bake) or the last that ended; a run that reaches

@@ -1556,11 +1556,14 @@ fn encode_clip(frames: Vec<(Vec<u8>, u32, u32)>, fps: f32) -> Result<Clip, Strin
     {
         let path = std::env::temp_dir().join(format!("wobble-genai-clip-{}.mp4", std::process::id()));
         let px: Vec<Vec<u8>> = frames.into_iter().map(|f| f.0).collect();
+        // Keyed on the frames: the encoder never writes the same file
+        // twice, and a key on its bytes re-billed every re-capture.
+        let key = genai::run::frames_key(&px, w, h, fps);
         let r = engine::movie::encode_mp4(&path, &px, w, h, fps)
             .map_err(|e| format!("encoding the clip: {e:#}"))
             .and_then(|_| std::fs::read(&path).map_err(|e| format!("reading the clip back: {e}")));
         let _ = std::fs::remove_file(&path);
-        r.map(|bytes| Clip { bytes, w, h, frames: n, fps })
+        r.map(|bytes| Clip { bytes, w, h, frames: n, fps, key })
     }
     #[cfg(not(feature = "movie"))]
     {
@@ -2805,6 +2808,334 @@ impl Gfx {
     }
 }
 
+// ------------------------------------------------------------ --test-genai, live
+
+/// The most a live test may be quoted, in USD, before it refuses to pay.
+const LIVE_CAP_USD: f64 = 1.0;
+
+impl crate::Gfx {
+    /// `WOBBLE_TEST_GENAI_LIVE=1 wobble <a clip of 2 s or more> --test-genai`:
+    /// the whole workflow against the REAL fal, on the key in
+    /// `~/.wobble/genai.json` (or `FAL_KEY`), for a few cents:
+    ///
+    /// 1. a plate into a GenAI Pipeline's image input;
+    /// 2. inside, Wan 2.7 video edit run FROM ITS OWN NODE on two seconds
+    ///    of it (quote, cap check, pay & run);
+    /// 3. while that is going, FLUX schnell (a still) quoted, paid and
+    ///    run beside it: two runs at once;
+    /// 4. both results on disk and viewable inside;
+    /// 5. the pipeline's own run (Wan cached: free) lands a video take,
+    ///    loaded in the node's reader;
+    /// 6. outside, the node's output is that take, not the plate, and a
+    ///    node downstream of it gets the same picture.
+    ///
+    /// Results stay in `$TMPDIR/wobble-test-genai-live` to be looked at.
+    fn drive_test_genai_live(&mut self, t: &mut TestGenai) {
+        let fail = |m: String| -> ! {
+            println!("GENAI LIVE FAIL: {m}");
+            std::process::exit(1);
+        };
+        // Every run's state, said once each time it changes: the log of a
+        // live run is how a failure is read afterwards.
+        let states: Vec<String> = self
+            .jobs
+            .genai
+            .run
+            .iter()
+            .chain(self.jobs.genai.background.iter())
+            .map(|r| {
+                let steps: Vec<String> = r.steps.iter().map(|(i, s)| format!("{i}:{}", state_words(s))).collect();
+                let phase = match &r.phase {
+                    Phase::Capturing { .. } => "capturing".to_string(),
+                    Phase::Quoting { .. } => "quoting".into(),
+                    Phase::Ready { .. } => "ready".into(),
+                    Phase::Running { .. } => "running".into(),
+                    Phase::Failed(e) => format!("FAILED {e}"),
+                    Phase::Done(w) => format!("done ({w})"),
+                };
+                format!("[step {:?} {phase} {}]", r.to_step, steps.join(", "))
+            })
+            .collect();
+        {
+            static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+            let now = states.join(" ");
+            let mut last = LAST.lock().unwrap();
+            if *last != now {
+                println!("GENAI LIVE: +{:.0} s stage {} {now}", t.t0.elapsed().as_secs_f32(), t.stage);
+                *last = now;
+            }
+        }
+        if t.t0.elapsed().as_secs() > 1200 {
+            fail(format!("timeout at stage {}: {}", t.stage, states.join(" ")));
+        }
+        let all_ended = |me: &Self| !me.jobs.genai.run.iter().chain(me.jobs.genai.background.iter()).any(|r| r.active());
+        let step_of = |me: &Self, model: &str| -> usize {
+            me.egraph
+                .nodes
+                .iter()
+                .filter(|(_, n)| is_step(&n.kind))
+                .position(|(_, n)| matches!(&n.kind, NodeKind::GenAiStep(Op::Generate { model: m, .. }) if m == model))
+                .unwrap_or_else(|| fail(format!("no {model} step inside")))
+        };
+        let probe = |me: &mut Self, t: &mut TestGenai| -> Option<f32> {
+            if me.force_display || me.eval_tick() != me.timeline_pos || t.since.elapsed().as_millis() < 400 {
+                return None;
+            }
+            let v = me.probe_output_box(900, 500, 64, 64, 0)?;
+            t.since = web_time::Instant::now();
+            match t.last.replace(v) {
+                Some(p) if (p - v).abs() < 1e-5 => {
+                    t.last = None;
+                    Some(v)
+                }
+                _ => None,
+            }
+        };
+        let next = |t: &mut TestGenai, s: u32| {
+            t.stage = s;
+            t.since = web_time::Instant::now();
+            t.last = None;
+        };
+        // Quoted, under the cap: pay. Anything else stops the test.
+        let pay = |me: &mut Self, owner: u64, what: &str| -> Option<f64> {
+            match me.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("{what}: {e}")),
+                Some(Phase::Ready { quote, .. }) => {
+                    let usd = match quote {
+                        Ok(q) => q.total().unwrap_or_else(|| fail(format!("{what}: the quote has no total ({q:?})"))),
+                        Err(e) => fail(format!("{what}: no price: {e}")),
+                    };
+                    if usd > LIVE_CAP_USD {
+                        fail(format!("{what} is quoted ${usd:.2}, over the test's ${LIVE_CAP_USD:.2} cap: not paid"));
+                    }
+                    me.genai_in_comp(|g| g.genai_action(owner, Action::Confirm));
+                    Some(usd)
+                }
+                _ => None,
+            }
+        };
+        match t.stage {
+            0 if self.playback.is_some() && self.displayed_total >= 2 => {
+                if !clip_ok() {
+                    fail(NO_CLIP.into());
+                }
+                let dir = std::env::temp_dir().join("wobble-test-genai-live");
+                std::env::set_var("WOBBLE_GENAI_DIR", dir.join("results"));
+                self.jobs.genai = Runs::default();
+                if let Err(e) = self.jobs.genai.cfg.can_bill() {
+                    fail(format!("no way to pay: {e}"));
+                }
+                let read = self
+                    .egraph
+                    .nodes
+                    .iter()
+                    .find(|(_, n)| matches!(n.kind, NodeKind::Read { .. }))
+                    .map(|(id, _)| *id)
+                    .unwrap_or_else(|| fail("no Load in the default graph".into()));
+                let slot = self.next_read_slot;
+                self.next_read_slot += 1;
+                let mut p = GenAiParams::new(slot);
+                // prompt + image (two seconds, as a clip) -> Wan 2.7 edit ->
+                // Output; and, beside it, a prompt -> FLUX schnell.
+                let mut pl = Pipeline::bare(vec![genai::InKind::Image, genai::InKind::Matte]);
+                let img = pl.input_step(0).unwrap();
+                if let Op::Input { clip, seconds, .. } = &mut pl.steps[img].op {
+                    (*clip, *seconds) = (true, 2.0);
+                }
+                let ask = pl.push(Op::Prompt { text: "make the fabric deep blue".into() }, [-300.0, 0.0]);
+                let wan = pl.push(
+                    Op::Generate { model: "fal/wan-2.7-video-edit".into(), seed: 1, opts: Opts::default() },
+                    [0.0, 150.0],
+                );
+                let out = pl.push(Op::Output, [0.0, 320.0]);
+                let ask2 = pl.push(Op::Prompt { text: "a small red paper boat on a grey table".into() }, [400.0, 0.0]);
+                let still = pl.push(
+                    Op::Generate {
+                        model: "fal/flux-schnell".into(),
+                        // A seed of its own each time: really SUBMITTED
+                        // beside Wan, never found cached ($0.003).
+                        seed: (std::process::id() % 100_000).max(2),
+                        opts: Opts { megapixels: 0.25, ..Opts::default() },
+                    },
+                    [400.0, 150.0],
+                );
+                if !(pl.connect(ask, wan, 0) && pl.connect(img, wan, 1) && pl.connect(wan, out, 0) && pl.connect(ask2, still, 0)) {
+                    fail("the live pipeline would not wire".into());
+                }
+                p.pipeline = pl;
+                let g = self.egraph.add(NodeKind::GenAi(p), egui::pos2(360.0, 200.0));
+                self.egraph.connect(g, 0, read);
+                self.egraph.view = Some(read);
+                self.playing = false;
+                t.node = g;
+                t.pipe = g;
+                next(t, 1);
+            }
+            // The plate at the playhead, before anything is made.
+            1 => {
+                if let Some(v) = probe(self, t) {
+                    t.before = Some(v);
+                    self.egraph.view = Some(t.pipe);
+                    self.dive_into(t.pipe).unwrap_or_else(|e| fail(format!("the pipeline would not open: {e}")));
+                    let (owner, i) = (t.pipe, step_of(self, "fal/wan-2.7-video-edit"));
+                    self.genai_in_comp(|g| g.genai_action(owner, Action::PrepareStep(i)));
+                    next(t, 2);
+                }
+            }
+            // `WOBBLE_TEST_GENAI_LIVE=dry`: no payment. Capture the clip
+            // twice and compare what it keys as — a clip that keys
+            // differently each time is paid for each time.
+            2 if std::env::var("WOBBLE_TEST_GENAI_LIVE").as_deref() == Ok("dry") => {
+                static FIRST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+                let key = match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                    Some(Phase::Failed(e)) => fail(format!("dry: {e}")),
+                    Some(Phase::Ready { plan, .. }) => Some(plan.keys[plan.target].clone()),
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    let (owner, i) = (t.pipe, step_of(self, "fal/wan-2.7-video-edit"));
+                    let mut first = FIRST.lock().unwrap();
+                    match first.as_ref() {
+                        None => {
+                            *first = Some(key);
+                            drop(first);
+                            self.genai_in_comp(|g| g.genai_action(owner, Action::CancelStep(i)));
+                            self.genai_in_comp(|g| g.genai_action(owner, Action::PrepareStep(i)));
+                        }
+                        Some(a) if *a == key => {
+                            println!("GENAI LIVE DRY PASS: the same clip captured twice keys the same ({key})");
+                            std::process::exit(0);
+                        }
+                        Some(a) => fail(format!("the same clip captured twice keys differently: {a} then {key}")),
+                    }
+                }
+            }
+            // Wan: captured, quoted, paid from its own node.
+            2 => {
+                if let Some(usd) = pay(self, t.pipe, "Wan 2.7 video edit") {
+                    println!("GENAI LIVE: Wan 2.7 video edit quoted ${usd:.3}, paid, running");
+                    next(t, 3);
+                }
+            }
+            // A still beside it, as soon as Wan has left the front.
+            3 => {
+                let wan_going = self.jobs.genai.background.iter().any(|r| r.active());
+                if self.jobs.genai.run.is_none() && wan_going {
+                    let (owner, i) = (t.pipe, step_of(self, "fal/flux-schnell"));
+                    self.genai_in_comp(|g| g.genai_action(owner, Action::PrepareStep(i)));
+                    if self.jobs.genai.run.is_none() {
+                        fail("a second run would not start while Wan was running".into());
+                    }
+                    next(t, 4);
+                } else if !wan_going && all_ended(self) {
+                    fail(format!("Wan ended before a second run could be started beside it ({})", self.genai_state_words()));
+                }
+            }
+            4 => {
+                let wan_going = self.jobs.genai.background.iter().any(|r| r.active() && r.to_step != self.jobs.genai.run.as_ref().and_then(|f| f.to_step));
+                // Already made by an earlier live run: found cached, free,
+                // and it still went through BESIDE Wan.
+                if matches!(self.jobs.genai.run.as_ref().map(|r| &r.phase), Some(Phase::Done(_))) {
+                    println!("GENAI LIVE: FLUX schnell was cached (free) and ran beside Wan (Wan still going: {wan_going})");
+                    next(t, 5);
+                } else if let Some(usd) = pay(self, t.pipe, "FLUX schnell") {
+                    let both = self.jobs.genai.run.iter().chain(self.jobs.genai.background.iter()).filter(|r| r.active()).count();
+                    println!("GENAI LIVE: FLUX schnell quoted ${usd:.3}, paid; {both} run(s) going at once");
+                    if both < 2 {
+                        fail(format!("{both} run(s) going after paying for the second: they are not side by side"));
+                    }
+                    next(t, 5);
+                }
+            }
+            // Both end; each left its result where the dive can show it.
+            5 if all_ended(self) => {
+                let g = &self.jobs.genai;
+                for r in g.run.iter().chain(g.background.iter()) {
+                    match &r.phase {
+                        Phase::Failed(e) => fail(format!("a live run failed: {e}")),
+                        Phase::Done(w) => println!("GENAI LIVE: step {:?} ended: {w} ({:.0} s)", r.to_step, r.t0.elapsed().as_secs_f32()),
+                        _ => {}
+                    }
+                }
+                for (model, name) in [("fal/wan-2.7-video-edit", "Wan 2.7 video edit"), ("fal/flux-schnell", "FLUX.1 [schnell]")] {
+                    let i = step_of(self, model);
+                    match self.genai_step_result(t.pipe, i, name) {
+                        Some((_, path)) => println!("GENAI LIVE: {name} result: {}", path.display()),
+                        None => fail(format!("{name} ran and left no result to view")),
+                    }
+                }
+                let owner = t.pipe;
+                self.jobs.genai.background.clear();
+                self.genai_in_comp(|g| g.genai_action(owner, Action::Dismiss));
+                // The pipeline's own run: Wan is cached, so it is free and
+                // goes straight through to a take.
+                self.genai_in_comp(|g| g.genai_action(owner, Action::Prepare));
+                next(t, 6);
+            }
+            6 => match self.jobs.genai.run.as_ref().map(|r| &r.phase) {
+                Some(Phase::Failed(e)) => fail(format!("the pipeline's own run failed: {e}")),
+                Some(Phase::Ready { .. }) => fail("the pipeline's run asked to pay again for a result it already has".into()),
+                Some(Phase::Done(w)) if all_ended(self) => {
+                    println!("GENAI LIVE: the pipeline's run ended: {w}");
+                    let owner = t.pipe;
+                    self.genai_in_comp(|g| g.genai_action(owner, Action::Dismiss));
+                    self.dive_out().unwrap_or_else(|e| fail(format!("the pipeline would not close: {e}")));
+                    let p = self.egraph.node(t.pipe).and_then(|n| params(&n.kind)).cloned().unwrap();
+                    let Some(take) = p.pipeline.picked() else { fail("no take landed on the node".into()) };
+                    if !take.is_video() {
+                        fail(format!("the take is {}, not a video", take.file));
+                    }
+                    let path = take.path(&config::results_dir());
+                    if self.loaded.get(&t.pipe).map(|l| l.path.clone()) != Some(path.to_string_lossy().into_owned()) {
+                        fail(format!("the take is not loaded in the node's reader ({:?})", self.loaded.get(&t.pipe).map(|l| &l.path)));
+                    }
+                    println!("GENAI LIVE: take {} loaded, {} frames", path.display(), self.loaded[&t.pipe].seq.frames.len());
+                    // Out to the outer graph: a node downstream of it.
+                    let after = NodeKind::Mult(engine::graph::MultParams { value: [1.0; 3], ..Default::default() });
+                    let m = self.egraph.add(after, egui::pos2(360.0, 400.0));
+                    self.egraph.connect(m, 0, t.pipe);
+                    self.egraph.view = Some(t.pipe);
+                    t.node = m;
+                    self.playback_dirty = true;
+                    next(t, 7);
+                }
+                _ => {}
+            },
+            // The node's output is the take (not the plate)...
+            7 => {
+                if let Some(v) = probe(self, t) {
+                    let plate = t.before.unwrap_or(0.0);
+                    if (v - plate).abs() < 0.01 * plate.abs().max(0.05) {
+                        fail(format!("the node still shows the plate ({v:.4} against {plate:.4}): the take is not what it outputs"));
+                    }
+                    t.kept = None;
+                    t.before = Some(v);
+                    println!("GENAI LIVE: the node's output reads {v:.4} (the plate read {plate:.4})");
+                    self.egraph.view = Some(t.node);
+                    next(t, 8);
+                }
+            }
+            // ...and the node below it in the outer graph gets the same.
+            8 => {
+                if let Some(v) = probe(self, t) {
+                    let node = t.before.unwrap_or(0.0);
+                    if (v - node).abs() > 1e-3 {
+                        fail(format!("a node downstream reads {v:.4}, the GenAI node {node:.4}: the take is not passed on"));
+                    }
+                    println!(
+                        "GENAI LIVE PASS: a plate went into a GenAI network, Wan 2.7 video edit ran from its own node \
+                         on two seconds of it while FLUX schnell ran beside it, both results were kept, the \
+                         pipeline's run landed the video as a take without paying twice, the take is loaded in \
+                         the node, and the node downstream in the outer graph reads the same picture ({v:.4})"
+                    );
+                    std::process::exit(0);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 // ------------------------------------------------------------ --test-genai
 
 /// A stand-in fal on localhost for `--test-genai`: the queue dance, a
@@ -2960,6 +3291,13 @@ impl Gfx {
             println!("GENAI TEST FAIL: {m}");
             std::process::exit(1);
         };
+        // The LIVE end-to-end run (`WOBBLE_TEST_GENAI_LIVE=1`): the real
+        // fal, the user's own key, real money (cents). Opt-in by name.
+        if std::env::var_os("WOBBLE_TEST_GENAI_LIVE").is_some() {
+            self.drive_test_genai_live(&mut t);
+            self.test.genai = Some(t);
+            return;
+        }
         if t.t0.elapsed().as_secs() > 120 {
             fail(format!("timeout at stage {} (run: {})", t.stage, self.genai_state_words()));
         }

@@ -60,9 +60,36 @@ pub struct Clip {
     pub h: u32,
     pub frames: u32,
     pub fps: f32,
+    /// What the clip IS, for the cache key: a hash of the frames it was
+    /// encoded from (`frames_key`). The mp4's own bytes are not it — an
+    /// encoder does not write the same file twice — and keying on them
+    /// made every re-capture a new request: billed again. Empty = key on
+    /// the bytes (a clip from somewhere else).
+    pub key: String,
+}
+
+/// A clip's identity: its frames' pixels, its size and its rate.
+pub fn frames_key(frames: &[Vec<u8>], w: u32, h: u32, fps: f32) -> String {
+    let mut d = Sha256::new();
+    d.update(w.to_le_bytes());
+    d.update(h.to_le_bytes());
+    d.update(fps.to_le_bytes());
+    for f in frames {
+        d.update(f);
+    }
+    d.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Clip {
+    /// The identity a plan keys this clip under.
+    fn ident(&self) -> String {
+        if self.key.is_empty() {
+            sha_hex(&self.bytes)
+        } else {
+            self.key.clone()
+        }
+    }
+
     pub fn seconds(&self) -> f64 {
         self.frames as f64 / self.fps.max(1.0) as f64
     }
@@ -224,7 +251,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                         "the pipeline reads the node's {what} input {} as a clip, and none was captured",
                         input + 1
                     ))?;
-                    (h(&[&tag, &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
+                    (h(&[&tag, &c.ident()]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
                 } else {
                     if !p.input_is_read(i) {
                         // Read only through Comp nodes, whose own render
@@ -243,7 +270,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
             Op::Shape { clip, .. } | Op::Comp { clip, .. } => {
                 if *clip {
                     let c = inputs.shape_clips.get(&i).ok_or("a Spline inside the pipeline was not rendered as a clip")?;
-                    (h(&["shape-clip", &sha_hex(&c.bytes)]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
+                    (h(&["shape-clip", &c.ident()]), c.w as f64 * c.h as f64 * c.frames as f64 / 1e6)
                 } else {
                     let r = inputs.shapes.get(&i).ok_or("a Spline inside the pipeline was not rendered")?;
                     (h(&["shape", &sha_hex(&r.bytes)]), r.w as f64 * r.h as f64 / 1e6)
@@ -1535,7 +1562,7 @@ mod tests {
     }
 
     fn clip(frames: u32, w: u32, h: u32) -> Clip {
-        Clip { bytes: vec![frames as u8, w as u8, 7], w, h, frames, fps: 24.0 }
+        Clip { bytes: vec![frames as u8, w as u8, 7], w, h, frames, fps: 24.0, key: String::new() }
     }
 
     #[test]
@@ -1602,5 +1629,22 @@ mod tests {
         assert_eq!((d.w, d.h), (853, 480));
         let e = quote_settings(m("fal/seedance-2.5-video-edit"), &json!({}), v);
         assert!((e.seconds - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_clip_keys_on_its_frames_not_on_its_file() {
+        // Two encodes of the same frames are two different files and ONE
+        // request: re-capturing a clip must find the result it paid for.
+        let dir = std::env::temp_dir().join("wobble-genai-clipkey-none");
+        let p = Pipeline::for_model("fal/kling-o3-pro-video-edit").unwrap();
+        let key = frames_key(&[vec![1, 2, 3], vec![4, 5, 6]], 1280, 720, 24.0);
+        assert_ne!(key, frames_key(&[vec![1, 2, 3], vec![4, 5, 7]], 1280, 720, 24.0));
+        let enc = |bytes: Vec<u8>| Clip { bytes, w: 1280, h: 720, frames: 72, fps: 24.0, key: key.clone() };
+        let mut a = Inputs { comp: (1920, 1080), ..Default::default() };
+        a.clips.insert(0, enc(vec![1; 9]));
+        let mut b = a.clone();
+        b.clips.insert(0, enc(vec![2; 9]));
+        let (ka, kb) = (plan(&p, &a, &dir).unwrap(), plan(&p, &b, &dir).unwrap());
+        assert_eq!(ka.keys[ka.target], kb.keys[kb.target]);
     }
 }

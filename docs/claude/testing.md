@@ -208,3 +208,19 @@ the page dies with a panic the desktop never shows:
 Check a change with
 `cargo check -p app --target wasm32-unknown-unknown` — compile errors are
 the cheap half; the panics above only show in the browser console.
+
+## The LIVE GenAI run (real fal, real cents)
+
+`WOBBLE_TEST_GENAI_LIVE=1 wobble <clip> <clip> --test-genai` (a movie
+build; a plate of 2 s or more, e.g. `data/hcr080`) is `--test-genai`'s
+opt-in live branch (`genaiui::drive_test_genai_live`): the user's own fal
+key, about $0.21 a run, refusing any quote over `LIVE_CAP_USD`. A plate
+into a GenAI Pipeline; Wan 2.7 video edit run from its own node inside on
+two seconds of it; FLUX schnell paid and run BESIDE it; the pipeline's own
+run landing the video as a take without paying twice; the take loaded and
+read by a node downstream. It logs every run's state as it changes and
+keeps its results in `$TMPDIR/wobble-test-genai-live`. `=dry` pays
+nothing: it captures the clip twice and checks both key the same.
+It found, the first time it ran: clips one frame short (the mp4's last
+packet had no duration), and a clip keyed on its encoded bytes (never the
+same twice), which re-billed every re-capture.
