@@ -3588,9 +3588,11 @@ same file). **gallery** opens the results in a window: one large picture
 with a strip to move through (Left / Right), or a contact sheet; either
 way a result can be selected or popped out from there.
 A **prompt group** (add menu, inside a pipeline) runs one prompt on
-several models: select the model nodes, add it, and they sit on its
-backdrop. Wire a prompt, up to two images and a mask into the group node
-and every model on the backdrop gets them in the same order (a model with
+several models: select the model nodes, add it, and a speech-bubble
+outline is drawn round them. Whatever stands inside the bubble is in the
+group: drag nodes in or out, drag the bubble's lower-right corner to
+resize it, drag the group node to move the lot. Wire a prompt, up to two images and a mask into the group node
+and every model in the bubble gets them in the same order (a model with
 one image input takes image 1 and ignores the rest). One **get price for
 all**, one **pay & run all**, and the group's panel shows the results side
 by side as a contact sheet; click one to view that model.

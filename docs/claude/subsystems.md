@@ -1665,12 +1665,18 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   frame, which the playhead step in `lib.rs` stands down for (the
   browser's rule). A picked OLDER result is
   not what a downstream MODEL step reads (that is the plan's).
-- **A PROMPT GROUP is a backdrop plus one node** (`Op::Group { text,
-  members }`): the node holds the prompt and takes `prompt`, `image 1`,
-  `image 2`, `mask`; its MEMBERS are the steps on its backdrop
-  (`from_editor` reads them off the `nodeux` group, `to_editor` rebuilds
-  the backdrop, so membership is by position and nothing is wired).
-  Adding one wraps the selection in a backdrop titled "prompt group"
+- **A PROMPT GROUP is a node and its BUBBLE, never a backdrop**
+  (`Op::Group { text, members, size }`): the node holds the prompt and
+  takes `prompt`, `image 1`, `image 2`, `mask`; hanging from it is a
+  speech-bubble OUTLINE in graph space (`bubble_rect(pos, size)`,
+  `bubble_outline`, drawn by the editor before the backdrops, in
+  `node_genai_prompt`), and its MEMBERS are the steps standing inside it
+  (`bubble_members`; `from_editor` reads them by geometry, `to_editor`
+  grows the bubble over them with `bubble_fit`, nothing is wired). The
+  wedge on its lower right resizes it (`DragKind::BubbleSize`, hit via
+  `bubble_hits`; nodes stay put), and dragging the node carries what is
+  inside. It deliberately uses none of `nodeux`'s group machinery.
+  Adding one fits the bubble round the selection
   and wires nothing into it. `Pipeline::expand_groups` runs on the RUN'S
   COPY only: every member model port still unwired takes the group's
   source in order (image 1 to its first image port, and so on; a model

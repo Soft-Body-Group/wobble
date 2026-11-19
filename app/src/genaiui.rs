@@ -183,18 +183,83 @@ pub fn to_editor(pl: &Pipeline) -> crate::editor::EditorGraph {
         }
     }
     g.next_id = pl.steps.len() as u64 + 1;
-    // Each prompt group's backdrop, over its node and its members.
+    // Each prompt group's bubble holds its members: grown (never shrunk)
+    // over any that stand outside it, so membership survives the trip
+    // whatever made it.
     for (i, s) in pl.steps.iter().enumerate() {
         let Op::Group { members, .. } = &s.op else { continue };
-        let mut on: Vec<u64> = members.iter().map(|m| *m as u64 + 1).filter(|id| g.nodes.contains_key(id)).collect();
-        on.push(i as u64 + 1);
-        let gid = g.next_id;
-        g.next_id += 1;
-        let mut b = crate::nodeux::group_over(&on, gid);
-        b.title = "prompt group".into();
-        g.groups.push(b);
+        let on: Vec<egui::Pos2> = members.iter().filter_map(|m| g.nodes.get(&(*m as u64 + 1)).map(|n| n.pos)).collect();
+        bubble_fit(&mut g, i as u64 + 1, &on);
     }
     g
+}
+
+/// Where a prompt group's bubble hangs from its node (the node is its
+/// tab, with the inputs): the bubble's top-left corner, from the node.
+const BUBBLE_AT: Vec2 = Vec2::new(-70.0, 62.0);
+/// Room kept between a member and the bubble's edge when it is fitted.
+const BUBBLE_PAD: f32 = 90.0;
+/// The smallest a bubble may be dragged.
+pub(crate) const BUBBLE_MIN: [f32; 2] = [220.0, 150.0];
+
+/// A prompt group's bubble in graph space: node `pos`, the op's `size`.
+pub(crate) fn bubble_rect(pos: Pos2, size: [f32; 2]) -> egui::Rect {
+    egui::Rect::from_min_size(pos + BUBBLE_AT, Vec2::new(size[0].max(BUBBLE_MIN[0]), size[1].max(BUBBLE_MIN[1])))
+}
+
+/// Every prompt group in `g`: (its node, its bubble).
+pub(crate) fn bubbles(g: &crate::editor::EditorGraph) -> Vec<(u64, egui::Rect)> {
+    g.nodes
+        .iter()
+        .filter_map(|(id, n)| match &n.kind {
+            NodeKind::GenAiStep(Op::Group { size, .. }) => Some((*id, bubble_rect(n.pos, *size))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The nodes standing inside prompt group `id`'s bubble (never itself).
+pub(crate) fn bubble_members(g: &crate::editor::EditorGraph, id: u64) -> Vec<u64> {
+    let Some(r) = bubbles(g).into_iter().find(|b| b.0 == id).map(|b| b.1) else { return vec![] };
+    g.nodes.iter().filter(|(k, n)| **k != id && r.contains(n.pos)).map(|(k, _)| *k).collect()
+}
+
+/// Grow (and, when it must, shift) group `id`'s bubble so every point of
+/// `over` is inside it with room to spare.
+pub(crate) fn bubble_fit(g: &mut crate::editor::EditorGraph, id: u64, over: &[Pos2]) {
+    let Some(n) = g.nodes.get_mut(&id) else { return };
+    let NodeKind::GenAiStep(Op::Group { size, .. }) = &mut n.kind else { return };
+    let mut r = bubble_rect(n.pos, *size);
+    for p in over {
+        r = r.union(egui::Rect::from_center_size(*p, Vec2::splat(2.0 * BUBBLE_PAD)));
+    }
+    n.pos = r.min - BUBBLE_AT;
+    *size = [r.width(), r.height()];
+}
+
+/// A speech bubble's outline around `r`: a rounded rectangle with the
+/// tail of the Prompt node's glyph on its lower-left. Closed, clockwise
+/// from the top-left corner; `round` and `tail` in the same units as `r`.
+pub(crate) fn bubble_outline(r: egui::Rect, round: f32, tail: f32) -> Vec<Pos2> {
+    let round = round.min(r.width() * 0.5).min(r.height() * 0.5);
+    let mut pts = Vec::with_capacity(40);
+    let corner = |pts: &mut Vec<Pos2>, c: Pos2, a0: f32| {
+        for k in 0..=8 {
+            let a = a0 + k as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
+            pts.push(c + Vec2::angled(a) * round);
+        }
+    };
+    use std::f32::consts::PI;
+    corner(&mut pts, Pos2::new(r.left() + round, r.top() + round), PI);
+    corner(&mut pts, Pos2::new(r.right() - round, r.top() + round), 1.5 * PI);
+    corner(&mut pts, Pos2::new(r.right() - round, r.bottom() - round), 0.0);
+    // Along the bottom, right to left: the tail before the last corner.
+    let x = r.left() + round;
+    pts.push(Pos2::new(x + tail * 1.6, r.bottom()));
+    pts.push(Pos2::new(x + tail * 0.1, r.bottom() + tail));
+    pts.push(Pos2::new(x + tail * 0.6, r.bottom()));
+    corner(&mut pts, Pos2::new(r.left() + round, r.bottom() - round), 0.5 * PI);
+    pts
 }
 
 /// The other direction: the dive's graph back into steps. Anything that is
@@ -234,17 +299,13 @@ pub fn from_editor(g: &crate::editor::EditorGraph) -> Vec<genai::Step> {
             genai::Step { at: [n.pos.x, n.pos.y], inputs: vec![None; op.ports().len()], op }
         })
         .collect();
-    // A prompt group is the backdrop its node sits on: the other steps
-    // on that backdrop are its members.
+    // A prompt group is its bubble: the steps standing inside it are
+    // its members.
     for (i, id) in ids.iter().enumerate() {
         if !matches!(steps[i].op, Op::Group { .. }) {
             continue;
         }
-        let on: Vec<usize> = g
-            .group_of(*id)
-            .and_then(|gid| g.groups.iter().find(|b| b.id == gid))
-            .map(|b| b.members.iter().filter(|m| *m != id).filter_map(|m| index(*m)).collect())
-            .unwrap_or_default();
+        let on: Vec<usize> = bubble_members(g, *id).into_iter().filter_map(index).collect();
         if let Op::Group { members, .. } = &mut steps[i].op {
             *members = on;
             members.sort_unstable();
@@ -467,7 +528,7 @@ pub fn step_entries() -> Vec<(&'static str, Op)> {
     // No inputs: each of the node's inputs is already in here as its own
     // Input step (add one on the node's bar, or in its panel).
     let mut v = vec![Op::Prompt { text: String::new() }];
-    v.push(Op::Group { text: String::new(), members: vec![] });
+    v.push(Op::Group { text: String::new(), members: vec![], size: genai::pipeline::default_bubble() });
     v.push(Op::Template { text: "{a}".into() });
     for group in catalog::MENU_GROUPS {
         v.extend(
@@ -1625,7 +1686,7 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
         Op::Comp { .. } => {
             ui.label(small("a comp node inside the pipeline: open it (Enter) to edit it"));
         }
-        Op::Group { text, members } => {
+        Op::Group { text, members, .. } => {
             ui.label(small("the group's prompt: every model on this backdrop gets it"));
             ui.add(
                 egui::TextEdit::multiline(text)
@@ -1635,7 +1696,7 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                     .desired_width(f32::INFINITY),
             );
             ui.weak(small(format!(
-                "{} node(s) on the backdrop. Wire pictures into image 1 and image 2 and a matte into mask: each model \
+                "{} node(s) in the bubble (drag nodes in or out; drag its corner to resize). Wire pictures into image 1 and image 2 and a matte into mask: each model \
                  takes them in order on the inputs it has, and ignores the ones it has no input for. \
                  A wire you make to a model yourself wins.",
                 members.len()
@@ -5168,15 +5229,20 @@ impl Gfx {
                         .map(|(id, _)| *id)
                         .unwrap();
                     self.egraph.edges.retain(|e| !(e.0 == schnell && e.1 == 0));
-                    let head = Op::Group { text: "an 18% grey card".into(), members: vec![] };
-                    let gnode = self.egraph.add(NodeKind::GenAiStep(head), egui::pos2(-300.0, 300.0));
-                    let gid = self.egraph.next_id;
-                    self.egraph.next_id += 1;
+                    let head = Op::Group { text: "an 18% grey card".into(), members: vec![], size: genai::pipeline::default_bubble() };
+                    // Far from every other node, so only what is fitted
+                    // into its bubble is in it.
+                    let gnode = self.egraph.add(NodeKind::GenAiStep(head), egui::pos2(-5000.0, 300.0));
                     // And a second model on the backdrop that has never
                     // run (FLUX dev): the two go as ONE run, one price.
                     let dev = Op::Generate { model: "fal/flux-dev".into(), seed: 4242, opts: Opts::default() };
                     let dnode = self.egraph.add(NodeKind::GenAiStep(dev), egui::pos2(-300.0, 500.0));
-                    self.egraph.groups.push(crate::nodeux::group_over(&[schnell, dnode, gnode], gid));
+                    let at = egui::pos2(-4900.0, 450.0);
+                    self.egraph.node_mut(schnell).unwrap().pos = at;
+                    self.egraph.node_mut(dnode).unwrap().pos = at + egui::vec2(160.0, 0.0);
+                    if bubble_members(&self.egraph, gnode).len() != 2 {
+                        fail("two models placed in a prompt group's bubble are not its members".into());
+                    }
                     let g = self.egraph.nodes.iter().filter(|(_, n)| is_step(&n.kind)).position(|(id, _)| *id == gnode).unwrap();
                     self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareGroup(g)));
                     next(&mut t, 88);
@@ -5424,30 +5490,43 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_group_is_its_backdrop_and_survives_the_dive() {
+    fn a_prompt_group_is_its_bubble_and_survives_the_dive() {
         // Two models and a group node on one backdrop; a third model off it.
         let mut pl = Pipeline::bare(vec![genai::InKind::Image, genai::InKind::Matte]);
         let gen = |pl: &mut Pipeline, id: &str| pl.push(Op::Generate { model: id.into(), seed: 1, opts: Opts::default() }, [0.0, 0.0]);
         let (a, b, c) = (gen(&mut pl, "fal/flux-kontext-pro"), gen(&mut pl, "fal/flux-schnell"), gen(&mut pl, "fal/esrgan"));
-        let grp = pl.push(Op::Group { text: "at dusk".into(), members: vec![a, b] }, [0.0, 0.0]);
+        // The models start far apart, none of them in the bubble.
+        for (k, i) in [a, b, c].into_iter().enumerate() {
+            pl.steps[i].at = [3000.0 + 900.0 * k as f32, 2000.0];
+        }
+        let grp = pl.push(
+            Op::Group { text: "at dusk".into(), members: vec![a, b], size: genai::pipeline::default_bubble() },
+            [0.0, 0.0],
+        );
         let img = pl.input_step(0).unwrap();
         assert!(pl.connect(img, grp, 1));
-        // In: a backdrop over the group node and its two members.
+        // In: no backdrop; the bubble has grown over its two members.
         let g = to_editor(&pl);
         let id = |i: usize| i as u64 + 1;
-        assert_eq!(g.groups.len(), 1);
-        let mut on = g.groups[0].members.clone();
+        assert!(g.groups.is_empty(), "a prompt group is not a backdrop");
+        let mut on = bubble_members(&g, id(grp));
         on.sort_unstable();
-        assert_eq!(on, vec![id(a), id(b), id(grp)]);
-        // Out: the same membership, read back off the backdrop.
+        assert_eq!(on, vec![id(a), id(b)]);
+        // Out: the same membership, read back off the bubble.
         let back = from_editor(&g);
         assert!(matches!(&back[grp].op, Op::Group { members, .. } if *members == vec![a, b]));
-        // A model dragged onto the backdrop joins; one dragged off leaves.
+        // A model dragged into the bubble joins; one dragged out leaves.
         let mut g2 = g.clone();
-        let gid = g2.groups[0].id;
-        g2.adopt_into_group(gid, &[id(c)]);
-        g2.groups[0].members.retain(|m| *m != id(a));
+        let inside = g2.node(id(b)).unwrap().pos + egui::vec2(0.0, 40.0);
+        g2.node_mut(id(c)).unwrap().pos = inside;
+        g2.node_mut(id(a)).unwrap().pos = egui::pos2(-9000.0, -9000.0);
         let back = from_editor(&g2);
+        // The outline is the Prompt node's bubble: closed, with a tail
+        // hanging below the box.
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let pts = bubble_outline(r, 30.0, 40.0);
+        assert!(pts.iter().any(|p| p.y > r.bottom() + 30.0), "it has a tail");
+        assert!(pts.iter().all(|p| r.expand2(egui::vec2(0.5, 41.0)).contains(*p)));
         assert!(matches!(&back[grp].op, Op::Group { members, .. } if *members == vec![b, c]));
         // And a run walks the group's inputs into its models.
         let run = Pipeline { steps: back, ..pl.clone() }.expand_groups();

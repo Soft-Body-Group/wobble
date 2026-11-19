@@ -1310,19 +1310,23 @@ pub(crate) fn add_wired(
     }
     // A Breakout arrives as a harp: receiver included.
     crate::breakout::after_add(graph, id);
-    // A Prompt Group arrives ON a backdrop, wrapping what was selected:
-    // the backdrop is the group, this node its inputs. Nothing is wired
-    // into it (the selection is its members, not its sources).
+    // A Prompt Group arrives AROUND what was selected: its bubble is the
+    // group, this node its inputs. Nothing is wired into it (the
+    // selection is its members, not its sources).
     let prompt_group = matches!(graph.node(id).map(|n| &n.kind), Some(NodeKind::GenAiStep(genai::Op::Group { .. })));
     if prompt_group {
-        let mut on: Vec<u64> = selection.iter().copied().filter(|s| graph.node(*s).is_some()).collect();
-        on.push(id);
-        let gid = graph.next_id;
-        graph.next_id += 1;
-        let mut b = crate::nodeux::group_over(&on, gid);
-        b.title = "prompt group".into();
-        graph.groups.push(b);
-        graph.adopt_into_group(gid, &on);
+        let on: Vec<Pos2> = selection.iter().filter(|s| **s != id).filter_map(|s| graph.node(*s).map(|n| n.pos)).collect();
+        if !on.is_empty() {
+            // The bubble starts on the selection, not where the click was.
+            let bb = on.iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_center_size(*p, Vec2::ZERO)));
+            if let Some(NodeKind::GenAiStep(genai::Op::Group { size, .. })) = graph.nodes.get_mut(&id).map(|n| &mut n.kind) {
+                *size = crate::genaiui::BUBBLE_MIN;
+            }
+            if let Some(n) = graph.nodes.get_mut(&id) {
+                n.pos = bb.min;
+            }
+            crate::genaiui::bubble_fit(graph, id, &on);
+        }
     }
     // A Layer made from several picks has a layer for each.
     if !patch_mode {
@@ -3093,6 +3097,9 @@ enum DragKind {
     /// of the blob, sizes included — resizing the group resizes what is in
     /// it, which is the point of grouping.
     GroupScale { anchor: Pos2, handle: Pos2, orig: Vec<(u64, Pos2, f32)> },
+    /// Dragging the corner of a prompt group's bubble: the bubble resizes
+    /// (its nodes stay put; what ends up inside is in the group).
+    BubbleSize { id: u64, from: [f32; 2], press: Pos2 },
 }
 
 pub struct NodeEditor {
@@ -3351,6 +3358,9 @@ pub struct NodeEditor {
     /// Group handles from LAST frame: (id, title rect, grip rect) in screen
     /// space — the same one-frame-stale scheme as `node_rects`.
     group_hits: Vec<(u64, Rect, Rect)>,
+    /// Prompt-group bubble grips from LAST frame: (node, grip rect), in
+    /// screen space (the same stale scheme).
+    bubble_hits: Vec<(u64, Rect)>,
     /// Each backdrop's marching-squares shape, cached on `nodeux::blob_key`
     /// — rebuilt only when a member moves, resizes or rewires (or the zoom
     /// asks for a finer contour).
@@ -3686,6 +3696,7 @@ impl Default for NodeEditor {
             dot_place: None,
             sel_groups: Vec::new(),
             group_hits: Vec::new(),
+            bubble_hits: Vec::new(),
             blobs: std::collections::HashMap::new(),
             ctx_group: None,
             ctx_wire: None,
@@ -6047,6 +6058,14 @@ impl NodeEditor {
                 origin.map(|p| DragKind::AlignSwipe { start: p, path: vec![p] })
             } else if let Some((anchor, handle, orig)) = o_scale_group {
                 Some(DragKind::GroupScale { anchor, handle, orig })
+            } else if let Some((id, from, press)) = origin.and_then(|p| {
+                let id = self.bubble_hits.iter().find(|(_, r)| r.contains(p))?.0;
+                match graph.node(id).map(|n| &n.kind) {
+                    Some(NodeKind::GenAiStep(genai::Op::Group { size, .. })) => Some((id, *size, view.to_graph(p))),
+                    _ => None,
+                }
+            }) {
+                Some(DragKind::BubbleSize { id, from, press })
             } else if let Some((id, ch, out)) = o_chan {
                 // Grabbing a DRIVEN input takes its cable off and re-drags
                 // from the far end, exactly as a wired image input does.
@@ -6165,6 +6184,14 @@ impl NodeEditor {
                 // strings: they ride in `from` (moved with the set, not
                 // selected), so the strings keep hanging straight.
                 set.extend(crate::breakout::riders(graph, &set));
+                // A prompt group carries what is in its bubble.
+                for g in set.clone() {
+                    for m in crate::genaiui::bubble_members(graph, g) {
+                        if !set.contains(&m) {
+                            set.push(m);
+                        }
+                    }
+                }
                 let from = set
                     .iter()
                     .filter_map(|n| graph.node(*n).map(|nd| (*n, nd.pos)))
@@ -6425,6 +6452,15 @@ impl NodeEditor {
                 for m in members.clone() {
                     if let Some(n) = graph.node_mut(m) {
                         n.pos += d;
+                    }
+                }
+            }
+            Some(DragKind::BubbleSize { id, from, press }) if resp.dragged() => {
+                if let Some(p) = pointer {
+                    let d = view.to_graph(p) - *press;
+                    if let Some(NodeKind::GenAiStep(genai::Op::Group { size, .. })) = graph.node_mut(*id).map(|n| &mut n.kind) {
+                        let min = crate::genaiui::BUBBLE_MIN;
+                        *size = [(from[0] + d.x).max(min[0]), (from[1] + d.y).max(min[1])];
                     }
                 }
             }
@@ -8521,6 +8557,28 @@ impl NodeEditor {
         // handle, the wedge on the lower-right of the shape scales the
         // members; the body is inert so a marquee still works over it.
         self.group_hits.clear();
+        // A PROMPT GROUP is not a backdrop: it is the Prompt node's speech
+        // bubble, drawn large as an outline, with its models inside. The
+        // wedge on its lower right resizes it.
+        self.bubble_hits.clear();
+        for (id, gr) in crate::genaiui::bubbles(graph) {
+            let sr = Rect::from_two_pos(view.to_screen(gr.min), view.to_screen(gr.max));
+            if !sr.expand(60.0 * self.zoom).intersects(rect) {
+                continue;
+            }
+            let ink = theme::node_genai_prompt();
+            let on = selection.contains(&id);
+            let stroke = Stroke::new(if on { 2.5 } else { 1.5 }, if on { theme::selection() } else { ink });
+            let pts = crate::genaiui::bubble_outline(sr, 26.0 * self.zoom, 34.0 * self.zoom);
+            painter.add(egui::Shape::closed_line(pts, stroke));
+            let gp = sr.max - Vec2::splat(9.0);
+            painter.add(egui::Shape::convex_polygon(
+                vec![gp + Vec2::new(5.0, 5.0), gp + Vec2::new(5.0, -9.0), gp + Vec2::new(-9.0, 5.0)],
+                ink.gamma_multiply(0.9),
+                Stroke::new(1.0, theme::node_outline()),
+            ));
+            self.bubble_hits.push((id, Rect::from_center_size(gp, Vec2::splat(20.0))));
+        }
         {
             // Finer contour when zoomed in; the bucket is in the cache key
             // so a zoom change re-marches, a plain pan never does.

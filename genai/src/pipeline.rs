@@ -108,6 +108,10 @@ pub enum Op {
         text: String,
         #[serde(default)]
         members: Vec<usize>,
+        /// The size of its bubble in the host's graph (the host's units;
+        /// this crate never reads it): what stands inside is a member.
+        #[serde(default = "default_bubble")]
+        size: [f32; 2],
     },
     /// A RESULT popped out of a model's gallery: a file already in the
     /// results directory (`key`/`file`), as a node of its own, so two
@@ -315,6 +319,11 @@ impl Default for Opts {
             refs: 0,
         }
     }
+}
+
+/// A new prompt group's bubble.
+pub fn default_bubble() -> [f32; 2] {
+    [520.0, 360.0]
 }
 
 impl Op {
@@ -1792,7 +1801,7 @@ mod tests {
         let (ed, two, fill) = (gen(&mut p, "fal/flux-kontext-pro"), gen(&mut p, "fal/nano-banana-pro-edit-ref"), gen(&mut p, "fal/flux-fill-pro"));
         let own = p.push(Op::Prompt { text: "its own words".into() }, [0.0, 0.0]);
         assert!(p.connect(own, fill, 0), "wired by hand");
-        let g = p.push(Op::Group { text: "make it dusk".into(), members: vec![ed, two, fill, own] }, [0.0, 0.0]);
+        let g = p.push(Op::Group { text: "make it dusk".into(), members: vec![ed, two, fill, own], size: default_bubble() }, [0.0, 0.0]);
         assert!(p.connect(i1, g, 1) && p.connect(i2, g, 2) && p.connect(mt, g, 3));
         assert_eq!(p.group_models(g), vec![ed, two, fill], "a prompt in the backdrop is not a model");
         let x = p.expand_groups();
