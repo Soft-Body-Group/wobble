@@ -569,6 +569,8 @@ pub struct NodeEntry {
     pub make: std::sync::Arc<dyn Fn(usize) -> NodeKind + Send + Sync>,
     /// Maturity, read off the node `make` builds (see [`status_of`]).
     pub status: NodeStatus,
+    /// A submenu inside the category. Entries sharing one are adjacent.
+    pub sub: Option<&'static str>,
 }
 
 /// Every node the add menus offer, in ONE place: the right-click menu groups
@@ -597,6 +599,7 @@ pub fn search_aliases() -> Vec<NodeEntry> {
         reader: false,
         make: std::sync::Arc::new(make),
         status: status_of(&make(0)),
+        sub: None,
     };
     vec![
         e("Pixel Spread", |_| {
@@ -625,6 +628,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         reader,
         make: std::sync::Arc::new(make),
         status: status_of(&make(0)),
+        sub: None,
     };
     let mut v = vec![
         // --- source -----------------------------------------------------
@@ -1174,7 +1178,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
     v.extend(crate::genaiui::offered_models().map(|m| {
         let id = m.id;
         let make = move |s| NodeKind::GenAi(engine::graph::GenAiParams::for_model(s, id));
-        NodeEntry { cat: Ai, label: m.label, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
+        NodeEntry { cat: Ai, label: m.label, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make), sub: None }
     }));
     // Ready-made GenAI pipelines (`genai::templates`): a GenAI Pipeline
     // node, already wired.
@@ -1184,7 +1188,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
             p.pipeline = t.pipeline();
             NodeKind::GenAi(p)
         };
-        NodeEntry { cat: Ai, label: t.name, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
+        NodeEntry { cat: Ai, label: t.name, reader: true, status: status_of(&make(0)), make: std::sync::Arc::new(make), sub: None }
     }));
     // Inside a Roto's dive: a shape is a Spline, a combine a MatteCombine,
     // and an Axis groups and moves them.
@@ -1193,8 +1197,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
     v.push(e(Roto, "Axis", false, |_| crate::rotodive::new_axis()));
     // Inside a GenAI Pipeline's dive: its steps, one node each.
     v.extend(crate::genaiui::step_entries().into_iter().map(|(label, op)| {
+        let sub = crate::genaiui::step_group(&op);
         let make = move |_| NodeKind::GenAiStep(op.clone());
-        NodeEntry { cat: GenAiStep, label, reader: false, status: status_of(&make(0)), make: std::sync::Arc::new(make) }
+        NodeEntry { cat: GenAiStep, label, reader: false, status: status_of(&make(0)), make: std::sync::Arc::new(make), sub }
     }));
     v
 }
@@ -7791,6 +7796,7 @@ impl NodeEditor {
             // minimum width makes it SHIFT to fit instead.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             ui.set_min_width(170.0);
+            crate::widgets::scroll_menu(ui, |ui| {
             let Some((target, gpos)) = self.ctx_target else {
                 ui.close();
                 return;
@@ -8071,9 +8077,7 @@ impl NodeEditor {
                             ui.close();
                         }
                     } else if !graph.regions.is_empty() {
-                        ui.menu_button("add to region", |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            ui.set_min_width(120.0);
+                        crate::widgets::scroll_menu_button(ui, "add to region", 120.0, |ui| {
                             let names: Vec<(u64, String)> = graph
                                 .regions
                                 .iter()
@@ -8198,15 +8202,8 @@ impl NodeEditor {
                         if !catalog.iter().any(|e| e.cat == cat) {
                             continue;
                         }
-                        ui.menu_button(cat.name(), |ui| {
-                            // Opened near the right edge of the graph panel,
-                            // a submenu gets squeezed and egui wraps the
-                            // labels — at its worst, one CHARACTER per line.
-                            // Menus live on the popup layer, so they may
-                            // overhang the panel; they must not fold up.
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            ui.set_min_width(150.0);
-                            for entry in catalog.iter().filter(|e| e.cat == cat) {
+                        crate::widgets::scroll_menu_button(ui, cat.name(), 150.0, |ui| {
+                            let mut pick = |ui: &mut egui::Ui, entry: &NodeEntry| {
                                 let text = status_text(entry.label, entry.status);
                                 if ui
                                     .add(egui::Button::new(text))
@@ -8224,6 +8221,24 @@ impl NodeEditor {
                                     self.use_counts_dirty = true;
                                     add = Some((entry.make)(slot));
                                     ui.close();
+                                }
+                            };
+                            let entries: Vec<&NodeEntry> = catalog.iter().filter(|e| e.cat == cat).collect();
+                            for (i, entry) in entries.iter().enumerate() {
+                                let before = i.checked_sub(1).map(|p| entries[p].sub);
+                                if before.is_some_and(|b| b.is_some() != entry.sub.is_some()) {
+                                    ui.separator();
+                                }
+                                let Some(sub) = entry.sub else {
+                                    pick(ui, entry);
+                                    continue;
+                                };
+                                if before != Some(Some(sub)) {
+                                    crate::widgets::scroll_menu_button(ui, sub, 150.0, |ui| {
+                                        for e in entries.iter().filter(|e| e.sub == Some(sub)) {
+                                            pick(ui, e);
+                                        }
+                                    });
                                 }
                             }
                         });
@@ -8265,7 +8280,7 @@ impl NodeEditor {
                             .filter(|d| crate::tools::ControlKind::from_type(&d.type_id).is_some())
                             .collect();
                         if !controls.is_empty() {
-                            ui.menu_button("control", |ui| {
+                            crate::widgets::scroll_menu_button(ui, "control", 150.0, |ui| {
                                 for d in controls {
                                     let text = status_text(&d.label, custom_status);
                                     if ui
@@ -8305,10 +8320,7 @@ impl NodeEditor {
                         if list.is_empty() {
                             continue;
                         }
-                        ui.menu_button(menu, |ui| {
-                            ui.style_mut().wrap_mode =
-                                Some(egui::TextWrapMode::Extend);
-                            ui.set_min_width(150.0);
+                        crate::widgets::scroll_menu_button(ui, menu, 150.0, |ui| {
                             for d in list {
                                 let text = status_text(&d.label, custom_status);
                                 if ui
@@ -8328,9 +8340,7 @@ impl NodeEditor {
                     // Inside a 2dini: ready-wired networks, drawing and physics.
                     if in_geo {
                         ui.separator();
-                        ui.menu_button("presets", |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                            ui.set_min_width(150.0);
+                        crate::widgets::scroll_menu_button(ui, "presets", 150.0, |ui| {
                             for physics in [false, true] {
                                 if physics {
                                     ui.separator();
@@ -8351,6 +8361,7 @@ impl NodeEditor {
                     }
                 }
             }
+            });
         });
 
         if let Some((dst, input, step)) = wire_z_step {

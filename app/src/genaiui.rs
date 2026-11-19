@@ -462,21 +462,33 @@ pub(crate) fn shape_node(node: &serde_json::Value) -> crate::editor::ENode {
 
 /// The step nodes the dive's add menu offers: a prompt, a template, one
 /// node per model (no model menu, the same rule as the comp), ComfyUI, Output.
+/// Models come group by group ([`step_group`]), so each submenu is one run.
 pub fn step_entries() -> Vec<(&'static str, Op)> {
     // No inputs: each of the node's inputs is already in here as its own
     // Input step (add one on the node's bar, or in its panel).
     let mut v = vec![Op::Prompt { text: String::new() }];
     v.push(Op::Group { text: String::new(), members: vec![] });
     v.push(Op::Template { text: "{a}".into() });
-    v.extend(
-        catalog::CATALOG
-            .iter()
-            .filter(|m| offered(m))
-            .map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }),
-    );
+    for group in catalog::MENU_GROUPS {
+        v.extend(
+            catalog::CATALOG
+                .iter()
+                .filter(|m| offered(m) && m.task.menu_group() == group)
+                .map(|m| Op::Generate { model: m.id.into(), seed: 1, opts: Opts::default() }),
+        );
+    }
     v.push(Op::Comfy { workflow: String::new(), seed: 1, commercial: false });
     v.push(Op::Output);
     v.into_iter().map(|op| (op.name(), op)).collect()
+}
+
+/// The submenu a step sits in: a model's, by what it does. Everything else
+/// stays at the top of the step menu.
+pub fn step_group(op: &Op) -> Option<&'static str> {
+    match op {
+        Op::Generate { model, .. } => catalog::get(model).map(|m| m.task.menu_group()),
+        _ => None,
+    }
 }
 
 /// A step node's properties, inside the dive. `v` is the OWNER's view.
@@ -5485,6 +5497,14 @@ mod tests {
         labels.sort();
         labels.dedup();
         assert_eq!(labels.len(), e.len());
+        // The menu draws a submenu per RUN of a group: a group split in two
+        // would show up as two submenus of the same name.
+        let mut runs: Vec<&str> = e.iter().filter_map(|(_, op)| step_group(op)).collect();
+        runs.dedup();
+        let mut unique = runs.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(runs.len(), unique.len(), "{runs:?}");
     }
 
     fn view(state: ViewState) -> View {

@@ -1127,7 +1127,40 @@ pub fn for_task(task: Task) -> impl Iterator<Item = &'static RemoteModel> {
     CATALOG.iter().filter(move |m| m.task == task)
 }
 
+/// The submenus of a GenAI Pipeline's step menu, in menu order. Every
+/// [`Task::menu_group`] is one of these.
+pub const MENU_GROUPS: [&str; 10] = [
+    "image generation",
+    "image edit",
+    "upscale",
+    "video generation",
+    "video edit",
+    "depth, normals, materials",
+    "relight",
+    "matte",
+    "3D",
+    "prompt tools",
+];
+
 impl Task {
+    /// Which submenu of the step menu a model of this task sits in: fifty
+    /// models in one column run off the screen, and a new model lands in
+    /// the right place just by naming its task.
+    pub fn menu_group(self) -> &'static str {
+        match self {
+            Task::TextToImage => "image generation",
+            Task::Edit | Task::EditRef | Task::Inpaint | Task::Outpaint => "image edit",
+            Task::Upscale | Task::VideoUpscale => "upscale",
+            Task::ImageToVideo => "video generation",
+            Task::VideoEdit | Task::VideoInpaint => "video edit",
+            Task::Depth | Task::Normals | Task::Albedo => "depth, normals, materials",
+            Task::Relight => "relight",
+            Task::Cutout => "matte",
+            Task::ImageTo3D => "3D",
+            Task::Enhance | Task::Describe => "prompt tools",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Task::TextToImage => "text to image",
@@ -1226,6 +1259,16 @@ mod tests {
     fn every_task_has_a_model() {
         for t in Task::ALL {
             assert!(for_task(t).next().is_some(), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn every_task_is_in_a_listed_menu_group() {
+        for t in Task::ALL {
+            assert!(MENU_GROUPS.contains(&t.menu_group()), "{t:?}");
+        }
+        for g in MENU_GROUPS {
+            assert!(Task::ALL.iter().any(|t| t.menu_group() == g), "{g} is empty");
         }
     }
 

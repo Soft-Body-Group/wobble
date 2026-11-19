@@ -8,6 +8,104 @@ use crate::theme;
 use engine::graph::NodeKind;
 use std::collections::BTreeMap;
 
+/// A popup menu's body, scrolling once it would outgrow the window. egui
+/// slides a popup to fit the screen, so a body capped at the window's height
+/// is always wholly on it. Short menus look as they always did.
+pub fn scroll_menu<R>(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let chrome = ui.spacing().menu_margin.sum().y + 8.0;
+    let max = (ui.ctx().content_rect().height() - chrome).max(64.0);
+    egui::ScrollArea::vertical()
+        .max_height(max)
+        .show(ui, body)
+        .inner
+}
+
+/// A submenu that scrolls ([`scroll_menu`]) and keeps its labels on one line:
+/// opened near a window edge a menu gets squeezed, and egui would otherwise
+/// wrap them, at worst one character per line.
+pub fn scroll_menu_button(ui: &mut egui::Ui, label: &str, min_width: f32, body: impl FnOnce(&mut egui::Ui)) {
+    ui.menu_button(label, |ui| {
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        ui.set_min_width(min_width);
+        scroll_menu(ui, body);
+    });
+}
+
+#[cfg(test)]
+mod scroll_menu_tests {
+    use super::*;
+    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
+
+    struct Seen {
+        clip: Rect,
+        last: Rect,
+        first: Rect,
+    }
+
+    /// Opens a menu of `rows` in a 400 x 300 window, then wheels over it.
+    fn run(rows: usize) -> (Seen, Seen) {
+        let ctx = egui::Context::default();
+        let at = Pos2::new(40.0, 150.0);
+        let mut seen = None;
+        let mut frame = |events: Vec<Event>| {
+            let raw = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(at, vec2(60.0, 20.0))), |ui| {
+                    scroll_menu_button(ui, "menu", 100.0, |ui| {
+                        let first = ui.button("row").rect;
+                        let mut last = first;
+                        for _ in 1..rows {
+                            last = ui.button("row").rect;
+                        }
+                        seen = Some(Seen { clip: ui.clip_rect(), first, last });
+                    });
+                });
+            });
+            seen.take()
+        };
+        let press = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(vec![Event::PointerMoved(at)]);
+        frame(vec![press(true)]);
+        frame(vec![press(false)]);
+        let mut opened = None;
+        for _ in 0..4 {
+            opened = frame(vec![]).or(opened);
+        }
+        let mid = Pos2::new(opened.as_ref().unwrap().first.center().x, 150.0);
+        frame(vec![Event::PointerMoved(mid)]);
+        frame(vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -120.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        }]);
+        let mut after = None;
+        for _ in 0..40 {
+            after = frame(vec![]).or(after);
+        }
+        (opened.unwrap(), after.unwrap())
+    }
+
+    #[test]
+    fn a_tall_menu_fits_the_window_and_scrolls() {
+        let (open, after) = run(100);
+        assert!(open.clip.top() >= 0.0 && open.clip.bottom() <= 300.0, "{:?}", open.clip);
+        assert!(open.last.bottom() > 300.0, "the rows should overflow");
+        assert!(after.last.top() < open.last.top() - 10.0, "the wheel should scroll it");
+    }
+
+    #[test]
+    fn a_short_menu_shows_every_row_where_it_opened() {
+        let (open, after) = run(3);
+        assert!(open.clip.contains_rect(open.first) && open.clip.contains_rect(open.last));
+        assert_eq!(open.first.top(), after.first.top());
+    }
+}
+
 /// Numeric field geometry. Every float control is EXACTLY this size, no
 /// matter what it is displaying — a panel is n whole tiles wide and must
 /// stay that way, so a value like 0.28385 can never push the grid apart.
