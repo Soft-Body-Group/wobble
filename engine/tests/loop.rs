@@ -176,6 +176,7 @@ fn iterated_translate_moves_n_steps() {
         shear: [0.0, 0.0],
         taper: 0.0,
         taper_angle: 90.0,
+        invert: false,
     });
     let r = row(&ctx, &mut comp, &loop_graph(step.clone(), 3.0));
     // The FALLING edge: shifted-in pixels are transparent black, so the
