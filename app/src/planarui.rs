@@ -7,6 +7,11 @@
 //! forward to the end or backward to the start, and streams one
 //! `PlanarFrame` per frame back. The app writes them onto the node's
 //! `track` data as they arrive, so the overlay fills in while it runs.
+//!
+//! With an IGNORE matte wired (input 1) the app first renders it over the
+//! frames the track will visit (`BakeSink::Planar`, one EXR per comp
+//! frame), and the job hands each frame's matte to the tracker alongside
+//! the picture: what it covers sits out the solve, as if off the frame.
 
 use engine::decode::{ExrDecoder, ImageInfo};
 use engine::diskcache::DiskCache;
@@ -227,6 +232,7 @@ pub fn spawn(
     tick0: i64,
     backward: bool,
     params: &PlanarTrackParams,
+    mattes: Option<PathBuf>,
 ) -> PlanarJob {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -264,6 +270,14 @@ pub fn spawn(
             }
             Ok(Plane::from_rgba_f16(buf, w, h, stride))
         };
+        // Frame i's ignore matte: the render of input 1 at its comp frame.
+        let matte_dec = engine::decode::AnyDecoder::default();
+        let matte = |i: usize| -> Result<Option<Plane>, String> {
+            let Some(dir) = &mattes else { return Ok(None) };
+            let tick = (tick0 + i as i64).max(0) as u64;
+            let path = dir.join(crate::corridorkey::frame_name(tick));
+            matte_plane(&matte_dec, &path, w, h).map(Some).map_err(|e| format!("{}: {e:#}", path.display()))
+        };
         let reference = match load(ref_idx, &mut buf) {
             Ok(p) => p,
             Err(e) => {
@@ -271,7 +285,20 @@ pub fn spawn(
                 return;
             }
         };
-        let mut tracker = Tracker::new(reference, polygon, opts);
+        let ref_matte = match matte(ref_idx) {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = tx.send(Msg::Error(e));
+                return;
+            }
+        };
+        let mut tracker = Tracker::new_masked(reference, ref_matte, polygon, opts);
+        if !tracker.has_template() {
+            let _ = tx.send(Msg::Error(
+                "the ignore matte covers the whole region on the reference frame: nothing left to track".into(),
+            ));
+            return;
+        }
         if let Some(m) = tracker.mesh() {
             let mesh = Mesh {
                 verts: m.verts.iter().map(|v| [v[0] / w as f32, v[1] / h as f32]).collect(),
@@ -291,7 +318,14 @@ pub fn spawn(
                     return;
                 }
             };
-            let r = tracker.step(frame);
+            let ignore = match matte(i) {
+                Ok(m) => m,
+                Err(e) => {
+                    let _ = tx.send(Msg::Error(e));
+                    return;
+                }
+            };
+            let r = tracker.step_masked(frame, ignore);
             let corners_px = tracker.corners(&r.h);
             let mut corners = [[0.0f32; 2]; 4];
             for (k, c) in corners_px.iter().take(4).enumerate() {
@@ -318,6 +352,39 @@ pub fn spawn(
         error: None,
         finished: false,
     }
+}
+
+/// A rendered matte frame's red channel as a tracking plane of the
+/// PLATE's size: the matte renders at the comp's size, which a format or
+/// proxy can make differ from the plate's, so it is resampled (bilinear,
+/// by normalised position) onto the plate's pixels.
+fn matte_plane(dec: &engine::decode::AnyDecoder, path: &std::path::Path, w: usize, h: usize) -> anyhow::Result<Plane> {
+    let info = dec.read_header(path)?;
+    let (mw, mh) = (info.width as usize, info.height as usize);
+    let stride = info.row_stride_f16();
+    let mut buf = vec![f16::ZERO; stride * mh];
+    dec.decode_into(path, info, stride, &mut buf)?;
+    let mut red = vec![0.0f32; mw * mh];
+    for y in 0..mh {
+        for x in 0..mw {
+            red[y * mw + x] = buf[y * stride + x * 4].to_f32();
+        }
+    }
+    let src = Plane::new(mw, mh, red);
+    if (mw, mh) == (w, h) {
+        return Ok(src);
+    }
+    let (sx, sy) = (mw as f64 / w as f64, mh as f64 / h as f64);
+    let mut px = vec![0.0f32; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = ((x as f64 + 0.5) * sx, (y as f64 + 0.5) * sy);
+            let u = u.clamp(0.5, mw as f64 - 0.5);
+            let v = v.clamp(0.5, mh as f64 - 0.5);
+            px[y * w + x] = src.sample(u, v).unwrap_or(0.0);
+        }
+    }
+    Ok(Plane::new(w, h, px))
 }
 
 /// The properties panel. Edits `p` in place; a track or cancel comes back

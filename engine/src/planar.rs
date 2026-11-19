@@ -401,6 +401,26 @@ pub struct Level {
     pub img: Plane,
     pub gx: Plane,
     pub gy: Plane,
+    /// The IGNORE matte at this level (1 = not the plane: a foreground
+    /// occluder the user roto'd), or none. A pixel under it is treated as
+    /// off the frame: no vote in the solve, the statistics or the score,
+    /// and never cut into a template.
+    pub ignore: Option<Plane>,
+}
+
+/// Above this (bilinear, at the level's own scale) an ignore matte keeps a
+/// pixel out. Low on purpose: an occluder's soft edge and the gradients it
+/// smears into its neighbours are not the plane either, and the pyramid's
+/// blur spreads the edge a little wider at each level, which is the
+/// dilation a coarse level wants.
+pub const IGNORE_ABOVE: f32 = 0.25;
+
+impl Level {
+    /// Whether the ignore matte covers level coordinate `(x, y)`.
+    #[inline]
+    pub fn ignored(&self, x: f64, y: f64) -> bool {
+        self.ignore.as_ref().and_then(|m| m.sample(x, y)).is_some_and(|v| v > IGNORE_ABOVE)
+    }
 }
 
 /// A Gaussian-ish pyramid; level `l` is the full image at scale `2^-l`.
@@ -432,7 +452,7 @@ impl Pyramid {
                 None => cur,
             };
             let (gx, gy) = img.gradients();
-            levels.push(Level { img, gx, gy });
+            levels.push(Level { img, gx, gy, ignore: None });
             match next {
                 Some(n) => cur = n,
                 None => break,
@@ -443,6 +463,26 @@ impl Pyramid {
 
     pub fn base(&self) -> &Plane {
         &self.levels[0].img
+    }
+
+    /// Attach an ignore matte (frame-sized, 1 = not the plane), downsampled
+    /// alongside the picture. A matte of another size is ignored itself.
+    pub fn with_ignore(mut self, matte: Plane) -> Self {
+        let Some(l0) = self.levels.first() else { return self };
+        if matte.w != l0.img.w || matte.h != l0.img.h {
+            return self;
+        }
+        let mut cur = matte;
+        let n = self.levels.len();
+        for (l, lev) in self.levels.iter_mut().enumerate() {
+            let next = (l + 1 < n).then(|| cur.downsample());
+            lev.ignore = Some(cur);
+            match next {
+                Some(m) => cur = m,
+                None => break,
+            }
+        }
+        self
     }
 }
 
@@ -622,7 +662,7 @@ impl Template {
                     }
                     let cx = x as f64 + 0.5;
                     let cy = y as f64 + 0.5;
-                    if !poly_contains(&poly_l, cx, cy) || !keep(cx * f, cy * f) {
+                    if !poly_contains(&poly_l, cx, cy) || lev.ignored(cx, cy) || !keep(cx * f, cy * f) {
                         continue;
                     }
                     let (tx, ty) = h_apply(&norm, cx * f, cy * f);
@@ -874,6 +914,9 @@ fn warp_level(tl: &TemplateLevel, lev: &Level, hl: &H, s: &mut Scratch, use_wts:
                 }
                 let sx = u / w;
                 let sy = v / w;
+                if lev.ignored(sx, sy) {
+                    continue;
+                }
                 let (Some(i), Some(gx), Some(gy)) =
                     (lev.img.sample(sx, sy), lev.gx.sample(sx, sy), lev.gy.sample(sx, sy))
                 else {
@@ -1361,6 +1404,9 @@ pub fn solve(tpl: &Template, cur: &Pyramid, init: &H, opts: &SolveOpts) -> Fit {
 
 /// Score a warp without refining it.
 pub fn score(tpl: &Template, cur: &Pyramid, h: &H) -> (f32, f32) {
+    if tpl.levels.is_empty() {
+        return (0.0, 0.0);
+    }
     let mut s = Scratch::default();
     let hh = h_mul(h, &tpl.norm_inv);
     let count = warp_level(&tpl.levels[0], &cur.levels[0], &hh, &mut s, false);
@@ -1372,6 +1418,9 @@ pub fn score(tpl: &Template, cur: &Pyramid, h: &H) -> (f32, f32) {
 /// for a jump the pyramid cannot reach. Returns the best full-res warp
 /// found within ±`radius` coarse pixels of `init`, and its coarse score.
 pub fn coarse_search(tpl: &Template, cur: &Pyramid, init: &H, radius: usize) -> (H, f32) {
+    if tpl.levels.is_empty() || cur.levels.is_empty() {
+        return (*init, 0.0);
+    }
     let l = tpl.levels.len().min(cur.levels.len()).saturating_sub(1);
     let f = (1u64 << l) as f64;
     let tl = &tpl.levels[l];
@@ -1844,8 +1893,17 @@ impl Tracker {
 
     /// Start a track on `reference` over `polygon` (reference pixels).
     pub fn new(reference: Plane, polygon: Vec<[f64; 2]>, opts: TrackOpts) -> Self {
+        Self::new_masked(reference, None, polygon, opts)
+    }
+
+    /// `new` with the reference frame's ignore matte (frame-sized, 1 = not
+    /// the plane): what it covers is never cut into the template.
+    pub fn new_masked(reference: Plane, ignore: Option<Plane>, polygon: Vec<[f64; 2]>, opts: TrackOpts) -> Self {
         let n_levels = Self::levels_for(reference.w, reference.h);
-        let pyr = Pyramid::build_with(reference, n_levels, opts.detail);
+        let mut pyr = Pyramid::build_with(reference, n_levels, opts.detail);
+        if let Some(m) = ignore {
+            pyr = pyr.with_ignore(m);
+        }
         let tpl = Template::build(&pyr, &polygon, MIN_SIDE);
         let mesh = opts.mesh.map(|m| MeshTrack::new(Mesh::grid(&polygon, m.cells), &pyr, &m));
         Self {
@@ -1864,6 +1922,12 @@ impl Tracker {
 
     pub fn mesh(&self) -> Option<&Mesh> {
         self.mesh.as_ref().map(|m| &m.mesh)
+    }
+
+    /// Whether the region left anything to track: an ignore matte over the
+    /// whole region at the reference frame leaves no template.
+    pub fn has_template(&self) -> bool {
+        !self.tpl.levels.is_empty()
     }
 
     /// Move the trust bar (`TrackOpts.confident`) between frames: a point
@@ -1885,7 +1949,17 @@ impl Tracker {
     /// — a backward track is a forward track over a reversed list).
     /// `WOBBLE_PLANAR_TRACE=1` prints where the frame's time went.
     pub fn step(&mut self, frame: Plane) -> FrameResult {
-        let pyr = self.pyramid(frame);
+        self.step_masked(frame, None)
+    }
+
+    /// `step` with this frame's ignore matte (frame-sized, 1 = not the
+    /// plane): its pixels sit out the solve, the score and any re-anchor,
+    /// as if they were off the picture.
+    pub fn step_masked(&mut self, frame: Plane, ignore: Option<Plane>) -> FrameResult {
+        let mut pyr = self.pyramid(frame);
+        if let Some(m) = ignore {
+            pyr = pyr.with_ignore(m);
+        }
         self.step_pyramid(&pyr)
     }
 
@@ -2592,6 +2666,74 @@ mod tests {
         let r = tr.step(render(&tex, &h_mul(&motion, &base), W, HT, &RenderOpts::default()));
         assert!(!r.lost, "score {}", r.score);
         assert!(corner_err(&r.h, &motion, &quad()) < 0.1, "{:?}", r.h);
+    }
+
+    /// An ignore matte over a disc (centre, radius), 1 inside.
+    fn disc_matte(c: [f64; 2], r: f64) -> Plane {
+        let mut m = Plane::filled(W, HT, 0.0);
+        for y in 0..HT {
+            for x in 0..W {
+                let (dx, dy) = (x as f64 + 0.5 - c[0], y as f64 + 0.5 - c[1]);
+                if dx * dx + dy * dy <= r * r {
+                    m.px[y * W + x] = 1.0;
+                }
+            }
+        }
+        m
+    }
+
+    /// The occluder that `a_big_occluder_coasts…` loses the plane under,
+    /// roto'd: with the matte it is no longer there as far as the solve
+    /// is concerned, and the frames under it are TRACKED, not coasted.
+    #[test]
+    fn an_ignore_matte_tracks_through_a_big_occluder() {
+        let tex = scene(17);
+        let base = view(W, HT, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        let step = h_mul(&h_translation(4.0, -1.5), &view(W, HT, 0.6, 1.004, 0.0, 0.0, 0.0, 0.0));
+        let step = h_mul(&step, &h_inv(&base).unwrap());
+        let mut tr = Tracker::new(render(&tex, &base, W, HT, &RenderOpts::default()), quad(), TrackOpts::default());
+        let mut motion = IDENTITY;
+        for t in 0..6 {
+            motion = h_mul(&step, &motion);
+            let c = poly_centroid(&poly_map(&quad(), &motion));
+            let o = RenderOpts { occluder: Some((c, 95.0)), ..Default::default() };
+            let frame = render(&tex, &h_mul(&motion, &base), W, HT, &o);
+            let r = tr.step_masked(frame, Some(disc_matte(c, 97.0)));
+            let err = corner_err(&r.h, &motion, &quad());
+            assert!(!r.lost, "frame {t}: lost ({:?}) score {:.3}", r.why, r.score);
+            assert!(err < 0.25, "frame {t}: corner error {err}");
+        }
+    }
+
+    /// An occluder that sits still on the screen while the plane slides
+    /// under it, already there in the reference frame. Matted, it is never
+    /// cut into the template, and so never holds the track back.
+    #[test]
+    fn an_ignore_matte_keeps_a_reference_occluder_out_of_the_template() {
+        let tex = scene(29);
+        let base = view(W, HT, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        let disc = ([260.0, 190.0], 60.0);
+        let o = RenderOpts { occluder: Some(disc), ..Default::default() };
+        let matte = || Some(disc_matte(disc.0, disc.1 + 2.0));
+        let run = |masked: bool| -> f64 {
+            let reference = render(&tex, &base, W, HT, &o);
+            let mut tr = if masked {
+                Tracker::new_masked(reference, matte(), quad(), TrackOpts::default())
+            } else {
+                Tracker::new(reference, quad(), TrackOpts::default())
+            };
+            let mut worst = 0.0f64;
+            for t in 1..8 {
+                let motion = h_translation(3.0 * t as f64, 1.0 * t as f64);
+                let frame = render(&tex, &h_mul(&motion, &base), W, HT, &o);
+                let r = if masked { tr.step_masked(frame, matte()) } else { tr.step(frame) };
+                worst = worst.max(corner_err(&r.h, &motion, &quad()));
+            }
+            worst
+        };
+        let masked = run(true);
+        assert!(masked < 0.2, "masked: worst corner error {masked}");
+        println!("reference occluder: masked {masked:.3} px, unmasked {:.3} px", run(false));
     }
 
     /// A cloth shot's failure, pinned: a band of light sliding over the

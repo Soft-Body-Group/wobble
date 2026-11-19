@@ -183,6 +183,8 @@ pub(crate) struct SuiteState {
     /// --test-planar: the stabilise CornerPin's worst corner residual.
     pub(crate) planar_stab: f64,
     pub(crate) planar_press: egui::Pos2,
+    /// The gizmo stage's half of the PASS line, kept for the matte stages.
+    pub(crate) planar_note: String,
     /// --test-track: (stage, frames, tracker node).
     pub(crate) track: Option<(u32, u32, u64)>,
     /// --test-channels: (stage, frames, shuffle node).

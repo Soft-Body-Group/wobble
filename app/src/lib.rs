@@ -4346,6 +4346,9 @@ enum BakeSink {
     /// A CameraTrack node rendering input `port` (0 the picture, 1 the
     /// matte) for the 3D solve (`camtrackui.rs`).
     CamTrack { port: usize },
+    /// A PlanarTrack node rendering its ignore matte (input 1) over the
+    /// frames the track will visit (`start_planar`).
+    Planar,
 }
 
 impl SubtreeBake {
@@ -4377,6 +4380,7 @@ impl SubtreeBake {
                 .dir
                 .join(if *port == 0 { "Input" } else { "Matte" })
                 .join(corridorkey::frame_name(tick)),
+            BakeSink::Planar => self.dir.join("Matte").join(corridorkey::frame_name(tick)),
         }
     }
 }
@@ -4633,6 +4637,9 @@ struct Gfx {
     track_job: Option<(u64, tracker::TrackJob)>,
     /// A running planar track and the node it is for.
     planar_job: Option<(u64, planarui::PlanarJob)>,
+    /// A planar track waiting on its ignore matte's render: the node, the
+    /// direction, and the comp frame the track is seeded from.
+    planar_matte: Option<(u64, bool, i64)>,
     /// Live Blender sessions, one per Blender node (`blenderui`).
     blender: HashMap<u64, blenderui::Live>,
     /// UV Warp maps read back for gizmos seen through them, keyed on the
@@ -6599,6 +6606,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             planar_t0: web_time::Instant::now(),
             planar_stab: 0.0,
             planar_press: egui::Pos2::ZERO,
+            planar_note: String::new(),
             channels: opts.test_channels.then_some((0, 0, 0)),
             crypto: opts.test_crypto.then_some((0, 0, 0)),
             crypto_since: None,
@@ -6762,6 +6770,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         render_status: None,
         track_job: None,
         planar_job: None,
+        planar_matte: None,
         blender: HashMap::new(),
         uv_grids: HashMap::new(),
         view3d: HashMap::new(),
@@ -7989,6 +7998,8 @@ impl Gfx {
                     Some(engine::color::Colorspace::LINEAR_REC709)
                 }
                 BakeSink::Stabilize { .. } | BakeSink::CamTrack { .. } => None,
+                // An ignore matte is coverage: no transform.
+                BakeSink::Planar => None,
                 // Data is a measurement: no colour transform, ever.
                 BakeSink::Write { data: true, .. } => None,
                 BakeSink::Write { params, .. } => {
@@ -8172,6 +8183,11 @@ impl Gfx {
         }
         if let BakeSink::CamTrack { port } = bake.sink {
             self.ct_render_finished(bake.node, port);
+            return;
+        }
+        if let BakeSink::Planar = bake.sink {
+            let _ = engine::bakes::mark_baked(&bake.dir.join("Matte"));
+            self.planar_matte_finished(bake.node);
             return;
         }
         // A Write's frames ARE the deliverable: nothing to mark, nothing to
@@ -13082,6 +13098,13 @@ impl Gfx {
     /// forward to the end or backward to the start. Explicit, cancellable,
     /// one at a time, like the blob tracker.
     fn start_planar(&mut self, node: u64, backward: bool) {
+        self.start_planar_from(node, backward, self.eval_tick() as i64);
+    }
+
+    /// `start_planar` seeded from comp frame `ref_tick`: the matte render
+    /// moves the playhead, so the track it was waiting for remembers where
+    /// it was asked from.
+    fn start_planar_from(&mut self, node: u64, backward: bool, ref_tick: i64) {
         let Some((_, frames)) = self.input_frames(node) else {
             self.render_status =
                 Some("wire a Load with footage into the PlanarTrack's input first".into());
@@ -13098,8 +13121,34 @@ impl Gfx {
             Some(NodeKind::Read { start, first, .. }) => first.unwrap_or(start.unwrap_or(0)),
             _ => 0,
         };
-        let ref_tick = self.eval_tick() as i64;
         let ref_idx = (ref_tick - tick0).clamp(0, frames.len() as i64 - 1) as usize;
+        // An ignore matte wired: render it over the frames the track will
+        // visit first, then track (`planar_matte_finished`).
+        let mattes = match self.egraph.input_of(node, engine::graph::PlanarTrackParams::MATTE_INPUT) {
+            None => None,
+            Some(m) => {
+                let (lo, hi) = if backward { (0, ref_idx) } else { (ref_idx, frames.len() - 1) };
+                match self.planar_matte_dir(node, m, tick0 + lo as i64, tick0 + hi as i64 + 1) {
+                    Err(e) => {
+                        self.render_status = Some(format!("planar track: the ignore matte {e}"));
+                        return;
+                    }
+                    Ok((dir, from, len)) => {
+                        let sub = dir.join("Matte");
+                        if !engine::bakes::is_baked(&sub) {
+                            if let Err(e) = self.planar_matte_render(node, m, dir.clone(), from, len) {
+                                self.render_status = Some(format!("planar track: the ignore matte {e}"));
+                                return;
+                            }
+                            self.planar_matte = Some((node, backward, ref_tick));
+                            return;
+                        }
+                        Some(sub)
+                    }
+                }
+            }
+        };
+        self.planar_matte = None;
         let Some(n) = self.egraph.node_mut(node) else { return };
         let NodeKind::PlanarTrack(params) = &mut n.kind else { return };
         // A track is a fresh answer: the results and the keys they wrote.
@@ -13123,8 +13172,63 @@ impl Gfx {
                 tick0,
                 backward,
                 &params,
+                mattes,
             ),
         ));
+    }
+
+    /// Where the ignore matte of a track over comp frames `[a, b)` renders:
+    /// keyed on the matte branch and the span, so an unchanged matte is
+    /// rendered once and a moved one never reuses stale frames.
+    fn planar_matte_dir(&self, node: u64, matte: u64, a: i64, b: i64) -> Result<(std::path::PathBuf, u64, u64), String> {
+        if a < 0 {
+            return Err("cannot render before comp frame 0".into());
+        }
+        let k = self.subtree_key_of(matte).ok_or("is not renderable yet")?;
+        let key = engine::diskcache::content_hash(&[&k.to_le_bytes(), &node.to_le_bytes(), &a.to_le_bytes(), &b.to_le_bytes()]);
+        let root = match &self.disk_cache {
+            Some(c) => c.root().join("planar"),
+            None => engine::paths::temp_dir().join("wobble-planar"),
+        };
+        Ok((root.join(format!("{key:016x}")), a as u64, b as u64))
+    }
+
+    /// A `SubtreeBake` of the ignore matte into `<dir>/Matte`.
+    fn planar_matte_render(&mut self, node: u64, matte: u64, dir: std::path::PathBuf, from: u64, len: u64) -> Result<(), String> {
+        let sub = dir.join("Matte");
+        std::fs::create_dir_all(&sub).map_err(|e| format!("{e}"))?;
+        let key = self.subtree_key_of(matte).ok_or("is not renderable yet")?;
+        let (w, h) = self.comp.output_size().ok_or("has nothing rendering yet")?;
+        self.playing = false;
+        let mut next = from;
+        while next < len && sub.join(corridorkey::frame_name(next)).exists() {
+            next += 1;
+        }
+        let pb = self.playback.as_mut().ok_or("needs a sequence loaded")?;
+        pb.player.seek(next.min(len.saturating_sub(1)));
+        let info = engine::decode::ImageInfo { width: w, height: h };
+        let readback = self.ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("planar-matte"),
+            size: info.staging_bytes(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        self.load_errors.remove(&node);
+        let bake = SubtreeBake { node, input: matte, key, dir, from, len, next, readback, info, sink: BakeSink::Planar };
+        if bake.next >= bake.len {
+            self.finish_graph_bake(bake);
+        } else {
+            self.graph_bake = Some(bake);
+        }
+        Ok(())
+    }
+
+    /// The ignore matte has rendered: start the track it was waiting for.
+    fn planar_matte_finished(&mut self, node: u64) {
+        match self.planar_matte.take() {
+            Some((n, backward, from)) if n == node => self.start_planar_from(node, backward, from),
+            other => self.planar_matte = other,
+        }
     }
 
     /// Cable the track's corner pin into a node that can follow it: the

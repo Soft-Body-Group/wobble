@@ -2268,6 +2268,7 @@ impl Gfx {
                 crate::BakeSink::LtxHdr => "ltxhdr-input",
                 crate::BakeSink::Stabilize { .. } => "stabilize-input",
                 crate::BakeSink::CamTrack { .. } => "camtrack-input",
+                crate::BakeSink::Planar => "planar-matte",
             };
             jobs.push(json!({
                 "node": b.node, "kind": what,

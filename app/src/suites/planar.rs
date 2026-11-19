@@ -314,13 +314,121 @@ impl Gfx {
                         fail(format!("gizmo: corner {k} moved too: {:?} from {w:?}", p.corners[k]));
                     }
                 }
-                println!(
-                    "PLANAR TEST PASS: {N} frames tracked to the truth within 0.5px (planar) and 1px \
+                self.test.planar_note = format!(
+                    "{N} frames tracked to the truth within 0.5px (planar) and 1px \
                      (mesh vertices) with the viewer following, a driven Transform's pin lands on the \
                      truth, a stabilise CornerPin holds the region within {:.3}px of its reference \
-                     corners, and a corner drag of 60x25 screen px moved corner 0 by {d:?} \
+                     corners, a corner drag of 60x25 screen px moved corner 0 by {d:?} \
                      (wanted {want:?}) leaving the other three",
                     self.test.planar_stab
+                );
+                // Put the region back where the truth has it, mesh off.
+                if let Some(NodeKind::PlanarTrack(p)) = self.egraph.node_mut(node).map(|n| &mut n.kind) {
+                    for k in 0..4 {
+                        p.corners[k] = [(q[k][0] / W as f64) as f32, (q[k][1] / HT as f64) as f32];
+                    }
+                    p.mesh = false;
+                }
+                self.seek_to(0);
+                next = 10;
+            }
+            10 if self.eval_tick() == 0 && frames > 2 => {
+                // The IGNORE matte: white over the right half of the
+                // frame, so the right half of the region sits out. The
+                // matte renders first, then the track runs on what is
+                // left and still lands on the truth.
+                use engine::nodes::gradient::GradStop;
+                let stops = vec![
+                    GradStop { pos: 0.0, color: [0.0, 0.0, 0.0, 1.0] },
+                    GradStop { pos: 0.5, color: [0.0, 0.0, 0.0, 1.0] },
+                    GradStop { pos: 0.501, color: [1.0, 1.0, 1.0, 1.0] },
+                    GradStop { pos: 1.0, color: [1.0, 1.0, 1.0, 1.0] },
+                ];
+                let m = self.egraph.add(
+                    NodeKind::Gradient(engine::graph::GradientParams { inherit: true, stops, ..Default::default() }),
+                    egui::pos2(300.0, 150.0),
+                );
+                self.egraph.connect(node, engine::graph::PlanarTrackParams::MATTE_INPUT, m);
+                self.test.planar_t0 = web_time::Instant::now();
+                next = 11;
+            }
+            11 if frames > 5 => {
+                self.start_planar(node, false);
+                if self.planar_matte.is_none() && self.planar_job.is_none() {
+                    fail(format!("matte: nothing started ({:?})", self.render_status));
+                }
+                next = 12;
+            }
+            12 if self.planar_job.is_none() && self.planar_matte.is_none() && self.graph_bake.is_none() && frames > 2 => {
+                let Some(m) = self.egraph.input_of(node, 1) else { fail("matte unwired".into()) };
+                let dir = match self.planar_matte_dir(node, m, 0, N as i64) {
+                    Ok((d, _, _)) => d.join("Matte"),
+                    Err(e) => fail(format!("matte dir: {e}")),
+                };
+                let rendered = std::fs::read_dir(&dir)
+                    .map(|r| r.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "exr")).count())
+                    .unwrap_or(0);
+                if rendered != N || !engine::bakes::is_baked(&dir) {
+                    fail(format!("matte: {rendered} frames rendered into {} (wanted {N}) ({:?})", dir.display(), self.render_status));
+                }
+                let Some(NodeKind::PlanarTrack(p)) = self.egraph.node(node).map(|n| &n.kind) else {
+                    fail("node gone".into())
+                };
+                let t = &p.track;
+                if t.frames.len() != N || t.lost() > 0 {
+                    fail(format!("matte: {} frames tracked of {N}, {} lost ({:?})", t.frames.len(), t.lost(), self.render_status));
+                }
+                let q = synth::region(W, HT);
+                // Corners 0 and 3 sit on the visible (left) half; 1 and 2
+                // under the matte, where the fit is an extrapolation across
+                // the hidden half of the region.
+                let (mut worst, mut hidden) = (0.0f64, 0.0f64);
+                for f in &t.frames {
+                    let h = truth(f.frame as usize);
+                    for k in 0..4 {
+                        let (x, y) = h_apply(&h, q[k][0], q[k][1]);
+                        let got = f.corners[k];
+                        let e = (got[0] as f64 * W as f64 - x).hypot(got[1] as f64 * HT as f64 - y);
+                        if k == 0 || k == 3 {
+                            worst = worst.max(e);
+                        } else {
+                            hidden = hidden.max(e);
+                        }
+                    }
+                }
+                println!("planar: matted track (matte rendered at {:?}), visible corners {worst:.3}px, hidden corners {hidden:.3}px", self.comp.output_size());
+                if worst > 0.5 || hidden > 1.5 {
+                    fail(format!("matte: corner error {worst:.3}px visible, {hidden:.3}px hidden, with half the region matted out"));
+                }
+                self.test.planar_stab = worst;
+                println!(
+                    "planar: half-matted track of {N} frames (matte render included) in {:.1}s, worst {worst:.3}px",
+                    self.test.planar_t0.elapsed().as_secs_f32()
+                );
+                // Now a matte over everything: the track must refuse, not
+                // invent a plane.
+                if let Some(NodeKind::Gradient(g)) = self.egraph.node_mut(m).map(|n| &mut n.kind) {
+                    for s in g.stops.iter_mut() {
+                        s.color = [1.0, 1.0, 1.0, 1.0];
+                    }
+                }
+                self.render_status = None;
+                self.seek_to(0);
+                next = 13;
+            }
+            13 if self.eval_tick() == 0 && frames > 5 => {
+                self.start_planar(node, false);
+                next = 14;
+            }
+            14 if self.planar_job.is_none() && self.planar_matte.is_none() && self.graph_bake.is_none() && frames > 2 => {
+                let said = self.render_status.clone().unwrap_or_default();
+                if !said.contains("covers the whole region") {
+                    fail(format!("matte over everything: expected a refusal, got {said:?}"));
+                }
+                println!(
+                    "PLANAR TEST PASS: {}; with an ignore matte over half the region the track holds \
+                     the truth within {:.3}px, and a matte over all of it refuses",
+                    self.test.planar_note, self.test.planar_stab
                 );
                 std::process::exit(0);
             }

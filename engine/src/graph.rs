@@ -2478,6 +2478,13 @@ pub struct PlanarTrackParams {
     pub track: TrackRef,
 }
 
+impl PlanarTrackParams {
+    /// The plate, then the IGNORE matte: white where something in front of
+    /// the plane (a hand, a pole) must sit out the track.
+    pub const INPUTS: usize = 2;
+    pub const MATTE_INPUT: usize = 1;
+}
+
 /// A similarity that does nothing: the drive channels at the reference.
 pub const DRIVE_REST: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
@@ -6319,12 +6326,12 @@ impl NodeKind {
             NodeKind::Transform(_) | NodeKind::CornerPin(_) => 2,
             NodeKind::Stabilize(_) => StabilizeParams::INPUTS,
             NodeKind::CamTrack(_) => CamTrackParams::INPUTS,
+            NodeKind::PlanarTrack(_) => PlanarTrackParams::INPUTS,
             NodeKind::Paint(_)
             | NodeKind::Curve(_)
             | NodeKind::LumaKey(_)
             | NodeKind::Reformat(_)
             | NodeKind::Tracker(_)
-            | NodeKind::PlanarTrack(_)
             | NodeKind::Slip(_)
             | NodeKind::TimeRemap(_)
             | NodeKind::Speed(_)
@@ -7146,7 +7153,15 @@ impl NodeKind {
             NodeKind::GraphBake { .. } => s("the branch baked to disk; downstream then \
                                              plays the files"),
             NodeKind::Paint(_) => s("the picture painted over"),
-            NodeKind::Tracker(_) | NodeKind::PlanarTrack(_) => s("the plate to track"),
+            NodeKind::Tracker(_) => s("the plate to track"),
+            NodeKind::PlanarTrack(_) => {
+                if input == 0 {
+                    s("the plate to track")
+                } else {
+                    s("pixels under this matte are not the plane: a hand, a pole, \
+                       anything in front of it sits out the track")
+                }
+            }
             NodeKind::Dot { .. } => s("passed on unchanged: a routing anchor"),
             NodeKind::Slip(_)
             | NodeKind::Speed(_)
@@ -7259,6 +7274,9 @@ impl NodeKind {
             }
             NodeKind::CamTrack(_) => {
                 if input == 0 { "image" } else { "matte (not tracked)" }
+            }
+            NodeKind::PlanarTrack(_) => {
+                if input == 0 { "image" } else { "ignore matte (not the plane)" }
             }
             NodeKind::Rifetime(_) => "image (to retime)",
             NodeKind::Freeze(_) => "image (to hold)",
@@ -7419,6 +7437,10 @@ impl NodeKind {
             return PortKind::Mask;
         }
         if matches!(self, NodeKind::CamTrack(_)) && input == CamTrackParams::MATTE_INPUT {
+            return PortKind::Mask;
+        }
+        // A PlanarTrack's ignore matte says what is in front of the plane.
+        if matches!(self, NodeKind::PlanarTrack(_)) && input == PlanarTrackParams::MATTE_INPUT {
             return PortKind::Mask;
         }
         // A bake parked in a matte pipe is a matte on both sides; so is a

@@ -393,6 +393,16 @@ user-facing story. The things that cost time, so nobody pays twice:
   the input). The suite judges the driven pin at the REGION's corners: at
   the frame's corners a 0.2 px track reads as 2 px, an extrapolation
   three times further out.
+- **The ignore matte (input 1) is OFF THE FRAME, not a weight.** A pixel
+  under it (`Level::ignored`, bilinear > `IGNORE_ABOVE` = 0.25 at each
+  level's scale) is skipped exactly like one off the picture: no vote in
+  the solve, the normalisation, the score, the coverage, and never cut into
+  a template (reference or re-anchor). The app renders the matte first
+  (`BakeSink::Planar`, `<cache>/planar/<key>/Matte`, keyed on the matte
+  subtree + the span) and resamples it to the plate by normalised position.
+  The render moves the playhead, so the waiting track remembers its seed
+  frame (`planar_matte`). A matte over the whole reference region refuses
+  (`Tracker::has_template`) instead of tracking nothing.
 - **Results are keyed by COMP FRAME.** `start_planar` maps the DISPLAYED
   tick onto the windowed frame list through the Read's `first`
   (else `start`), the same rule `input_frames` cut the list by; index 0 is
