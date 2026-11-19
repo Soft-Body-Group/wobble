@@ -5792,7 +5792,7 @@ fn node_step_h(
         // format).
         NodeKind::Transform(tp) => {
             let (w, h) = res(cur);
-            engine::codegen::transform_forward_px(tp, [w, h])
+            engine::codegen::transform_applied_px(tp, [w, h])
         }
         NodeKind::CornerPin(cp) => {
             let (w, h) = res(cur);

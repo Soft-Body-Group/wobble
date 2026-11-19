@@ -4058,6 +4058,12 @@ pub struct TransformParams {
     /// the app (`EditorGraph::connect_out`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub matte: bool,
+    /// Apply the INVERSE of the whole map (pin, bend, move): the same knobs
+    /// undo what they would do, so one matchmove can be removed and put
+    /// back. Still one homography (`codegen::transform_applied_px`), a
+    /// uniform write; the gizmo keeps drawing the authored map.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub invert: bool,
 }
 
 /// How a modulated Transform takes a partial strength `m` at a pixel.
@@ -4096,6 +4102,7 @@ impl Default for TransformParams {
             taper: 0.0,
             taper_angle: 90.0,
             matte: false,
+            invert: false,
         }
     }
 }
@@ -5901,6 +5908,11 @@ pub struct CornerPinParams {
     /// the app (`EditorGraph::connect_out`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub matte: bool,
+    /// Apply the INVERSE warp: `to` back onto `from`. Folded into
+    /// `effective_to`, so the shader, the modulate span and every gizmo
+    /// that deforms through the pin follow without knowing about it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub invert: bool,
 }
 
 impl Default for CornerPinParams {
@@ -5912,7 +5924,7 @@ impl Default for CornerPinParams {
 impl CornerPinParams {
     /// A pin to `to`, blend at its default — what the maths helpers build.
     pub fn pinned(to: [[f32; 2]; 4]) -> Self {
-        Self { to, from: UNIT_QUAD, mod_blend: TransformBlend::default(), matte: false }
+        Self { to, from: UNIT_QUAD, mod_blend: TransformBlend::default(), matte: false, invert: false }
     }
 
     /// The `to` of the plain frame-to-quad pin that warps exactly as this
@@ -5920,15 +5932,19 @@ impl CornerPinParams {
     /// homography. A homography is fixed by four corners, so this is not an
     /// approximation — it is how `from` reaches the shader for free (the
     /// same uniforms, the same `persp`, the same modulate span).
+    ///
+    /// Inverted, the warp carries `to` onto `from`: the same thing with the
+    /// two quads swapped.
     pub fn effective_to(&self) -> [[f32; 2]; 4] {
-        if self.from == UNIT_QUAD {
-            return self.to;
+        let (from, to) = if self.invert { (self.to, self.from) } else { (self.from, self.to) };
+        if from == UNIT_QUAD {
+            return to;
         }
-        if self.from == self.to {
+        if from == to {
             return UNIT_QUAD;
         }
-        let h = crate::codegen::square_to_quad(self.to);
-        let f_inv = crate::codegen::mat3_inv(&crate::codegen::square_to_quad(self.from));
+        let h = crate::codegen::square_to_quad(to);
+        let f_inv = crate::codegen::mat3_inv(&crate::codegen::square_to_quad(from));
         UNIT_QUAD.map(|c| h_apply(&h, h_apply(&f_inv, c)))
     }
 
@@ -5936,6 +5952,12 @@ impl CornerPinParams {
     /// corners) with `from` held: `effective_to` run backwards, for an edit
     /// made in effective terms (the soft-crop pins).
     pub fn to_for_effective(&self, eff: [[f32; 2]; 4]) -> [[f32; 2]; 4] {
+        if self.invert {
+            // to -> from must be unit -> eff, so to is `from` carried back
+            // through eff's inverse.
+            let h_inv = crate::codegen::mat3_inv(&crate::codegen::square_to_quad(eff));
+            return self.from.map(|c| h_apply(&h_inv, c));
+        }
         if self.from == UNIT_QUAD {
             return eff;
         }
@@ -9799,6 +9821,45 @@ mod pipe_tests {
 #[cfg(test)]
 mod corner_pin_from_tests {
     use super::*;
+
+    /// Invert undoes the pin: the inverted node after the plain one is the
+    /// identity, and an edit made in effective terms round-trips.
+    #[test]
+    fn an_inverted_pin_undoes_the_plain_one() {
+        let fwd = CornerPinParams { to: B, from: A, ..Default::default() };
+        let inv = CornerPinParams { invert: true, ..fwd };
+        for p in [[0.5, 0.5], [0.1, 0.9], [0.33, 0.2]] {
+            let q = warp(&inv, warp(&fwd, p));
+            assert!((q[0] - p[0]).abs() < 1e-3 && (q[1] - p[1]).abs() < 1e-3, "{p:?} -> {q:?}");
+        }
+        let back = inv.effective_to();
+        let edited = CornerPinParams { to: inv.to_for_effective(back), ..inv };
+        for (a, b) in edited.to.iter().zip(inv.to.iter()) {
+            assert!((a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3, "{a:?} vs {b:?}");
+        }
+    }
+
+    /// A Transform's inverse is the inverse of its whole map, pin and bend
+    /// included.
+    #[test]
+    fn an_inverted_transform_undoes_the_plain_one() {
+        let t = TransformParams {
+            translate: [30.0, -12.0],
+            rotate: 17.0,
+            scale: [1.3, 0.8],
+            shear: [0.1, 0.0],
+            taper: 0.2,
+            pin: A,
+            ..Default::default()
+        };
+        let sz = [200.0, 100.0];
+        let f = crate::codegen::transform_applied_px(&t, sz);
+        let i = crate::codegen::transform_applied_px(&TransformParams { invert: true, ..t.clone() }, sz);
+        for p in [[100.0, 50.0], [10.0, 90.0], [170.0, 20.0]] {
+            let q = h_apply(&i, h_apply(&f, p));
+            assert!((q[0] - p[0]).abs() < 1e-2 && (q[1] - p[1]).abs() < 1e-2, "{p:?} -> {q:?}");
+        }
+    }
 
     fn warp(cp: &CornerPinParams, p: [f32; 2]) -> [f32; 2] {
         h_apply(&crate::codegen::corner_pin_forward_px(cp, [1.0, 1.0]), p)

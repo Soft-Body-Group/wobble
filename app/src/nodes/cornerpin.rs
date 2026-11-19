@@ -83,6 +83,8 @@ pub(crate) fn panel(
             *track_import_req = Some(true);
         }
     });
+    ui.checkbox(&mut cp.invert, "invert")
+        .on_hover_text("apply the inverse warp, pin back onto from: undo a matchmove, then redo it with a second pin");
     ui.weak("the warp carries from onto pin; S / marquee pick pins, E R T scale rotate move");
     if wired[1] {
         modulate_blend_row(ui, &mut cp.mod_blend);

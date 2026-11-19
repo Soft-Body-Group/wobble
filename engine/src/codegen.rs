@@ -4107,7 +4107,7 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                 let mut t = t.clone();
                 t.translate[0] *= graph.proxy_scale();
                 t.translate[1] *= graph.proxy_scale();
-                let hinv = mat3_inv(&transform_forward_px(&t, sz));
+                let hinv = mat3_inv(&transform_applied_px(&t, sz));
                 for r in 0..3 {
                     v[base + r * 4..base + r * 4 + 3].copy_from_slice(&hinv[r]);
                 }
@@ -4115,8 +4115,9 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                     // The shader rebuilds a PARTIAL transform from the plain
                     // params, which knows no shear or taper: a bent one
                     // blends positions instead (the full map is exact).
+                    // Nor does it know an inverse: inverted blends positions.
                     let mode = match t.mod_blend {
-                        crate::graph::TransformBlend::Params if !t.bends() => 0.0,
+                        crate::graph::TransformBlend::Params if !t.bends() && !t.invert => 0.0,
                         _ => 1.0,
                     };
                     let pinned = (t.pin != crate::graph::UNIT_QUAD) as u32 as f32;
@@ -4889,6 +4890,15 @@ pub fn transform_forward_px(t: &crate::graph::TransformParams, out_size: [f32; 2
     }
     let p = corner_pin_forward_px(&crate::graph::CornerPinParams::pinned(t.pin), out_size);
     mat3_mul3(&a, &p)
+}
+
+/// The map a Transform actually applies, source -> output in its own
+/// pixels: `transform_forward_px`, or its inverse when `invert` is on. The
+/// shader and anything that deforms THROUGH the node use this; the gizmo,
+/// which edits the authored knobs, keeps `transform_forward_px`.
+pub fn transform_applied_px(t: &crate::graph::TransformParams, out_size: [f32; 2]) -> [[f32; 3]; 3] {
+    let h = transform_forward_px(t, out_size);
+    if t.invert { mat3_inv(&h) } else { h }
 }
 
 fn mat3_mul3(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> [[f32; 3]; 3] {
@@ -7030,6 +7040,7 @@ mod proxy_tests {
                 shear: [0.0, 0.0],
                 taper: 0.0,
                 taper_angle: 90.0,
+                invert: false,
             }),
         );
         g.edges.insert((2, 0), 1);

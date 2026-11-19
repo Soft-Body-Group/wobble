@@ -128,6 +128,8 @@ pub(crate) fn panel(
             *track_import_req = Some(false);
         }
     });
+    ui.checkbox(&mut t.invert, "invert")
+        .on_hover_text("apply the inverse of the whole transform: undo a move, then redo it with a second Transform");
     // A matte on the modulate (~) port says how much of
     // the move applies at each pixel; how it blends in is
     // this choice, a uniform (no recompile).
