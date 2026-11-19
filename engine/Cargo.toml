@@ -40,7 +40,7 @@ env_logger = { workspace = true }
 # Shader nodes are validated BEFORE they can become topology, so a typo in a
 # user-authored shader leaves that node a passthrough instead of taking the
 # whole comp down. Pinned to the version wgpu 29 already pulls in.
-naga = { version = "30", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in", "glsl-in", "wgsl-out"] }
 # Stills. Both pure Rust, both decode-only.
 png = "0.18"
 zune-jpeg = "0.5"

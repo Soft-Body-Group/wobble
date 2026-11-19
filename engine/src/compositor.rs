@@ -432,33 +432,41 @@ fn fused_bgl(device: &wgpu::Device, n_sources: usize) -> wgpu::BindGroupLayout {
 fn make_shader_pipelines(
     device: &wgpu::Device,
     label: &str,
-    wgsl: &str,
-    n_sources: usize,
-    passes: usize,
+    def: &crate::usershader::ShaderDef,
 ) -> Vec<wgpu::ComputePipeline> {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
-    });
-    let bgl = fused_bgl(device, n_sources);
+    let modules: Vec<wgpu::ShaderModule> = def
+        .modules()
+        .into_iter()
+        .map(|wgsl| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+            })
+        })
+        .collect();
+    let bgl = fused_bgl(device, def.source_count());
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("shader-pl"),
         bind_group_layouts: &[Some(&bgl)],
         immediate_size: 0,
     });
-    (0..passes)
-        .map(|i| {
-            let entry = crate::usershader::ShaderDef::entry(i);
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pl),
-                module: &module,
-                entry_point: Some(&entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
+    let make = |module: &wgpu::ShaderModule, entry: usize| {
+        let entry = crate::usershader::ShaderDef::entry(entry);
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pl),
+            module,
+            entry_point: Some(&entry),
+            compilation_options: Default::default(),
+            cache: None,
         })
-        .collect()
+    };
+    if def.steps.is_empty() {
+        return (0..def.passes).map(|i| make(&modules[0], i)).collect();
+    }
+    // A repeated pass is one pipeline dispatched several times.
+    let built: Vec<_> = modules.iter().enumerate().map(|(i, m)| make(m, i)).collect();
+    def.steps.iter().map(|s| built[s.module].clone()).collect()
 }
 
 fn make_fused_pipeline(device: &wgpu::Device, label: &str, wgsl: &str, n_sources: usize) -> wgpu::ComputePipeline {
@@ -509,9 +517,7 @@ fn compile_plan(device: &wgpu::Device, plan: GeneratedPlan) -> (Option<Compiled>
             (FilterKind::Shader { .. }, Some(def)) => make_shader_pipelines(
                 device,
                 &format!("user-shader-{n:?}"),
-                &def.wgsl,
-                def.source_count(),
-                def.passes,
+                def,
             ),
             _ => Vec::new(),
         })
@@ -556,7 +562,7 @@ fn web_validate(plan: &GeneratedPlan) -> Option<String> {
         srcs.push(&s.wgsl);
         srcs.extend(aux.iter().map(|a| a.wgsl.as_str()));
     }
-    srcs.extend(plan.shaders.values().map(|d| d.wgsl.as_str()));
+    srcs.extend(plan.shaders.values().flat_map(|d| d.modules()));
     srcs.into_iter().find_map(|src| {
         let module = match naga::front::wgsl::parse_str(src) {
             Ok(m) => m,
@@ -2150,8 +2156,11 @@ impl Compositor {
                     else {
                         continue;
                     };
+                    let wired = (0..def.inputs.len().min(32))
+                        .filter(|i| graph.input_of(stage.0, *i).is_some())
+                        .fold(0u32, |m, i| m | 1 << i);
                     for (j, buf) in st.params.iter().enumerate() {
-                        let bytes = def.pack(
+                        let mut bytes = def.pack(
                             &p.values,
                             res,
                             frame / fps,
@@ -2159,6 +2168,7 @@ impl Compositor {
                             j,
                             graph.working.primaries.luma_weights(),
                         );
+                        crate::usershader::ShaderDef::set_wired(&mut bytes, wired);
                         self.queue.write_buffer(buf, 0, &bytes);
                     }
                 }
@@ -2744,7 +2754,7 @@ impl Compositor {
             .plan
             .shaders
             .iter()
-            .map(|(k, d)| (*k, (d.uniform_bytes(), d.passes)))
+            .map(|(k, d)| (*k, (d.uniform_bytes(), d.result_textures())))
             .collect();
         let aux_counts: Vec<usize> =
             self.pipelines[&hash].plan.blurs.iter().map(|(_, _, _, aux)| aux.len()).collect();
@@ -2775,7 +2785,9 @@ impl Compositor {
                         || (wants_maps && wants_prefix && bt.maps.as_ref().is_some_and(|m| m.pn.is_none()))
                         || (wants_b && bt.b.is_none())
                         || bt.aux.len() != n_aux
-                        || bt.shader.as_ref().map_or(0, |s| s.passes.len()) != n_passes
+                        || bt.shader.as_ref().map_or(0, |s| s.params.len()) != n_passes
+                        || bt.shader.as_ref().map_or(0, |s| s.passes.len())
+                            != shader_ubytes.get(n).map_or(n_passes, |u| u.1)
                 }
                 None => true,
             };
@@ -2815,9 +2827,10 @@ impl Compositor {
                 // Each user pass keeps its own result for the whole chain,
                 // because pass 4 may sample pass 1.
                 let shader = (n_passes > 0).then(|| {
-                    let (ubytes, _) = shader_ubytes.get(n).copied().unwrap_or((16, 0));
+                    let (ubytes, textures) =
+                        shader_ubytes.get(n).copied().unwrap_or((16, n_passes));
                     ShaderTex {
-                        passes: (0..n_passes)
+                        passes: (0..textures)
                             .map(|_| {
                                 Self::make_storage_tex(&self.device, out_w, out_h, "shader-pass")
                             })
@@ -2990,8 +3003,14 @@ impl Compositor {
                     let user = match (kind, &bt.shader) {
                         (FilterKind::Shader { inputs, passes }, Some(st))
                             if user_pipes.len() == *passes
-                                && st.passes.len() == *passes =>
+                                && st.params.len() == *passes
+                                && compiled
+                                    .plan
+                                    .shaders
+                                    .get(n)
+                                    .is_some_and(|d| d.result_textures() == st.passes.len()) =>
                         {
+                            let def = &compiled.plan.shaders[n];
                             Some(
                                 (0..*passes)
                                     .map(|i| {
@@ -3006,18 +3025,39 @@ impl Compositor {
                                                     .unwrap_or(&self.dummy.view),
                                             );
                                         }
-                                        for j in 0..*passes {
-                                            views.push(if j == i {
-                                                &self.dummy.view
-                                            } else {
-                                                &st.passes[j].1
-                                            });
-                                        }
+                                        // A GLSL step names what it reads; a
+                                        // WGSL pass sees every other result.
+                                        let target = match def.steps.get(i) {
+                                            Some(step) => {
+                                                for r in &step.reads {
+                                                    views.push(r.map_or(&self.dummy.view, |t| {
+                                                        &st.passes[t].1
+                                                    }));
+                                                }
+                                                // Passes reading fewer than the
+                                                // layout's slots fill the rest.
+                                                views.resize(
+                                                    def.source_count(),
+                                                    &self.dummy.view,
+                                                );
+                                                step.target
+                                            }
+                                            None => {
+                                                for j in 0..*passes {
+                                                    views.push(if j == i {
+                                                        &self.dummy.view
+                                                    } else {
+                                                        &st.passes[j].1
+                                                    });
+                                                }
+                                                i
+                                            }
+                                        };
                                         self.views_bind_group(
                                             &user_pipes[i],
                                             &st.params[i],
                                             &views,
-                                            &st.passes[i].1,
+                                            &st.passes[target].1,
                                         )
                                     })
                                     .collect::<Vec<_>>(),

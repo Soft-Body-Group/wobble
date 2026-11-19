@@ -55,6 +55,19 @@ impl Gfx {
 //! param: float gain = 2.0 [0, 4]\n\
 fn pass1(uv: vec2f, frag: vec2f) -> vec4f { return tex(front, uv) * P.gain; }\n\
 fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
+        // A Matchbox-style fragment shader, repeated by its preset.
+        const GLSL: &str = "#version 120\n\
+uniform sampler2D front, adsk_results_pass1;\n\
+uniform float adsk_result_w, adsk_result_h, gain;\n\
+uniform int adsk_result_execution;\n\
+vec2 res = vec2(adsk_result_w, adsk_result_h);\n\
+void main() {\n\
+  vec2 uv = gl_FragCoord.xy / res;\n\
+  gl_FragColor = adsk_result_execution == 0 ? texture2D(front, uv) * gain : texture2D(adsk_results_pass1, uv);\n\
+}\n\
+<ShaderNodePreset Name=\"Suite\"><Shader Index=\"1\" NbExecutions=\"2\">\
+<Uniform Name=\"gain\" Type=\"float\" Default=\"0.5\" DisplayName=\"Gain\"></Uniform>\
+</Shader></ShaderNodePreset>\n";
         const BROKEN: &str =
             "//! input: front\nfn pass1(uv: vec2f, frag: vec2f) -> vec4f { return nope(uv); }\n";
         match stage {
@@ -116,6 +129,23 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                     self.test.shader = Some((2, frames, node));
                     return;
                 }
+                set_src(self, GLSL);
+                let def = self.egraph.node(node).and_then(|n| match &n.kind {
+                    NodeKind::Shader(p) => Some(p.def()),
+                    _ => None,
+                });
+                match def {
+                    Some(d) if d.ok() && d.passes == 2 && d.param("gain").is_some() => {}
+                    d => fail(format!("GLSL shader: {:?}", d.map(|d| d.errors.clone()))),
+                }
+                self.test.shader = Some((4, 0, node));
+            }
+            // The GLSL shader must reach a live pipeline as well.
+            4 if frames > 40 => {
+                if !self.last_pipeline_ready {
+                    self.test.shader = Some((4, frames, node));
+                    return;
+                }
                 set_src(self, BROKEN);
                 if self
                     .egraph
@@ -140,7 +170,7 @@ fn pass2(uv: vec2f, frag: vec2f) -> vec4f { return tex(result1, uv); }\n";
                     fail("comp stopped rendering with a broken shader".into());
                 }
                 println!(
-                    "SHADER TEST PASS: starter compiled; param keyed 0->1 evals 0.5 at frame 5 (authored untouched) and moves no topology hash; a text edit does; two-pass shader came up; a broken shader passes through with the comp still rendering"
+                    "SHADER TEST PASS: starter compiled; param keyed 0->1 evals 0.5 at frame 5 (authored untouched) and moves no topology hash; a text edit does; two-pass shader came up; a repeated Matchbox GLSL shader came up; a broken shader passes through with the comp still rendering"
                 );
                 std::process::exit(0);
             }

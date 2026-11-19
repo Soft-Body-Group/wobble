@@ -175,6 +175,12 @@ pub fn licence_of(kind: &NodeKind) -> Licence {
             return Licence::NonCommercial;
         }
     }
+    // A Matchbox preset can say its shader is not for commercial use.
+    if let NodeKind::Shader(p) = kind {
+        if p.def().non_commercial {
+            return Licence::NonCommercial;
+        }
+    }
     // LTX's weights are fetched by its tool (gated on Hugging Face), not
     // the catalog; the node's purpose is to run them, so it is tagged
     // whether or not a result is loaded — the terms are shown before the

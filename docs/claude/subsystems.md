@@ -108,7 +108,17 @@ reference. The invariants that are easy to break from outside:
   would take the whole plan down.
 - **Ports come from the pragmas, not the compile.** `input_count` reads the
   parse so a shader that is mid-edit keeps its wires.
-- **All passes share one module and one bind group layout.** Pass i binds
+- **GLSL is a dialect of the same node** ([engine/src/matchbox.rs](engine/src/matchbox.rs)):
+  `usershader::compile` routes on `matchbox::is_glsl`, and the source stays one
+  string (`.glsl` text, `//! pass` lines, the `<ShaderNodePreset>` anywhere).
+  Tokens are rewritten line for line, compiled by naga as a COMPUTE shader, and
+  written out as WGSL. Each pass is its own module (`ShaderDef::pass_wgsl`);
+  `ShaderDef::steps` lists the dispatches, with repeats expanded and result
+  textures recycled, so `passes` is not the number of textures
+  (`result_textures`). `set_wired` tells the shader which ports have wires.
+  `WOBBLE_MATCHBOX_DIR=<dir> cargo test -p engine --test matchbox corpus --
+  --ignored --nocapture` compiles and renders a folder of real shaders.
+- **All WGSL passes share one module and one bind group layout.** Pass i binds
   every input and every result texture, with its OWN result slot pointed at
   the dummy (a texture cannot be sampled and written by the same pass), and
   selects itself by entry point (`wob_pass{i}`). Keep the binding count

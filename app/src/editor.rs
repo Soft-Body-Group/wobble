@@ -1161,6 +1161,7 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         e(Utility, "LoopIn", false, |_| NodeKind::LoopIn),
         e(Utility, "LoopOut", false, |_| NodeKind::LoopOut(Default::default())),
         e(Utility, "Shader", false, |_| NodeKind::Shader(Default::default())),
+        e(Utility, "GLSL", false, |_| NodeKind::Shader(engine::graph::ShaderParams::glsl())),
         e(Utility, "Render", false, |_| NodeKind::Write(Default::default())),
         e(Utility, "Paint", false, |_| NodeKind::Paint(Default::default())),
         e(Utility, "Tracker", false, |_| NodeKind::Tracker(TrackerParams::default())),

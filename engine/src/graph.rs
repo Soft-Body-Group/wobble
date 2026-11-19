@@ -952,16 +952,25 @@ impl ShaderParams {
         self.def_cache.0.get_or_init(|| crate::usershader::compile(&self.source)).clone()
     }
 
-    /// Adopt a new source, keeping every param value whose name survives and
-    /// defaulting the ones that just appeared.
+    /// A node that starts as GLSL, ready for a Matchbox shader to be pasted.
+    pub fn glsl() -> Self {
+        let mut p = Self { source: String::new(), values: Default::default(), def_cache: Default::default() };
+        p.set_source(crate::matchbox::STARTER.to_string());
+        p
+    }
+
+    /// Adopt a new source, keeping every param value the user has moved whose
+    /// name survives. One still at its old default takes the new default, so
+    /// a pasted shader is not handed the starter's `amount`.
     pub fn set_source(&mut self, source: String) {
         let def = crate::usershader::compile(&source);
+        let old = self.def();
         let mut values = std::collections::BTreeMap::new();
         for p in &def.params {
-            values.insert(
-                p.name.clone(),
-                self.values.get(&p.name).copied().unwrap_or(p.default),
-            );
+            let kept = self.values.get(&p.name).copied().filter(|v| {
+                old.param(&p.name).is_none_or(|o| o.default != *v)
+            });
+            values.insert(p.name.clone(), kept.unwrap_or(p.default));
         }
         self.source = source;
         self.values = values;

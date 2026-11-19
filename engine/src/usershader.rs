@@ -85,6 +85,7 @@ pub enum ParamTy {
     Vec2,
     /// vec3 shown as a colour swatch.
     Color,
+    Vec4,
 }
 
 impl ParamTy {
@@ -95,6 +96,7 @@ impl ParamTy {
             ParamTy::Bool => "u32",
             ParamTy::Vec2 => "vec2f",
             ParamTy::Color => "vec3f",
+            ParamTy::Vec4 => "vec4f",
         }
     }
 
@@ -103,6 +105,7 @@ impl ParamTy {
         match self {
             ParamTy::Vec2 => 2,
             ParamTy::Color => 3,
+            ParamTy::Vec4 => 4,
             _ => 1,
         }
     }
@@ -114,9 +117,24 @@ impl ParamTy {
             "bool" => ParamTy::Bool,
             "vec2" | "vec2f" => ParamTy::Vec2,
             "color" | "colour" | "vec3" | "vec3f" => ParamTy::Color,
+            "vec4" | "vec4f" => ParamTy::Vec4,
             _ => return None,
         })
     }
+}
+
+/// One dispatch of a GLSL node. A pass a preset repeats is several of these.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PassStep {
+    /// Index into `ShaderDef::pass_wgsl`.
+    pub module: usize,
+    /// Which repeat of its pass this is (`adsk_result_execution`).
+    pub execution: u32,
+    /// Result texture written. Textures are shared between steps whose
+    /// results are never needed at the same time.
+    pub target: usize,
+    /// Result texture behind each extra binding; `None` binds the dummy.
+    pub reads: Vec<Option<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +148,8 @@ pub struct ShaderParam {
     pub max: f32,
     /// Properties-panel grouping, from the preceding `group:` pragma.
     pub group: Option<String>,
+    /// Named values for an int (a Matchbox popup). Empty for a plain number.
+    pub choices: Vec<(String, i32)>,
 }
 
 /// One diagnostic, with a line number in the USER's source (1-based) where
@@ -162,6 +182,17 @@ pub struct ShaderDef {
     pub params: Vec<ShaderParam>,
     /// The full generated WGSL — prelude, user source, entry points.
     pub wgsl: String,
+    /// One module per pass, for the GLSL dialect, whose passes are separate
+    /// translation units. Empty for WGSL, where `wgsl` holds every pass.
+    pub pass_wgsl: Vec<String>,
+    /// The dispatches of a GLSL node, `passes` long. Empty for WGSL.
+    pub steps: Vec<PassStep>,
+    /// Texture bindings after the inputs, for a GLSL node.
+    pub extra_sources: usize,
+    /// Things the user should know that are not errors.
+    pub notes: Vec<String>,
+    /// The shader's own preset says it is not cleared for commercial use.
+    pub non_commercial: bool,
     /// Errors from pragma parsing or naga. Non-empty means the node renders
     /// as a passthrough and `wgsl` must not be compiled.
     pub errors: Vec<ShaderError>,
@@ -183,7 +214,25 @@ impl ShaderDef {
     /// per pass result. Constant across passes so all passes share a layout
     /// and a module — the pass writing `result_i` binds a dummy there.
     pub fn source_count(&self) -> usize {
-        self.inputs.len() + self.passes
+        if self.steps.is_empty() {
+            self.inputs.len() + self.passes
+        } else {
+            self.inputs.len() + self.extra_sources
+        }
+    }
+
+    /// Full-canvas result textures the node keeps.
+    pub fn result_textures(&self) -> usize {
+        self.steps.iter().map(|s| s.target + 1).max().unwrap_or(self.passes)
+    }
+
+    /// Every distinct WGSL module.
+    pub fn modules(&self) -> Vec<&str> {
+        if self.pass_wgsl.is_empty() {
+            vec![self.wgsl.as_str()]
+        } else {
+            self.pass_wgsl.iter().map(String::as_str).collect()
+        }
     }
 
     pub fn param(&self, name: &str) -> Option<&ShaderParam> {
@@ -224,6 +273,9 @@ impl ShaderDef {
         put_f(&mut out, 1, 0, time);
         put_f(&mut out, 2, 0, frame);
         put_i(&mut out, 3, pass as i32);
+        if let Some(s) = self.steps.get(pass) {
+            out[3 * CELL + 4..3 * CELL + 8].copy_from_slice(&(s.execution as i32).to_le_bytes());
+        }
         put_f(&mut out, 4, 0, if res[1] > 0.0 { res[0] / res[1] } else { 1.0 });
         // Luminance weights of the comp's WORKING primaries, not a constant:
         // `luma()` has to mean the same thing here as it does in every
@@ -248,6 +300,13 @@ impl ShaderDef {
             }
         }
         out
+    }
+
+    /// Record which inputs have a wire (bit per port) in a packed buffer. A
+    /// GLSL shader needs it: its preset can ask for white when nothing is
+    /// connected.
+    pub fn set_wired(bytes: &mut [u8], mask: u32) {
+        bytes[3 * CELL + 8..3 * CELL + 12].copy_from_slice(&mask.to_le_bytes());
     }
 
     /// Defaults for every declared param, for a node that has never been
@@ -296,6 +355,9 @@ pub fn compile(src: &str) -> Arc<ShaderDef> {
 }
 
 fn compile_uncached(src: &str) -> ShaderDef {
+    if crate::matchbox::is_glsl(src) {
+        return crate::matchbox::compile(src);
+    }
     let (mut def, user_line0) = parse(src);
     def.hash = source_hash(src);
     if def.errors.is_empty() {
@@ -308,7 +370,7 @@ fn compile_uncached(src: &str) -> ShaderDef {
 
 /// naga parse + validate over the generated text. Line numbers are remapped
 /// back into the user's own source where they land in it.
-fn validate(wgsl: &str, user_line0: usize) -> Result<(), Vec<ShaderError>> {
+pub(crate) fn validate(wgsl: &str, user_line0: usize) -> Result<(), Vec<ShaderError>> {
     let remap = |line: Option<usize>| -> Option<usize> {
         // Generated lines before the user block (prelude) and after it
         // (entry points) are ours, not theirs — report them unlocated
@@ -458,6 +520,11 @@ fn parse(src: &str) -> (ShaderDef, usize) {
         passes,
         params,
         wgsl: String::new(),
+        pass_wgsl: Vec::new(),
+        steps: Vec::new(),
+        extra_sources: 0,
+        notes: Vec::new(),
+        non_commercial: false,
         errors,
         hash: 0,
     };
@@ -507,7 +574,7 @@ fn parse_param(spec: &str, group: Option<String>) -> Result<ShaderParam, String>
     let (min, max) = range.unwrap_or(match ty {
         ParamTy::Int => (0.0, 100.0),
         ParamTy::Bool => (0.0, 1.0),
-        ParamTy::Vec2 => (-1.0, 2.0),
+        ParamTy::Vec2 | ParamTy::Vec4 => (-1.0, 2.0),
         _ => (0.0, 1.0),
     });
     Ok(ShaderParam {
@@ -518,6 +585,7 @@ fn parse_param(spec: &str, group: Option<String>) -> Result<ShaderParam, String>
         min,
         max,
         group,
+        choices: Vec::new(),
     })
 }
 
@@ -536,7 +604,7 @@ fn parse_default(ty: ParamTy, s: &str) -> Result<[f32; 4], String> {
             let v: f32 = s.parse().map_err(|_| format!("bad default `{s}`"))?;
             Ok([v, 0.0, 0.0, 0.0])
         }
-        ParamTy::Vec2 | ParamTy::Color => {
+        ParamTy::Vec2 | ParamTy::Color | ParamTy::Vec4 => {
             let inner = s.trim_start_matches(['(', '{']).trim_end_matches([')', '}']);
             let mut out = [0.0f32; 4];
             let want = ty.lanes();

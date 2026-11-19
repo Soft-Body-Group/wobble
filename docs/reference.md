@@ -3789,14 +3789,39 @@ errors listed under the editor — the comp keeps playing while you type, which
 is the only way a live text editor over a live comp is usable. Ports come
 from the pragmas, not the compile, so a typo mid-edit never drops your wires.
 
-Porting a Matchbox `.glsl` is mostly mechanical: `uniform float Amount` →
-`//! param: float Amount = ...` and `Amount` → `P.Amount`; `texture2D(front,
-uv)` → `tex(front, uv)`; `adsk_result_w/h` → `P.res`; `adsk_results_pass1` →
-`result1`; `gl_FragCoord.xy` → `frag`. The remaining work is GLSL→WGSL
-itself: explicit `vec4f`/`let`/`var`, no implicit int→float, `select(f, t, c)`
-for `?:`, no swizzle assignment. One real difference of substance: **the comp
-is scene-linear (ACEScg)**, so a shader written against 0..1 sRGB will not
-land where its author expected.
+### GLSL — paste a Matchbox shader
+
+**GLSL** (Utility) is the same node reading Flame Matchbox shaders as they
+are. Paste the `.glsl` into the editor and it works: every `uniform sampler2D`
+becomes an input port and every other `uniform` a param. Paste the `.xml`
+anywhere in the same text to get the preset's labels, ranges, defaults, popups,
+groups and input order. **open…** on any one file of a shader brings its other
+passes (`name.1.glsl`, `name.2.glsl`…) and its `.xml` along; by hand, a line
+reading `//! pass` separates passes. Pasting GLSL into a plain Shader node works
+too, because the dialect is detected from the text.
+
+| Matchbox | here |
+|---|---|
+| `adsk_result_w/h`, `adsk_result_frameratio`, `adsk_<input>_w/h` | supplied |
+| `adsk_time` | the comp frame |
+| `adsk_results_passN` | that pass's result; a pass reading itself sees its previous execution |
+| `NbExecutions`, `adsk_result_execution` | the pass really repeats |
+| `NoInput="White"` | an unwired input reads white |
+| `InputType="Matte"` | reads the wire's alpha into every channel |
+| `GL_TEXTURE_WRAP_*`, `GL_NEAREST` | honoured on direct reads of an input |
+| `dFdx` `dFdy` `fwidth` | real differences, by running the shader three times per pixel |
+| `texture2DLod` | approximated by a 16-tap box; inputs have no mips |
+| `MatteProvider` | alpha comes from the shader; otherwise from the first input |
+| `CommercialUsePermitted="False"` | tags the node and warns at a Write, like a research-only model |
+
+Not available: frame-to-frame feedback (`adsk_accum_texture` reads black) and
+Flame-only functions (`adsk_getBlendedValue`, `adskEvalDynCurves`), which are
+reported as errors. `adsk_scene2log`, `adsk_log2scene`, `adsk_shadows` and
+`adsk_highlights` are close approximations, and the panel says so when a shader
+uses one. Passes run on up to 64 dispatches, and a result nothing will read
+again gives its texture to the next pass. **The comp is scene-linear (ACEScg)**,
+so a shader tuned for 0..1 video will not land where its author expected until
+the plate is converted first.
 
 The shader lives in the setup, not in a sidecar file, so a comp carries its
 own effects; **open…** / **save as…** in the editor are for sharing.

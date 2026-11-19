@@ -18,7 +18,7 @@ use crate::theme;
 use crate::tools::{self, ControlKind};
 use crate::widgets::{self, HudSlider, RowCtx};
 use engine::graph::{NodeKind, ShaderParams};
-use engine::usershader::{self, ParamTy};
+use engine::{matchbox, usershader::{self, ParamTy}};
 use std::collections::{BTreeMap, HashMap};
 
 /// Per-node edit buffers, and which node's window is open.
@@ -95,8 +95,9 @@ fn plans(def: &usershader::ShaderDef, values: &BTreeMap<String, [f32; 4]>) -> Ve
                 hi: spec.max,
                 targets: (0..3).map(chan).collect(),
             }),
-            ParamTy::Vec2 => {
-                for (i, axis) in ["x", "y"].into_iter().enumerate() {
+            ParamTy::Vec2 | ParamTy::Vec4 => {
+                let axes = ["x", "y", "z", "w"];
+                for (i, axis) in axes.into_iter().enumerate().take(spec.ty.lanes()) {
                     out.push(Plan {
                         kind: ControlKind::Slider,
                         label: format!("{} {axis}", spec.label),
@@ -238,14 +239,42 @@ pub fn params_ui(
         return hud;
     }
 
+    let mut group: Option<&str> = None;
     for spec in &def.params {
         let chan = |lane: usize| {
             crate::anim::Channel::Shader(crate::anim::intern(&crate::anim::shader_key(
                 &spec.name, spec.ty, lane,
             )))
         };
+        if spec.group.is_some() && spec.group.as_deref() != group {
+            group = spec.group.as_deref();
+            ui.weak(group.unwrap_or_default());
+        }
         let mut v = params.values.get(&spec.name).copied().unwrap_or(spec.default);
         let h = match spec.ty {
+            ParamTy::Int if !spec.choices.is_empty() => {
+                let c = [chan(0)];
+                let now = v[0].round() as i32;
+                let shown = spec
+                    .choices
+                    .iter()
+                    .find(|(_, n)| *n == now)
+                    .map_or_else(|| now.to_string(), |(t, _)| t.clone());
+                ui.horizontal(|ui| {
+                    ui.label(&spec.label);
+                    egui::ComboBox::from_id_salt(("shader-choice", node, &spec.name))
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            for (title, n) in &spec.choices {
+                                if ui.selectable_label(*n == now, title).clicked() {
+                                    v[0] = *n as f32;
+                                }
+                            }
+                        });
+                    widgets::key_dot(ui, cx, &c);
+                });
+                None
+            }
             ParamTy::Bool => {
                 let c = [chan(0)];
                 let mut on = v[0] > 0.5;
@@ -260,7 +289,11 @@ pub fn params_ui(
             ParamTy::Int => {
                 let c = [chan(0)];
                 let mut f = v[0];
-                let h = widgets::slider(ui, cx, &spec.label, &mut f, spec.min, spec.max, &c);
+                let h = if spec.min < spec.max {
+                    widgets::slider(ui, cx, &spec.label, &mut f, spec.min, spec.max, &c)
+                } else {
+                    widgets::drags(ui, cx, &spec.label, &mut [&mut f], 0.1, (0.0, 10.0), &c)
+                };
                 v[0] = f.round();
                 h
             }
@@ -275,36 +308,21 @@ pub fn params_ui(
                 v[0] = f;
                 h
             }
-            ParamTy::Vec2 | ParamTy::Color => {
+            ParamTy::Vec2 | ParamTy::Color | ParamTy::Vec4 => {
                 let n = spec.ty.lanes();
                 let chans: Vec<_> = (0..n).map(chan).collect();
-                let (mut a, mut b, mut c2) = (v[0], v[1], v[2]);
-                let mut refs: Vec<&mut f32> = vec![&mut a, &mut b];
-                if n == 3 {
-                    refs.push(&mut c2);
-                }
-                let h = widgets::drags(
-                    ui,
-                    cx,
-                    &spec.label,
-                    &mut refs,
-                    0.005,
-                    (spec.min, spec.max),
-                    &chans,
-                );
-                drop(refs);
-                v[0] = a;
-                v[1] = b;
-                if n == 3 {
-                    v[2] = c2;
-                }
-                h
+                let hud = if spec.min < spec.max { (spec.min, spec.max) } else { (0.0, 1.0) };
+                let mut refs: Vec<&mut f32> = v.iter_mut().take(n).collect();
+                widgets::drags(ui, cx, &spec.label, &mut refs, 0.005, hud, &chans)
             }
         };
         params.values.insert(spec.name.clone(), v);
         if h.is_some() {
             hud = h;
         }
+    }
+    for note in &def.notes {
+        ui.colored_label(theme::warn(), note);
     }
     ui.weak(format!(
         "{} · {} in · {} pass{}",
@@ -325,8 +343,8 @@ pub fn params_ui(
         "{} resolve pass{} + {} full-canvas result{}.",
         def.inputs.len(),
         if def.inputs.len() == 1 { "" } else { "es" },
-        def.passes,
-        if def.passes == 1 { "" } else { "s" }
+        def.result_textures(),
+        if def.result_textures() == 1 { "" } else { "s" }
     ));
     hud
 }
@@ -377,12 +395,25 @@ pub fn window(
                 // Files are for SHARING. The source of truth is the setup —
                 // a shader travels with the comp, which is the one thing a
                 // Matchbox cannot do.
-                if ui.button("open…").on_hover_text("load a .wgsl into the buffer").clicked() {
+                if ui
+                    .button("open…")
+                    .on_hover_text(
+                        "load a shader into the buffer. picking any file of a Matchbox\n\
+                         shader brings its other passes and its .xml with it",
+                    )
+                    .clicked()
+                {
                     if let Some(path) = crate::filedialog::FileDialog::new()
-                        .add_filter("wgsl shader", &["wgsl", "txt"])
+                        .add_filter("shader", &["wgsl", "glsl", "xml", "txt"])
                         .pick_file()
                     {
-                        match std::fs::read_to_string(&path) {
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                        let read = if matches!(ext, "glsl" | "xml") {
+                            matchbox::read_files(&path)
+                        } else {
+                            std::fs::read_to_string(&path)
+                        };
+                        match read {
                             Ok(t) => {
                                 editors.bufs.insert(node, t);
                             }
@@ -391,9 +422,10 @@ pub fn window(
                     }
                 }
                 if ui.button("save as…").clicked() {
+                    let ext = if matchbox::is_glsl(&buf_src) { "glsl" } else { "wgsl" };
                     if let Some(path) = crate::filedialog::FileDialog::new()
-                        .add_filter("wgsl shader", &["wgsl"])
-                        .set_file_name("shader.wgsl")
+                        .add_filter("shader", &[ext])
+                        .set_file_name(format!("shader.{ext}"))
                         .save_file()
                     {
                         if let Err(e) = std::fs::write(&path, &buf_src) {
@@ -465,7 +497,8 @@ pub fn window(
 
             ui.separator();
             ui.collapsing("reference", |ui| {
-                ui.label(egui::RichText::new(REFERENCE).monospace().size(11.0));
+                let text = if matchbox::is_glsl(&buf_src) { GLSL_REFERENCE } else { REFERENCE };
+                ui.label(egui::RichText::new(text).monospace().size(11.0));
             });
         });
 
@@ -513,6 +546,26 @@ notes
   params are uniforms — moving one never recompiles; editing text does
   bool is u32 (`if P.flip != 0u`), int is i32";
 
+const GLSL_REFERENCE: &str = "\
+paste a Matchbox .glsl here, unchanged. paste its .xml anywhere in the same
+text for the real labels, ranges, defaults, popups and input order.
+several passes: put a line reading  //! pass  between them, or use open…
+and pick any one of the shader's files.
+
+uniform sampler2D x    an image input (up to 8), or adsk_results_passN
+uniform float y        a param: float int bool vec2 vec3 vec4
+adsk_result_w/h, adsk_result_frameratio, adsk_time, adsk_result_execution,
+adsk_<input>_w/h, NbExecutions in the .xml
+
+not available: frame-to-frame feedback (adsk_accum_texture reads black) and
+Flame-only functions such as adsk_getBlendedValue
+
+notes
+  the comp is SCENE-LINEAR (ACEScg): a shader tuned for 0..1 video will look
+  different until the plate is converted first
+  alpha comes from the first input unless the .xml sets MatteProvider
+  a Matte input reads the wire's alpha";
+
 /// Shipped examples. Each one exists to show a thing the fused plugin path
 /// cannot do, so a first read of any of them teaches the difference.
 pub const EXAMPLES: &[(&str, &str)] = &[
@@ -520,6 +573,7 @@ pub const EXAMPLES: &[(&str, &str)] = &[
     ("Box blur (two passes)", EX_BOX2),
     ("Plasma (generator, no input)", EX_PLASMA),
     ("Chromatic aberration", EX_CHROMA),
+    ("GLSL (Matchbox)", matchbox::STARTER),
 ];
 
 const EX_RADIAL: &str = r#"//! name: Radial Blur

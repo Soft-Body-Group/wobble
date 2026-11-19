@@ -71,6 +71,7 @@ pub mod timing;
 pub mod upscale;
 pub mod hdrcnn;
 pub mod torchpt;
+pub mod matchbox;
 pub mod usershader;
 pub mod viewtf;
 pub mod vfs;
