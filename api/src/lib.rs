@@ -585,16 +585,16 @@ pub fn methods() -> Vec<Method> {
         // ---- Work that takes time ----
         Method {
             name: "node_run",
-            summary: "Press a node's run button. Render (Write): render (its frames to its path). GraphBake: bake. Tracker: track. PlanarTrack: track | track_back. CorridorKey: key. Sammie: track. GenAI: quote (prices the run; PAYING is only ever a click in the app). Any of them: cancel. Returns at once — poll jobs_get until it is idle, then check the node's error.",
+            summary: "Press a node's run button. Render (Write): render (its frames to its path). GraphBake: bake. Tracker: track. PlanarTrack: track | track_back. CorridorKey: key. Sammie: track. GenAI: quote (prices the run; PAYING is only ever a click in the app). Physics / Ragdoll (inside a 2dini: dive_enter first): bake | clear. Any of them: cancel. Returns at once — poll jobs_get until it is idle, then check the node's error.",
             params: obj(json!({
                 "id": id,
-                "action": { "type": "string", "enum": ["render", "bake", "track", "track_back", "key", "quote", "cancel"] }
+                "action": { "type": "string", "enum": ["render", "bake", "clear", "track", "track_back", "key", "quote", "cancel"] }
             }), &["id"]),
             mutates: false,
         },
         Method {
             name: "jobs_get",
-            summary: "What is running: renders and bakes (node, frame reached, first, last), tracks, keys and generations; 'busy' is false when nothing is; 'status' is the app's status line and 'errors' maps node id to why it failed or cannot run.",
+            summary: "What is running: renders and bakes (node, frame reached, first, last), Physics bakes (node, done, total), tracks, keys and generations; 'busy' is false when nothing is; 'status' is the app's status line and 'errors' maps node id to why it failed or cannot run.",
             params: obj(json!({}), &[]),
             mutates: false,
         },

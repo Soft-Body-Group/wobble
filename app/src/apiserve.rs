@@ -2055,6 +2055,8 @@ impl Gfx {
             NodeKind::GenAi(_) => "quote",
             // A model step inside a GenAI pipeline runs from its own node.
             NodeKind::GenAiStep(genai::Op::Generate { .. } | genai::Op::Comfy { .. }) => "quote",
+            // Inside a 2dini (dive_enter it first): the simulation bakes.
+            NodeKind::GeoNode(engine::geo::GeoNode::Physics { .. } | engine::geo::GeoNode::Ragdoll { .. }) => "bake",
             _ => return Err(ApiError::invalid(format!("{} has nothing to run", type_name(&kind)))),
         };
         let action = p.get("action").and_then(|a| a.as_str()).unwrap_or(default);
@@ -2207,8 +2209,35 @@ impl Gfx {
                 };
                 self.genai_in_comp(|me| me.genai_action(owner, act));
             }
+            (NodeKind::GeoNode(g @ (engine::geo::GeoNode::Physics { .. } | engine::geo::GeoNode::Ragdoll { .. })), a @ ("bake" | "clear")) => {
+                if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::Geo) {
+                    return Err(ApiError::invalid(
+                        "a 2dini's nodes bake from inside it: dive_enter the 2dini first".to_string(),
+                    ));
+                }
+                let clear = a == "clear";
+                if matches!(g, engine::geo::GeoNode::Physics { .. }) {
+                    self.physics_bake(id, clear);
+                    if !clear && self.physics_job.as_ref().is_none_or(|j| j.node != id) {
+                        return Err(ApiError::app("the Physics node has nothing to bake".to_string()));
+                    }
+                } else {
+                    // A few bones: done before this returns.
+                    self.ragdoll_bake(id, clear);
+                }
+            }
+            (NodeKind::GeoNode(engine::geo::GeoNode::Physics { .. }), "cancel") => {
+                if self.physics_job.as_ref().is_some_and(|j| j.node == id) {
+                    self.physics_cancel();
+                }
+            }
             (k, a) => {
-                return Err(ApiError::invalid(format!("{} has no '{a}' (it takes: {default}, cancel)", type_name(k))))
+                let more = match k {
+                    NodeKind::GeoNode(engine::geo::GeoNode::Physics { .. }) => "clear, cancel",
+                    NodeKind::GeoNode(engine::geo::GeoNode::Ragdoll { .. }) => "clear",
+                    _ => "cancel",
+                };
+                return Err(ApiError::invalid(format!("{} has no '{a}' (it takes: {default}, {more})", type_name(k))))
             }
         }
         if let Some(e) = self.load_errors.get(&id) {
@@ -2247,6 +2276,10 @@ impl Gfx {
         }
         if self.render_bake.is_some() {
             jobs.push(json!({ "kind": "viewer-cache" }));
+        }
+        if let Some(j) = &self.physics_job {
+            let done = j.bake.as_ref().map_or(0, |b| b.frames);
+            jobs.push(json!({ "node": j.node, "kind": "physics", "done": done, "total": j.total }));
         }
         if let Some((n, j)) = &self.track_job {
             jobs.push(json!({ "node": n, "kind": "track", "done": j.done, "total": j.total }));

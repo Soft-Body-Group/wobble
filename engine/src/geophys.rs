@@ -383,11 +383,15 @@ impl BodyIn {
     }
 }
 
-/// Static collision, in geo space.
-#[derive(Clone, Debug, Default)]
+/// Collision, in geo space: one frame of the collider input. A static
+/// collider is one of these for the whole bake; an animated one is one per
+/// frame (`Track`), blended between frames at each substep.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Statics {
-    /// Closed, solid.
-    solids: Vec<Vec<[f32; 2]>>,
+    /// Closed, solid. Each solid is its rings: the outline first, then its
+    /// holes. Inside is EVEN-ODD over all of a solid's rings, so a hole is
+    /// empty space a body can sit in.
+    solids: Vec<Vec<Vec<[f32; 2]>>>,
     /// Open: segments a body cannot cross.
     lines: Vec<Vec<[f32; 2]>>,
     discs: Vec<([f32; 2], f32)>,
@@ -435,9 +439,9 @@ fn statics_of(g: &Geometry, px_per_unit: f32) -> Statics {
     for (i, pr) in g.prims.iter().enumerate() {
         match pr.kind {
             PrimKind::Poly { closed: true } => {
-                let pts = g.rings(i).into_iter().next().unwrap_or_default();
-                if pts.len() >= 3 {
-                    s.solids.push(pts);
+                let rings: Vec<Vec<[f32; 2]>> = g.rings(i).into_iter().filter(|r| r.len() >= 3).collect();
+                if !rings.is_empty() {
+                    s.solids.push(rings);
                 }
             }
             PrimKind::Poly { closed: false } => {
@@ -455,6 +459,133 @@ fn statics_of(g: &Geometry, px_per_unit: f32) -> Statics {
         }
     }
     s
+}
+
+/// The collider input over a bake: one `Statics` per frame, or just one
+/// when it does not move. A moving collider is KINEMATIC: it pushes bodies
+/// and they never push it.
+#[derive(Clone, Debug)]
+struct Track {
+    frames: Vec<Statics>,
+}
+
+impl Track {
+    fn of(colliders: &[Geometry], px_per_unit: f32) -> Track {
+        let mut frames: Vec<Statics> = colliders.iter().map(|g| statics_of(g, px_per_unit)).collect();
+        if frames.is_empty() {
+            frames.push(Statics::default());
+        }
+        if frames.iter().all(|f| *f == frames[0]) {
+            frames.truncate(1);
+        }
+        Track { frames }
+    }
+    fn animated(&self) -> bool {
+        self.frames.len() > 1
+    }
+    /// The colliders at a fractional frame (0 = the bake's first frame).
+    /// Neighbouring frames of the same make-up (same shapes, same point
+    /// counts) are blended, so a wall moves smoothly across the substeps and
+    /// a fast one does not jump through what it should push; otherwise the
+    /// nearer frame is taken whole.
+    fn at(&self, t: f32) -> Statics {
+        let last = self.frames.len() - 1;
+        let t = t.clamp(0.0, last as f32);
+        let i = (t.floor() as usize).min(last);
+        let f = t - i as f32;
+        if i == last || f <= 0.0 {
+            return self.frames[i].clone();
+        }
+        let (a, b) = (&self.frames[i], &self.frames[i + 1]);
+        lerp_statics(a, b, f).unwrap_or_else(|| if f < 0.5 { a.clone() } else { b.clone() })
+    }
+}
+
+fn same_rings(a: &[Vec<[f32; 2]>], b: &[Vec<[f32; 2]>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.len() == y.len())
+}
+
+fn lerp_statics(a: &Statics, b: &Statics, f: f32) -> Option<Statics> {
+    if a.solids.len() != b.solids.len()
+        || a.discs.len() != b.discs.len()
+        || !same_rings(&a.lines, &b.lines)
+        || !a.solids.iter().zip(&b.solids).all(|(x, y)| same_rings(x, y))
+    {
+        return None;
+    }
+    let l = |p: [f32; 2], q: [f32; 2]| [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+    let rings = |x: &[Vec<[f32; 2]>], y: &[Vec<[f32; 2]>]| -> Vec<Vec<[f32; 2]>> {
+        x.iter().zip(y).map(|(r, s)| r.iter().zip(s).map(|(p, q)| l(*p, *q)).collect()).collect()
+    };
+    Some(Statics {
+        solids: a.solids.iter().zip(&b.solids).map(|(x, y)| rings(x, y)).collect(),
+        lines: rings(&a.lines, &b.lines),
+        discs: a.discs.iter().zip(&b.discs).map(|((c, r), (d, s))| (l(*c, *d), r + (s - r) * f)).collect(),
+    })
+}
+
+/// A solid with holes as convex pieces, for rapier (which has no "polygon
+/// with holes" shape, and whose convex decomposition fills holes in). Cut
+/// into vertical strips at every vertex's x: inside a strip no vertex sits,
+/// so the solid there is a stack of trapezoids, each bounded by two edges
+/// that cross the whole strip — read off at the strip's middle, even-odd.
+/// Exact for polygons; a very busy outline is cut at fewer, evenly spaced
+/// xs and is then a close approximation.
+fn convex_pieces(rings: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
+    const MAX_STRIPS: usize = 512;
+    let mut xs: Vec<f32> = rings.iter().flatten().map(|p| p[0]).filter(|x| x.is_finite()).collect();
+    xs.sort_by(|a, b| a.total_cmp(b));
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
+    if xs.len() < 2 {
+        return Vec::new();
+    }
+    if xs.len() > MAX_STRIPS + 1 {
+        let (lo, hi) = (xs[0], xs[xs.len() - 1]);
+        xs = (0..=MAX_STRIPS).map(|k| lo + (hi - lo) * k as f32 / MAX_STRIPS as f32).collect();
+    }
+    let mut edges: Vec<([f32; 2], [f32; 2])> = Vec::new();
+    for r in rings {
+        for i in 0..r.len() {
+            let (a, b) = (r[i], r[(i + 1) % r.len()]);
+            if (a[0] - b[0]).abs() > 1e-9 {
+                edges.push((a, b));
+            }
+        }
+    }
+    let y_at = |(a, b): ([f32; 2], [f32; 2]), x: f32| a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
+    let mut out = Vec::new();
+    for w in xs.windows(2) {
+        let (x0, x1) = (w[0], w[1]);
+        if x1 - x0 < 1e-7 {
+            continue;
+        }
+        let xm = 0.5 * (x0 + x1);
+        let mut cut: Vec<(f32, f32, f32)> = edges
+            .iter()
+            .filter(|(a, b)| (a[0] <= xm) != (b[0] <= xm))
+            .map(|e| (y_at(*e, xm), y_at(*e, x0), y_at(*e, x1)))
+            .collect();
+        cut.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in cut.chunks(2) {
+            if let [t, u] = *pair {
+                if (u.0 - t.0) > 1e-7 {
+                    out.push(vec![[x0, t.1], [x1, t.2], [x1, u.2], [x0, u.1]]);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Which frames of an animated collider input the stale check samples
+/// (`input_hash_anim`): the bake and the panel must look at the same ones.
+/// Indices into the bake's frames, never 0 (the first frame is always
+/// hashed).
+pub fn collider_hash_samples(frames: u32) -> Vec<usize> {
+    let n = frames.clamp(1, MAX_FRAMES) as usize;
+    let mut v: Vec<usize> = (1..=8).map(|k| (k * (n - 1)) / 8).filter(|&i| i > 0).collect();
+    v.dedup();
+    v
 }
 
 fn signed_area(p: &[[f32; 2]]) -> f32 {
@@ -489,8 +620,25 @@ fn centroid(p: &[[f32; 2]]) -> [f32; 2] {
 /// stand, the settings and the canvas. The panel compares it with the bake's
 /// to say "stale".
 pub fn input_hash(bodies: &Geometry, colliders: &Geometry, s: &PhysicsSettings, aspect: f32, fps: f32) -> u64 {
+    input_hash_anim(bodies, colliders, &[], s, aspect, fps)
+}
+
+/// `input_hash` for an animated collider: `later` is the collider input at
+/// the `collider_hash_samples` frames, left out where it equals the first
+/// frame — so a collider that does not move hashes exactly as it always has
+/// and old bakes are not stale.
+pub fn input_hash_anim(
+    bodies: &Geometry,
+    colliders: &Geometry,
+    later: &[&Geometry],
+    s: &PhysicsSettings,
+    aspect: f32,
+    fps: f32,
+) -> u64 {
     let mut b: Vec<u8> = Vec::new();
-    for g in [bodies, colliders] {
+    let mut gs: Vec<&Geometry> = vec![bodies, colliders];
+    gs.extend(later.iter().copied().filter(|g| *g != colliders));
+    for g in gs {
         for (i, pr) in g.prims.iter().enumerate() {
             b.extend_from_slice(&(i as u32).to_le_bytes());
             b.push(match pr.kind {
@@ -551,11 +699,34 @@ pub fn bake_with(
     fps: f32,
     sink: &mut dyn FnMut(BakeMsg) -> bool,
 ) -> bool {
+    bake_frames_with(bodies, std::slice::from_ref(colliders), s, aspect, px_per_unit, fps, sink)
+}
+
+/// `bake_with` for a collider input that may move: `colliders[k]` is the
+/// collider input at the bake's frame k (one entry = static; short = the
+/// last one holds).
+#[allow(clippy::too_many_arguments)]
+pub fn bake_frames_with(
+    bodies: &Geometry,
+    colliders: &[Geometry],
+    s: &PhysicsSettings,
+    aspect: f32,
+    px_per_unit: f32,
+    fps: f32,
+    sink: &mut dyn FnMut(BakeMsg) -> bool,
+) -> bool {
     let (ins, skipped) = bodies_of(bodies, px_per_unit);
-    let st = statics_of(colliders, px_per_unit);
+    let st = Track::of(colliders, px_per_unit);
     let frames = s.frames.clamp(1, MAX_FRAMES);
     let fps = if fps.is_finite() && fps > 0.0 { fps } else { 24.0 };
-    let hash = input_hash(bodies, colliders, s, aspect, fps);
+    let empty = Geometry::default();
+    let first = colliders.first().unwrap_or(&empty);
+    let later: Vec<&Geometry> = if colliders.len() > 1 {
+        collider_hash_samples(frames).into_iter().map(|i| &colliders[i.min(colliders.len() - 1)]).collect()
+    } else {
+        Vec::new()
+    };
+    let hash = input_hash_anim(bodies, first, &later, s, aspect, fps);
     // The solvers build their bodies, then ask for the header around them.
     let mut head = |bodies: Vec<BakedBody>, stride: u32| PhysicsBake {
         start: s.start,
@@ -583,8 +754,20 @@ pub fn bake(
     px_per_unit: f32,
     fps: f32,
 ) -> PhysicsBake {
+    bake_frames(bodies, std::slice::from_ref(colliders), s, aspect, px_per_unit, fps)
+}
+
+/// `bake` for a collider input that may move (see `bake_frames_with`).
+pub fn bake_frames(
+    bodies: &Geometry,
+    colliders: &[Geometry],
+    s: &PhysicsSettings,
+    aspect: f32,
+    px_per_unit: f32,
+    fps: f32,
+) -> PhysicsBake {
     let mut out: Option<PhysicsBake> = None;
-    bake_with(bodies, colliders, s, aspect, px_per_unit, fps, &mut |m| {
+    bake_frames_with(bodies, colliders, s, aspect, px_per_unit, fps, &mut |m| {
         match m {
             BakeMsg::Header(h) => out = Some(h),
             BakeMsg::Frame(rec) => {
@@ -619,7 +802,7 @@ mod rigid {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run(
         ins: &[BodyIn],
-        st: &Statics,
+        track: &Track,
         s: &PhysicsSettings,
         aspect: f32,
         frames: u32,
@@ -688,20 +871,33 @@ mod rigid {
             baked.push(BakedBody { shape, style, offset: off });
         }
         let (fric, rest) = (s.friction.clamp(0.0, 4.0), s.bounce.clamp(0.0, 1.0));
-        // Statics: solid shapes, walls you cannot cross, discs, the canvas.
-        for pts in &st.solids {
-            let verts: Vec<Vector> = pts.iter().map(|p| v(*p)).collect();
-            if let Some(col) = shape_collider(&verts) {
-                w.colliders.insert(col.friction(fric).restitution(rest).build());
+        // Statics: solid shapes, walls you cannot cross, discs. An animated
+        // collider input is put back each frame where it now stands (rapier
+        // depenetrates what it lands on; the soft solver's contacts are the
+        // ones that carry the wall's speed).
+        let place = |w: &mut PhysicsWorld, st: &Statics| -> Vec<ColliderHandle> {
+            let mut hs = Vec::new();
+            for rings in &st.solids {
+                let pieces = if rings.len() > 1 { convex_pieces(rings) } else { vec![rings[0].clone()] };
+                for pts in &pieces {
+                    let verts: Vec<Vector> = pts.iter().map(|p| v(*p)).collect();
+                    let col = if rings.len() > 1 { ColliderBuilder::convex_hull(&verts) } else { shape_collider(&verts) };
+                    if let Some(col) = col {
+                        hs.push(w.colliders.insert(col.friction(fric).restitution(rest).build()));
+                    }
+                }
             }
-        }
-        for pts in &st.lines {
-            let verts: Vec<Vector> = pts.iter().map(|p| v(*p)).collect();
-            w.colliders.insert(ColliderBuilder::polyline(verts, None).friction(fric).restitution(rest).build());
-        }
-        for (c, r) in &st.discs {
-            w.colliders.insert(ColliderBuilder::ball(r * m).translation(v(*c)).friction(fric).build());
-        }
+            for pts in &st.lines {
+                let verts: Vec<Vector> = pts.iter().map(|p| v(*p)).collect();
+                hs.push(w.colliders.insert(ColliderBuilder::polyline(verts, None).friction(fric).restitution(rest).build()));
+            }
+            for (c, r) in &st.discs {
+                hs.push(w.colliders.insert(ColliderBuilder::ball(r * m).translation(v(*c)).friction(fric).build()));
+            }
+            hs
+        };
+        let mut placed = place(&mut w, &track.frames[0]);
+        let mut placed_at = 0usize;
         if s.walls {
             let box_pts = vec![v([0.0, 0.0]), v([1.0, 0.0]), v([1.0, aspect]), v([0.0, aspect]), v([0.0, 0.0])];
             w.colliders.insert(ColliderBuilder::polyline(box_pts, None).friction(fric).restitution(rest).build());
@@ -722,7 +918,18 @@ mod rigid {
         if !sink(BakeMsg::Frame(record(&w))) {
             return false;
         }
-        for _ in 1..frames {
+        for f in 1..frames as usize {
+            let k = f.min(track.frames.len() - 1);
+            if k != placed_at {
+                if track.frames[k] != track.frames[placed_at] {
+                    for h in placed.drain(..) {
+                        w.remove_collider(h);
+                    }
+                    placed = place(&mut w, &track.frames[k]);
+                    w.wake_up_all(true);
+                }
+                placed_at = k;
+            }
             for _ in 0..sub {
                 w.step();
             }
@@ -845,7 +1052,7 @@ mod soft {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn run(
         ins: &[BodyIn],
-        st: &Statics,
+        track: &Track,
         s: &PhysicsSettings,
         aspect: f32,
         px_per_unit: f32,
@@ -863,7 +1070,7 @@ mod soft {
 
         // Pinned shapes do not move: they are static solids, and a constant
         // pose in the bake so they are still drawn.
-        let mut st = st.clone();
+        let mut pinned_solids: Vec<Vec<Vec<V>>> = Vec::new();
         let mut pos: Vec<V> = Vec::new();
         let mut vel: Vec<V> = Vec::new();
         let mut owner: Vec<usize> = Vec::new();
@@ -879,7 +1086,7 @@ mod soft {
             let outline = b.outline();
             if b.pinned() {
                 let c = centroid(&outline);
-                st.solids.push(outline.clone());
+                pinned_solids.push(vec![outline.clone()]);
                 let local = outline.iter().map(|p| [p[0] - c[0], p[1] - c[1]]).collect();
                 let shape = BodyShape::Rigid { local, rings: Vec::new() };
                 let off = stride;
@@ -948,6 +1155,20 @@ mod soft {
         let np = pos.len();
         let mut prev = pos.clone();
         let mut touched: Vec<Option<V>> = vec![None; np];
+        // How far the wall a particle touched moved this substep: friction
+        // and the bounce are measured against the wall, so a moving collider
+        // carries what it touches with it.
+        let mut wall_dp: Vec<V> = vec![[0.0, 0.0]; np];
+        // The colliders at a fractional frame, pinned bodies included.
+        let colliders_at = |t: f32| {
+            let mut st = track.at(t);
+            st.solids.extend(pinned_solids.iter().cloned());
+            st
+        };
+        let mut st = colliders_at(0.0);
+        // Where the colliders stood a substep ago (same make-up as `st` when
+        // `moving`, so its points pair up with `st`'s).
+        let mut st_prev = st.clone();
 
         let sub_n = (s.substeps.clamp(1, 64) * 2).max(4);
         let h = 1.0 / (fps * sub_n as f32);
@@ -968,8 +1189,16 @@ mod soft {
         if !sink(BakeMsg::Frame(record(&pos, &bodies))) {
             return false;
         }
-        for _ in 1..frames {
-            for _ in 0..sub_n {
+        for f in 1..frames {
+            for j in 0..sub_n {
+                // Move an animated collider to where it is at the END of
+                // this substep; contacts push bodies out of it there.
+                let mut moving = false;
+                if track.animated() {
+                    let next = colliders_at((f - 1) as f32 + (j + 1) as f32 / sub_n as f32);
+                    moving = same_make(&st, &next);
+                    st_prev = std::mem::replace(&mut st, next);
+                }
                 // Integrate.
                 for i in 0..np {
                     vel[i][1] += g * h;
@@ -978,6 +1207,7 @@ mod soft {
                     prev[i] = pos[i];
                     pos[i] = add(pos[i], mul(vel[i], h));
                     touched[i] = None;
+                    wall_dp[i] = [0.0, 0.0];
                 }
                 // Each body's own constraints.
                 for b in &bodies {
@@ -1043,54 +1273,124 @@ mod soft {
                         }
                     }
                 }
-                // Statics.
+                // Colliders (kinematic: they push, they are not pushed).
                 for i in 0..np {
-                    for solid in &st.solids {
-                        if let Some((k, _, q, inside)) = nearest_on_ring(solid, pos[i]) {
-                            let d = sub(pos[i], q);
+                    // A few passes: out of one bead can be into its neighbour.
+                    for _pass in 0..3 {
+                        let before = pos[i];
+                        for (si, solid) in st.solids.iter().enumerate() {
+                            // Came through an edge this substep (a body's own
+                            // constraints can shove a particle further than a
+                            // thin collider is wide): back to where it crossed,
+                            // on the side it came from. Not when the collider
+                            // has moved onto where it was: that is the nearest
+                            // push below.
+                            if let Some((ri, k, t, q)) = first_crossing(solid, prev[i], pos[i]) {
+                                if !nearest_on_solid(solid, prev[i]).is_some_and(|n| n.4) {
+                                    let ring = &solid[ri];
+                                    let mut nrm = edge_normal(ring, k);
+                                    if dot(nrm, sub(prev[i], q)) < 0.0 {
+                                        nrm = mul(nrm, -1.0);
+                                    }
+                                    pos[i] = add(q, mul(nrm, r));
+                                    touched[i] = Some(nrm);
+                                    if moving {
+                                        let was = &st_prev.solids[si][ri];
+                                        let n = was.len();
+                                        wall_dp[i] = sub(q, add(was[k], mul(sub(was[(k + 1) % n], was[k]), t)));
+                                    }
+                                    continue;
+                                }
+                            }
+                            if let Some((ri, k, t, q, inside)) = nearest_on_solid(solid, pos[i]) {
+                                let d = sub(pos[i], q);
+                                let dist = len(d);
+                                let pen = if inside { dist + r } else { r - dist };
+                                if pen > 0.0 {
+                                    let ring = &solid[ri];
+                                    let nrm = if dist > 1e-9 {
+                                        mul(d, if inside { -1.0 / dist } else { 1.0 / dist })
+                                    } else {
+                                        edge_normal(ring, k)
+                                    };
+                                    pos[i] = add(pos[i], mul(nrm, pen));
+                                    touched[i] = Some(nrm);
+                                    if moving {
+                                        let was = &st_prev.solids[si][ri];
+                                        let n = was.len();
+                                        let qp = add(was[k], mul(sub(was[(k + 1) % n], was[k]), t));
+                                        wall_dp[i] = sub(q, qp);
+                                    }
+                                }
+                            }
+                        }
+                        for (li, line) in st.lines.iter().enumerate() {
+                            let was = if moving { Some(st_prev.lines[li].as_slice()) } else { None };
+                            if let Some((nrm, dp)) = line_contact(line, was, prev[i], &mut pos[i], r) {
+                                touched[i] = Some(nrm);
+                                wall_dp[i] = dp;
+                            }
+                        }
+                        for (di, (c, rad)) in st.discs.iter().enumerate() {
+                            // Came in (or right through) from outside: back to
+                            // where it entered.
+                            let o = sub(prev[i], *c);
+                            if dot(o, o) >= rad * rad {
+                                let dv = sub(pos[i], prev[i]);
+                                let (qa, qb, qc) = (dot(dv, dv), 2.0 * dot(o, dv), dot(o, o) - rad * rad);
+                                let disc = qb * qb - 4.0 * qa * qc;
+                                if qa > 1e-18 && disc >= 0.0 {
+                                    let u = (-qb - disc.sqrt()) / (2.0 * qa);
+                                    if (0.0..=1.0).contains(&u) {
+                                        let e = add(prev[i], mul(dv, u));
+                                        let nrm = mul(sub(e, *c), 1.0 / rad.max(1e-9));
+                                        pos[i] = add(e, mul(nrm, r));
+                                        touched[i] = Some(nrm);
+                                        if moving {
+                                            let (cp, rp) = st_prev.discs[di];
+                                            wall_dp[i] = add(sub(*c, cp), mul(nrm, rad - rp));
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                            let d = sub(pos[i], *c);
                             let dist = len(d);
-                            let pen = if inside { dist + r } else { r - dist };
-                            if pen > 0.0 {
-                                let nrm = if dist > 1e-9 {
-                                    mul(d, if inside { -1.0 / dist } else { 1.0 / dist })
-                                } else {
-                                    edge_normal(solid, k)
-                                };
+                            let pen = rad + r - dist;
+                            if pen > 0.0 && dist > 1e-9 {
+                                let nrm = mul(d, 1.0 / dist);
                                 pos[i] = add(pos[i], mul(nrm, pen));
                                 touched[i] = Some(nrm);
+                                if moving {
+                                    let (cp, rp) = st_prev.discs[di];
+                                    wall_dp[i] = add(sub(*c, cp), mul(nrm, rad - rp));
+                                }
                             }
                         }
-                    }
-                    for line in &st.lines {
-                        if let Some(nrm) = line_contact(line, prev[i], &mut pos[i], r) {
-                            touched[i] = Some(nrm);
-                        }
-                    }
-                    for (c, rad) in &st.discs {
-                        let d = sub(pos[i], *c);
-                        let dist = len(d);
-                        let pen = rad + r - dist;
-                        if pen > 0.0 && dist > 1e-9 {
-                            let nrm = mul(d, 1.0 / dist);
-                            pos[i] = add(pos[i], mul(nrm, pen));
-                            touched[i] = Some(nrm);
-                        }
-                    }
-                    if s.walls {
-                        let lim = [(r, 1.0 - r), (r, aspect - r)];
-                        for ax in 0..2 {
-                            if pos[i][ax] < lim[ax].0 {
-                                pos[i][ax] = lim[ax].0;
-                                let mut nrm = [0.0, 0.0];
-                                nrm[ax] = 1.0;
-                                touched[i] = Some(nrm);
-                            } else if pos[i][ax] > lim[ax].1 {
-                                pos[i][ax] = lim[ax].1;
-                                let mut nrm = [0.0, 0.0];
-                                nrm[ax] = -1.0;
-                                touched[i] = Some(nrm);
+                        if s.walls {
+                            let lim = [(r, 1.0 - r), (r, aspect - r)];
+                            for ax in 0..2 {
+                                if pos[i][ax] < lim[ax].0 {
+                                    pos[i][ax] = lim[ax].0;
+                                    let mut nrm = [0.0, 0.0];
+                                    nrm[ax] = 1.0;
+                                    touched[i] = Some(nrm);
+                                } else if pos[i][ax] > lim[ax].1 {
+                                    pos[i][ax] = lim[ax].1;
+                                    let mut nrm = [0.0, 0.0];
+                                    nrm[ax] = -1.0;
+                                    touched[i] = Some(nrm);
+                                }
                             }
                         }
+                        if pos[i] == before {
+                            break;
+                        }
+                    }
+                    // Still inside (wedged where two colliders meet, say):
+                    // stay where it was, if that was clear.
+                    if touched[i].is_some() && inside_any(&st, pos[i]) && !inside_any(&st, prev[i]) {
+                        pos[i] = prev[i];
                     }
                 }
                 // Friction at the position level, then velocities. A contact
@@ -1099,13 +1399,19 @@ mod soft {
                 // otherwise pump energy into bodies pressed together).
                 for i in 0..np {
                     if let Some(nrm) = touched[i] {
-                        let dp = sub(pos[i], prev[i]);
+                        // Slip relative to the wall (still for a static one).
+                        let dp = sub(sub(pos[i], prev[i]), wall_dp[i]);
                         let tang = sub(dp, mul(nrm, dot(dp, nrm)));
-                        pos[i] = sub(pos[i], mul(tang, bodies[owner[i]].friction));
+                        let held = sub(pos[i], mul(tang, bodies[owner[i]].friction));
+                        // Not into a collider: round a bead, the tangent
+                        // runs into the next one.
+                        if !inside_any(&st, held) {
+                            pos[i] = held;
+                        }
                     }
                     vel[i] = mul(sub(pos[i], prev[i]), 1.0 / h);
                     if let Some(nrm) = touched[i] {
-                        let vn = dot(vel[i], nrm);
+                        let vn = dot(sub(vel[i], mul(wall_dp[i], 1.0 / h)), nrm);
                         if vn > 0.0 {
                             vel[i] = sub(vel[i], mul(nrm, vn * 0.9));
                         }
@@ -1210,6 +1516,65 @@ mod soft {
         Some((bk, bt, bq, wn != 0))
     }
 
+    /// Nearest point on a solid's edges, over all its rings: (ring, edge,
+    /// t along it, the point, is `p` inside — even-odd over the rings, so a
+    /// hole is outside).
+    fn nearest_on_solid(rings: &[Vec<V>], p: V) -> Option<(usize, usize, f32, V, bool)> {
+        let mut best: Option<(f32, usize, usize, f32, V)> = None;
+        let mut inside = false;
+        for (ri, ring) in rings.iter().enumerate() {
+            let Some((k, t, q, ins)) = nearest_on_ring(ring, p) else { continue };
+            inside ^= ins;
+            let d = dot(sub(p, q), sub(p, q));
+            if best.is_none_or(|b| d < b.0) {
+                best = Some((d, ri, k, t, q));
+            }
+        }
+        best.map(|(_, ri, k, t, q)| (ri, k, t, q, inside))
+    }
+
+    /// Where the move `a` -> `b` first crosses one of a solid's edges:
+    /// (ring, edge, t along the edge, the point).
+    fn first_crossing(rings: &[Vec<V>], a: V, b: V) -> Option<(usize, usize, f32, V)> {
+        let d = sub(b, a);
+        if dot(d, d) < 1e-20 {
+            return None;
+        }
+        let mut best: Option<(f32, usize, usize, f32, V)> = None;
+        for (ri, ring) in rings.iter().enumerate() {
+            let n = ring.len();
+            for k in 0..n {
+                let (p, q) = (ring[k], ring[(k + 1) % n]);
+                let e = sub(q, p);
+                let den = cross(d, e);
+                if den.abs() < 1e-18 {
+                    continue;
+                }
+                let w = sub(p, a);
+                let u = cross(w, e) / den; // along the move
+                let t = cross(w, d) / den; // along the edge
+                if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&t) && best.is_none_or(|b| u < b.0) {
+                    best = Some((u, ri, k, t, add(p, mul(e, t))));
+                }
+            }
+        }
+        best.map(|(_, ri, k, t, q)| (ri, k, t, q))
+    }
+
+    /// Inside a solid or a disc.
+    fn inside_any(st: &Statics, p: V) -> bool {
+        st.discs.iter().any(|(c, rad)| dot(sub(p, *c), sub(p, *c)) < rad * rad)
+            || st.solids.iter().any(|sol| nearest_on_solid(sol, p).is_some_and(|n| n.4))
+    }
+
+    /// Whether two collider frames pair up point for point.
+    fn same_make(a: &Statics, b: &Statics) -> bool {
+        a.solids.len() == b.solids.len()
+            && a.discs.len() == b.discs.len()
+            && same_rings(&a.lines, &b.lines)
+            && a.solids.iter().zip(&b.solids).all(|(x, y)| same_rings(x, y))
+    }
+
     fn edge_normal(ring: &[V], k: usize) -> V {
         let n = ring.len();
         let e = sub(ring[(k + 1) % n], ring[k]);
@@ -1220,17 +1585,21 @@ mod soft {
 
     /// Keep a particle off an open line: pushed out if within `r`, and put
     /// back on its own side if it crossed the line this substep.
-    fn line_contact(line: &[V], prev: V, p: &mut V, r: f32) -> Option<V> {
+    /// `was` is the same line a substep ago when it moves: which side the
+    /// particle came from is judged against where the line WAS, and the
+    /// result carries how far the touched point of the line moved.
+    fn line_contact(line: &[V], was: Option<&[V]>, prev: V, p: &mut V, r: f32) -> Option<(V, V)> {
         let mut hit = None;
-        for w in line.windows(2) {
+        for (si, w) in line.windows(2).enumerate() {
             let (a, b) = (w[0], w[1]);
             let e = sub(b, a);
             let ee = dot(e, e);
             if ee < 1e-18 {
                 continue;
             }
+            let (a0, b0) = was.map_or((a, b), |l| (l[si], l[si + 1]));
             // Which side the particle came from.
-            let side0 = cross(e, sub(prev, a));
+            let side0 = cross(sub(b0, a0), sub(prev, a0));
             let side1 = cross(e, sub(*p, a));
             let t = (dot(sub(*p, a), e) / ee).clamp(0.0, 1.0);
             let q = add(a, mul(e, t));
@@ -1244,7 +1613,8 @@ mod soft {
             let dist = dot(sub(*p, q), nrm);
             if crossed || (dist < r && len(sub(*p, q)) < r + 1e-6) {
                 *p = add(q, mul(nrm, r));
-                hit = Some(nrm);
+                let q0 = add(a0, mul(sub(b0, a0), t));
+                hit = Some((nrm, sub(q, q0)));
             }
         }
         hit
@@ -1523,6 +1893,125 @@ mod tests {
 
     fn lowest(g: &Geometry) -> f32 {
         g.points.iter().map(|q| q.p[1]).fold(f32::MIN, f32::max)
+    }
+
+    fn circle(c: [f32; 2], r: f32, n: usize) -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|k| {
+                let a = std::f32::consts::TAU * k as f32 / n as f32;
+                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+            })
+            .collect()
+    }
+
+    /// A ring of bead discs (points with a pscale, as an Instance of a
+    /// Circle onto a polygon's vertices bakes down to) of radius `rad`.
+    fn beads(c: [f32; 2], rad: f32, bead: f32, n: usize) -> Geometry {
+        let mut g = Geometry::default();
+        for p in circle(c, rad, n) {
+            let mut q = Point::at(p);
+            q.pscale = bead * 1920.0;
+            g.points.push(q);
+            g.prims.push(Prim {
+                layer: Default::default(),
+                kind: PrimKind::Point,
+                verts: vec![g.points.len() as u32 - 1],
+                style: Style::default(),
+                phys: None,
+                src: 0,
+                rings: Vec::new(),
+            });
+        }
+        g
+    }
+
+    /// The brief's repro, reduced: a soft square inside a ring of beads
+    /// that shrinks over the bake. An animated collider input is sampled per
+    /// frame (and blended per substep), so the ring squeezes the body; it
+    /// used to be read once and the ring passed straight through.
+    #[test]
+    fn a_shrinking_ring_squeezes_a_soft_body() {
+        let c = [0.5, 0.28];
+        let bodies = geo_of(&[square(c, 0.12)], true);
+        let frames = 60u32;
+        let ring: Vec<Geometry> = (0..frames)
+            .map(|f| {
+                let t = (f as f32 / 48.0).min(1.0);
+                beads(c, 0.276 + (0.10 - 0.276) * t, 0.016, 48)
+            })
+            .collect();
+        // The firmest body: the hardest to keep inside, as it fights back.
+        let s = PhysicsSettings { mode: PhysicsMode::Soft, gravity: 0.0, frames, substeps: 8, walls: true, blobbiness: 0.0, ..Default::default() };
+        let b = bake_frames(&bodies, &ring, &s, 0.5625, 1920.0, 24.0);
+        assert_eq!(b.frames, frames);
+        let last = frame_geometry(&b, (frames - 1) as f32);
+        let far = last.points.iter().map(|q| (q.p[0] - c[0]).hypot(q.p[1] - c[1])).fold(0.0f32, f32::max);
+        // The ring's inner edge ends at 0.10 - 0.016 = 0.084 (plus a contact
+        // skin); the square's corners started at 0.17.
+        assert!(far < 0.095, "the ring did not squeeze the body: farthest particle at {far}");
+        // A still ring changes nothing: one frame or sixty identical ones
+        // bake the same, and hash the same as the plain call.
+        let still = vec![ring[0].clone(); frames as usize];
+        let a = bake_frames(&bodies, &still, &s, 0.5625, 1920.0, 24.0);
+        let one = bake(&bodies, &ring[0], &s, 0.5625, 1920.0, 24.0);
+        assert_eq!(a, one);
+        assert_eq!(one.input_hash, input_hash(&bodies, &ring[0], &s, 0.5625, 24.0));
+        assert_ne!(b.input_hash, one.input_hash, "an animated collider hashes its motion");
+    }
+
+    /// The rigid and fluid solvers take an animated collider too: a floor
+    /// that rises lifts what rests on it.
+    #[test]
+    fn a_rising_floor_lifts_rigid_and_fluid_bodies() {
+        let frames = 48u32;
+        // Wider than the canvas: its ends are not walls to get stuck in.
+        let floor = |y: f32| geo_of(&[vec![[-0.5, y], [1.5, y], [1.5, y + 0.2], [-0.5, y + 0.2]]], true);
+        let track: Vec<Geometry> = (0..frames).map(|f| floor(0.5 - 0.2 * (f as f32 / 47.0))).collect();
+        let bodies = geo_of(&[square([0.5, 0.4], 0.04)], true);
+        for mode in [PhysicsMode::Fluid, PhysicsMode::Rigid] {
+            let s = PhysicsSettings { mode, frames, walls: true, ..Default::default() };
+            let b = bake_frames(&bodies, &track, &s, 0.5625, 1920.0, 24.0);
+            let last = frame_geometry(&b, (frames - 1) as f32);
+            let low = last.points.iter().map(|q| q.p[1]).filter(|y| y.is_finite()).fold(f32::MIN, f32::max);
+            assert!(low < 0.32, "{mode:?}: the risen floor (top 0.30) did not lift the body: {low}");
+        }
+    }
+
+    /// Holes in a collider are empty space: a body that starts in a box's
+    /// hole stays in it (it used to be thrown out of a solid box), in every
+    /// mode.
+    #[test]
+    fn a_body_sits_in_a_colliders_hole() {
+        let mut g = geo_of(&[vec![[0.1, 0.05], [0.9, 0.05], [0.9, 0.5], [0.1, 0.5]]], true);
+        // The hole: a circle, one more ring of the same prim.
+        let off = g.points.len() as u32;
+        for p in circle([0.5, 0.28], 0.15, 48).into_iter().rev() {
+            g.points.push(Point::at(p));
+        }
+        g.prims[0].rings = vec![off];
+        g.prims[0].verts.extend(off..g.points.len() as u32);
+        let bodies = geo_of(&[square([0.5, 0.25], 0.04)], true);
+        for mode in PhysicsMode::ALL {
+            let s = PhysicsSettings { mode, frames: 48, walls: true, ..Default::default() };
+            let b = bake(&bodies, &g, &s, 0.5625, 1920.0, 24.0);
+            let last = frame_geometry(&b, 47.0);
+            let ys: Vec<f32> = last.points.iter().map(|q| q.p[1]).filter(|y| y.is_finite()).collect();
+            assert!(!ys.is_empty(), "{mode:?}");
+            let low = ys.iter().copied().fold(f32::MIN, f32::max);
+            // It falls to the bottom of the hole (0.43), not out of the box
+            // and onto the canvas floor (0.5625).
+            assert!(low < 0.45 && low > 0.36, "{mode:?}: the body is not resting in the hole: {low}");
+        }
+    }
+
+    /// The strip decomposition covers exactly the solid's area.
+    #[test]
+    fn convex_pieces_cover_a_solid_with_a_hole() {
+        let outer = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let hole = circle([0.5, 0.5], 0.25, 32);
+        let want = signed_area(&outer).abs() - signed_area(&hole).abs();
+        let got: f32 = convex_pieces(&[outer, hole]).iter().map(|p| signed_area(p).abs()).sum();
+        assert!((got - want).abs() < 1e-4, "{got} vs {want}");
     }
 
     /// Both solvers: a square dropped onto a ground line falls, stops ON the

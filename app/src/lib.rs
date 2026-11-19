@@ -19793,6 +19793,17 @@ impl Gfx {
         node: u64,
         tick: i64,
     ) -> Option<(engine::geo::Geometry, engine::geo::Geometry, engine::geophys::PhysicsSettings, f32, f32)> {
+        self.physics_inputs_of(node, tick, true)
+    }
+
+    /// `physics_inputs`, the bodies left empty unless `bodies`: a collider
+    /// sampled at many frames need not evaluate the bodies each time.
+    fn physics_inputs_of(
+        &self,
+        node: u64,
+        tick: i64,
+        bodies: bool,
+    ) -> Option<(engine::geo::Geometry, engine::geo::Geometry, engine::geophys::PhysicsSettings, f32, f32)> {
         let d = self.dive.last().filter(|d| d.kind == DiveKind::Geo)?;
         let settings = match self.egraph.node(node).map(|n| &n.kind) {
             Some(NodeKind::GeoNode(engine::geo::GeoNode::Physics { settings, .. })) => *settings,
@@ -19825,7 +19836,29 @@ impl Gfx {
         let input = |i: usize| {
             g.input_of(node, i).map(|s| engine::geo::eval_node(&g, s, &cx)).unwrap_or_default()
         };
-        Some((input(0), input(1), settings, aspect, ppu))
+        Some((if bodies { input(0) } else { Default::default() }, input(1), settings, aspect, ppu))
+    }
+
+    /// The collider input (Physics input 1) at each of `ticks`, evaluated
+    /// as the bake will see it. Colliders can be animated (keyed radii, a
+    /// moving Transform), so a bake samples them every frame, not once.
+    fn physics_colliders_at(&self, node: u64, ticks: impl Iterator<Item = i64>) -> Vec<engine::geo::Geometry> {
+        ticks.filter_map(|t| self.physics_inputs_of(node, t, false).map(|i| i.1)).collect()
+    }
+
+    /// The stale check's view of an animated collider: the collider input
+    /// at `engine::geophys::collider_hash_samples` (what the bake hashes
+    /// too). Empty for a collider that does not move.
+    fn physics_collider_samples(&self, node: u64, start: i64, frames: u32, first: &engine::geo::Geometry) -> Vec<engine::geo::Geometry> {
+        let later = self.physics_colliders_at(
+            node,
+            engine::geophys::collider_hash_samples(frames).into_iter().map(|i| start + i as i64),
+        );
+        if later.iter().all(|g| g == first) {
+            Vec::new()
+        } else {
+            later
+        }
     }
 
     /// A Ragdoll's bake: its input skeleton evaluated at the start frame,
@@ -19928,7 +19961,9 @@ impl Gfx {
         let (info, start) = bake;
         let Some((info, hash)) = info else { return Some((None, false)) };
         let (bodies, colliders, s, aspect, _) = self.physics_inputs(node, start)?;
-        let now = engine::geophys::input_hash(&bodies, &colliders, &s, aspect, self.fps);
+        let later = self.physics_collider_samples(node, start, s.frames, &colliders);
+        let later: Vec<&engine::geo::Geometry> = later.iter().collect();
+        let now = engine::geophys::input_hash_anim(&bodies, &colliders, &later, &s, aspect, self.fps);
         Some((Some(info), now != hash))
     }
 
@@ -19957,10 +19992,15 @@ impl Gfx {
             Some(NodeKind::GeoNode(engine::geo::GeoNode::Physics { settings, .. })) => settings.start,
             _ => return,
         };
-        let Some((bodies, colliders, s, aspect, ppu)) = self.physics_inputs(node, start) else { return };
+        let Some((bodies, first, s, aspect, ppu)) = self.physics_inputs(node, start) else { return };
+        // The colliders frame by frame: they may be keyed or driven by
+        // time. (A still collider comes out as one frame in the engine.)
+        let frames = s.frames.clamp(1, engine::geophys::MAX_FRAMES);
+        let mut colliders = vec![first];
+        colliders.extend(self.physics_colliders_at(node, (1..frames as i64).map(|k| start + k)));
         let fps = self.fps;
         if wait {
-            let b = engine::geophys::bake(&bodies, &colliders, &s, aspect, ppu, fps);
+            let b = engine::geophys::bake_frames(&bodies, &colliders, &s, aspect, ppu, fps);
             self.physics_finish(node, b);
             return;
         }
@@ -19968,7 +20008,7 @@ impl Gfx {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stop = cancel.clone();
         std::thread::spawn(move || {
-            engine::geophys::bake_with(&bodies, &colliders, &s, aspect, ppu, fps, &mut |m| {
+            engine::geophys::bake_frames_with(&bodies, &colliders, &s, aspect, ppu, fps, &mut |m| {
                 !stop.load(std::sync::atomic::Ordering::Relaxed) && tx.send(m).is_ok()
             });
         });

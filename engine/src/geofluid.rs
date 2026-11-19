@@ -24,7 +24,7 @@
 
 use rayon::prelude::*;
 
-use super::{BakeMsg, BakedBody, BodyIn, BodyShape, PhysicsBake, PhysicsSettings, Statics, METRES_PER_WIDTH};
+use super::{BakeMsg, BakedBody, BodyIn, BodyShape, PhysicsBake, PhysicsSettings, Statics, Track, METRES_PER_WIDTH};
 use crate::geo::{FillRule, Geometry, Point, Prim, PrimKind, Style};
 
 /// The most particles a bake keeps, and the most particle-frames: past
@@ -419,7 +419,7 @@ impl Solids {
         let mut edge = vec![band; w * h];
         let mut other = vec![-band; w * h];
         let mut segs: Vec<(V, V)> = Vec::new();
-        for poly in &st.solids {
+        for poly in st.solids.iter().flatten() {
             for i in 0..poly.len() {
                 segs.push((poly[i], poly[(i + 1) % poly.len()]));
             }
@@ -435,17 +435,20 @@ impl Solids {
                 }
             }
         }
-        // Inside: even-odd per solid along each row, unioned.
+        // Inside: even-odd per solid (over all its rings, so holes are
+        // open) along each row, unioned.
         let mut inside = vec![false; w * h];
-        for poly in &st.solids {
-            let n = poly.len();
+        for solid in &st.solids {
             for y in 0..h {
                 let py = origin[1] + y as f32 * cell;
                 let mut xs: Vec<f32> = Vec::new();
-                for i in 0..n {
-                    let (a, b) = (poly[i], poly[(i + 1) % n]);
-                    if (a[1] > py) != (b[1] > py) {
-                        xs.push(a[0] + (py - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                for poly in solid {
+                    let n = poly.len();
+                    for i in 0..n {
+                        let (a, b) = (poly[i], poly[(i + 1) % n]);
+                        if (a[1] > py) != (b[1] > py) {
+                            xs.push(a[0] + (py - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                        }
                     }
                 }
                 xs.sort_by(|a, b| a.total_cmp(b));
@@ -734,7 +737,7 @@ fn area(b: &BodyIn) -> f32 {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run(
     ins: &[BodyIn],
-    st: &Statics,
+    track: &Track,
     s: &PhysicsSettings,
     aspect: f32,
     frames: u32,
@@ -744,14 +747,14 @@ pub(super) fn run(
 ) -> bool {
     let f = &s.fluid;
     // Pinned shapes are solid, and drawn where they stand.
-    let mut st = st.clone();
+    let mut pinned_solids: Vec<Vec<Vec<[f32; 2]>>> = Vec::new();
     let mut pinned_rec: Vec<(u32, [f32; 3])> = Vec::new();
     let mut baked = Vec::new();
     let mut stride = 0u32;
     let water: Vec<&BodyIn> = ins.iter().filter(|b| !b.pinned()).collect();
     for b in ins.iter().filter(|b| b.pinned()) {
         let outline = b.outline();
-        st.solids.push(outline.clone());
+        pinned_solids.push(vec![outline.clone()]);
         let c = super::centroid(&outline);
         let local = outline.iter().map(|p| [p[0] - c[0], p[1] - c[1]]).collect();
         let shape = BodyShape::Rigid { local, rings: Vec::new() };
@@ -793,8 +796,15 @@ pub(super) fn run(
         *v = [v[0] * kscale, v[1] * kscale];
     }
     fl.pred = fl.pos.clone();
-    let solids = Solids::build(&st, aspect, s.walls, spacing);
-    let solid = Solid { s: &solids, k: kscale };
+    // The solids' depth grid; an animated collider input rebuilds it each
+    // frame it changes.
+    let build = |k: usize| {
+        let mut st: Statics = track.frames[k.min(track.frames.len() - 1)].clone();
+        st.solids.extend(pinned_solids.iter().cloned());
+        Solids::build(&st, aspect, s.walls, spacing)
+    };
+    let mut solids = build(0);
+    let mut built_at = 0usize;
     let kern = Kernels::new(H);
     let params = Params {
         rest: rest_density(&kern),
@@ -824,6 +834,14 @@ pub(super) fn run(
     };
     for frame in 0..frames {
         if frame > 0 {
+            let k = (frame as usize).min(track.frames.len() - 1);
+            if k != built_at {
+                if track.frames[k] != track.frames[built_at] {
+                    solids = build(k);
+                }
+                built_at = k;
+            }
+            let solid = Solid { s: &solids, k: kscale };
             for _ in 0..substeps {
                 fl.substep(&params, &kern, &solid, gravity, f.iterations, damping, dt);
             }
