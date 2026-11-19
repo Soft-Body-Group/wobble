@@ -269,7 +269,7 @@ pub(crate) fn paste_loads(
 // ---- script blocks -------------------------------------------------------
 
 #[derive(Debug, PartialEq)]
-enum Tok {
+pub(crate) enum Tok {
     Word(String),
     /// A `{…}` group, its inside verbatim.
     Group(String),
@@ -278,7 +278,7 @@ enum Tok {
 
 /// TCL-ish words: bare words, "quoted" (backslash escapes), {braced}
 /// groups (nesting, kept verbatim) and newlines, which end a knob.
-fn tokens(s: &str) -> Vec<Tok> {
+pub(crate) fn tokens(s: &str) -> Vec<Tok> {
     let c: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -333,7 +333,7 @@ fn tokens(s: &str) -> Vec<Tok> {
 
 /// The top-level `Class { body }` blocks of a script, or `None` when the
 /// text has none (so it is not a script at all).
-fn script_blocks(text: &str) -> Option<Vec<(String, String)>> {
+pub(crate) fn script_blocks(text: &str) -> Option<Vec<(String, String)>> {
     let t = tokens(text);
     let mut out = Vec::new();
     for w in t.windows(2) {

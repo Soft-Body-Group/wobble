@@ -4,7 +4,6 @@
 //! pin rows) couldn't be bent this far.
 
 use crate::theme;
-use crate::pathpaste::paste_loads;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use engine::graph::{
     BlurParams, CornerPinParams, CurveParams, DefocusParams,     GlowParams,
@@ -3168,6 +3167,9 @@ pub struct NodeEditor {
     /// Nodes were pasted this frame: the app adopts their footage (a pasted
     /// Read has a path and nothing loaded) the way it does after an undo.
     pub pasted: bool,
+    /// The comp's format, set by the app each frame: what a pasted
+    /// script's tracker pixels are divided by when the paste does not say.
+    pub paste_format: [f32; 2],
     /// Copies also go to the SYSTEM clipboard. Off under test, so a suite
     /// never clobbers what the user has on theirs.
     pub system_clipboard: bool,
@@ -3637,6 +3639,7 @@ impl Default for NodeEditor {
             focus: None,
             open_external: None,
             pasted: false,
+            paste_format: [1920.0, 1080.0],
             system_clipboard: true,
             lit_inputs: Vec::new(),
             clip: None,
@@ -7303,9 +7306,12 @@ impl NodeEditor {
                 if let (Some(text), Some(p)) = (paste, pointer) {
                     let at = view.to_graph(p);
                     // A node clip first; else footage named by paths or a
-                    // script's Read blocks becomes Loads at the cursor.
+                    // script's Read blocks becomes Loads at the cursor, and
+                    // its tracker / corner pin blocks Trackers and Corner
+                    // Pins with their keys.
+                    let fmt = self.paste_format;
                     let ids = paste_nodes(graph, &text, at, next_read_slot)
-                        .or_else(|| paste_loads(graph, &text, at, next_read_slot));
+                        .or_else(|| crate::scriptpaste::paste(graph, &text, at, next_read_slot, fmt));
                     if let Some(ids) = ids {
                         crate::genaiui::convert_pasted(graph, &ids, self.in_genai, next_read_slot);
                         *selection = ids;

@@ -290,7 +290,7 @@ impl Val {
     }
 }
 
-fn tokens(text: &str) -> Vec<String> {
+pub(crate) fn tokens(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     for c in text.chars() {
@@ -314,7 +314,7 @@ fn tokens(text: &str) -> Vec<String> {
 }
 
 /// Read a `{curve ...}` body (tokens after `curve`, up to the closing brace).
-fn curve(body: &[String]) -> BTreeMap<i64, f32> {
+pub(crate) fn curve(body: &[String]) -> BTreeMap<i64, f32> {
     let mut m = BTreeMap::new();
     let mut frame = 1i64;
     let mut i = 0;

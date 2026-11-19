@@ -23,6 +23,19 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// Which way a track runs from the playhead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackDir {
+    /// To the end of the sequence.
+    Forward,
+    /// Back to its first frame.
+    Backward,
+    /// One frame on.
+    NextFrame,
+    /// One frame back.
+    PrevFrame,
+}
+
 /// One frame's result, streamed back as the bake runs.
 pub enum TrackMsg {
     /// (frame index, every point's normalized position in order, whether
@@ -41,7 +54,8 @@ pub struct TrackJob {
     /// The tick index 0 of the frame list plays at: results are keyed at
     /// `tick0 + index`, never at the index.
     tick0: i64,
-    /// Frames this track covers — `start` to the end of the sequence.
+    /// Frames this track covers — `start` to the end (or, backward, the
+    /// start) of the sequence.
     pub total: u64,
     pub done: u64,
     /// Frames where the blob was lost and the track coasted.
@@ -294,8 +308,10 @@ pub fn luma_plane(src: &[f16], info: ImageInfo, row_stride: usize) -> Vec<f32> {
 }
 
 /// Kick a track over `frames`, starting from the node's authored region at
-/// INDEX `start` of the list and running to its end; index 0 plays at comp
-/// frame `tick0`.
+/// INDEX `start` of the list and running to INDEX `end` (inclusive) — which
+/// may lie BEFORE `start`: a backward track walks the list in reverse, each
+/// frame aligned against the one after it. Index 0 plays at comp frame
+/// `tick0`.
 ///
 /// `start` is the PLAYHEAD: the region you drew sits on the feature in the
 /// frame you were looking at, so that is the frame the track is seeded
@@ -307,13 +323,22 @@ pub fn spawn(
     frames: Vec<PathBuf>,
     info: ImageInfo,
     start: u64,
+    end: u64,
     tick0: i64,
     params: engine::graph::TrackerParams,
 ) -> TrackJob {
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let start = start.min(frames.len().saturating_sub(1) as u64);
-    let total = frames.len() as u64 - start;
+    let last = frames.len().saturating_sub(1) as u64;
+    let start = start.min(last);
+    let end = end.min(last);
+    let total = start.abs_diff(end) + 1;
+    // The frame indices in tracking order: forward or backward from the seed.
+    let order: Vec<usize> = if end >= start {
+        (start as usize..=end as usize).collect()
+    } else {
+        (end as usize..=start as usize).rev().collect()
+    };
     let stop = cancel.clone();
     crate::bg::spawn(move || {
         let stride = info.row_stride_f16();
@@ -326,7 +351,8 @@ pub fn spawn(
         // first frame.
         let mut prev: Vec<[f32; 2]> = points.iter().map(|p| p.center).collect();
         let mut pattern: Vec<engine::pointtrack::PointTracker> = Vec::new();
-        for (i, path) in frames.iter().enumerate().skip(start as usize) {
+        for i in order {
+            let path = &frames[i];
             if stop.load(Ordering::Relaxed) {
                 return;
             }

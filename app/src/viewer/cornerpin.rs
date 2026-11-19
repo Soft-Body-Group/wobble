@@ -74,21 +74,8 @@ impl Gfx {
             let from_screen = |p: egui::Pos2| apply_h(&hd_inv, pts_to_out(p));
             let pts: Vec<egui::Pos2> = shown.iter().map(|c| scr(*c)).collect();
 
-            // The quad NOT being edited, faintly: the pin while `from` is
-            // armed; `from` while the pin is, unless it is still the frame.
-            let other = if edit_from {
-                Some(pin_quad(&cpw))
-            } else {
-                (cpw.from != engine::graph::UNIT_QUAD).then_some(cpw.from)
-            };
-            if let Some(o) = other {
-                for k in 0..4 {
-                    ink.seg(scr(o[k]), scr(o[(k + 1) % 4]), 1.0, 0.35, false);
-                }
-                for c in o {
-                    ink.circle_stroke(scr(c), 4.0, 1.0, 0.35, false);
-                }
-            }
+            // Only the quad being edited is drawn: a faint copy of the other
+            // one read as a second set of handles and cluttered the plate.
             for k in 0..4 {
                 ink.seg(pts[k], pts[(k + 1) % 4], 1.5, 0.8, false);
             }

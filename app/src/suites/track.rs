@@ -198,14 +198,15 @@ impl Gfx {
                     std::process::exit(1);
                 };
                 // Keyed from the playhead the bake was launched at, to the
-                // end — and NOT one frame before it.
+                // end; the first track's keys BEFORE it are left standing
+                // (a track only replaces the frames it covers).
                 let want = len - from;
-                if cx.keys.len() as u64 != want || cx.keys.first().map(|k| k.frame) != Some(from as f64) {
+                let ahead = cx.keys.iter().filter(|k| k.frame >= from as f64).count() as u64;
+                let behind = cx.keys.iter().filter(|k| k.frame < from as f64).count() as u64;
+                if ahead != want || behind != from {
                     println!(
-                        "TRACK TEST FAIL: second track keyed {} frames from {:?}, \
-                         wanted {want} from {from}",
-                        cx.keys.len(),
-                        cx.keys.first().map(|k| k.frame),
+                        "TRACK TEST FAIL: second track left {ahead} keys from {from} (wanted \
+                         {want}) and {behind} before it (wanted {from}, the first track's)",
                     );
                     std::process::exit(1);
                 }
@@ -276,6 +277,13 @@ impl Gfx {
                 p.search = 0.05;
                 p.track = p.center;
                 self.test.track_progress = 0;
+                // A new plate: the blob keys are cleared, as "clear" does —
+                // a track only replaces the frames it covers.
+                if let Some(n) = self.egraph.node_mut(tid) {
+                    for c in tracker::chans(0) {
+                        n.anim.remove(&c);
+                    }
+                }
                 self.start_track(tid, p);
                 if self.track_job.is_none() {
                     println!("TRACK TEST FAIL: the pattern track did not start");
@@ -345,6 +353,91 @@ impl Gfx {
                     worst.0
                 );
                 self.test.track_worst = worst.0;
+                // BACKWARD from the last frame, seeded on the truth there:
+                // it must key every frame back to the first and land on
+                // the truth all the way.
+                let (x, y) = h_apply(
+                    &h_mul(&synth::path(PW, PH, PN - 1), &h_inv(&synth::path(PW, PH, 0)).unwrap()),
+                    px,
+                    py,
+                );
+                self.test.track_seed = [(x / PW as f64) as f32, (y / PH as f64) as f32];
+                if let Some(n) = self.egraph.node_mut(tid) {
+                    for c in tracker::chans(0) {
+                        n.anim.remove(&c);
+                    }
+                }
+                next = 14;
+            }
+            14 if self.eval_tick() == PLACE + PN as u64 - 1 && self.track_job.is_none() => {
+                let Some(NodeKind::Tracker(mut p)) =
+                    self.egraph.node(tid).map(|n| n.kind.clone())
+                else {
+                    return;
+                };
+                p.center = self.test.track_seed;
+                p.track = p.center;
+                self.test.track_progress = 0;
+                self.start_track_dir(tid, p, tracker::TrackDir::Backward);
+                if self.track_job.is_none() {
+                    println!("TRACK TEST FAIL: the backward track did not start");
+                    std::process::exit(1);
+                }
+                next = 15;
+            }
+            15 if self.track_job.is_some() => {
+                if let Some((_, j)) = &self.track_job {
+                    if j.done > self.test.track_progress {
+                        self.test.track_progress = j.done;
+                        self.test.track_clock = web_time::Instant::now();
+                    }
+                }
+            }
+            15 => {
+                let Some(n) = self.egraph.node(tid) else { return };
+                let (Some(cx), Some(cy)) =
+                    (n.anim.get(&anim::Channel::TrackX), n.anim.get(&anim::Channel::TrackY))
+                else {
+                    println!("TRACK TEST FAIL: the backward track keyed nothing");
+                    std::process::exit(1);
+                };
+                let end = PLACE + PN as u64 - 1;
+                let (first, last) = (cx.keys.first().map(|k| k.frame), cx.keys.last().map(|k| k.frame));
+                if cx.keys.len() != PN || first != Some(PLACE as f64) || last != Some(end as f64) {
+                    println!(
+                        "TRACK TEST FAIL: backward track keyed {} frames {first:?}..{last:?}, \
+                         wanted {PN} from {PLACE} to {end}",
+                        cx.keys.len(),
+                    );
+                    std::process::exit(1);
+                }
+                // The viewer followed it back to the first frame.
+                if self.timeline_pos != PLACE {
+                    println!(
+                        "TRACK TEST FAIL: the viewer did not follow the backward track: playhead at {}, wanted {PLACE}",
+                        self.timeline_pos
+                    );
+                    std::process::exit(1);
+                }
+                let (px, py) = (TRACK_PT[0] as f64 * PW as f64, TRACK_PT[1] as f64 * PH as f64);
+                let mut worst = (0.0f64, 0u64);
+                for (a, b) in cx.keys.iter().zip(cy.keys.iter()) {
+                    let t = (a.frame - PLACE as f64).round() as usize;
+                    let h = h_mul(&synth::path(PW, PH, t), &h_inv(&synth::path(PW, PH, 0)).unwrap());
+                    let (x, y) = h_apply(&h, px, py);
+                    let e = ((a.value as f64 * PW as f64 - x).powi(2) + (b.value as f64 * PH as f64 - y).powi(2)).sqrt();
+                    if e > worst.0 {
+                        worst = (e, a.frame as u64);
+                    }
+                }
+                if worst.0 > 0.75 {
+                    println!(
+                        "TRACK TEST FAIL: backward pattern track {:.3} px off the truth at frame {}",
+                        worst.0, worst.1
+                    );
+                    std::process::exit(1);
+                }
+                log::info!("track: pattern tracks {PN} frames BACKWARD to {:.3} px worst", worst.0);
                 // The multi-point pass drives the graph: see
                 // `drive_test_track_ui`.
                 next = 20;

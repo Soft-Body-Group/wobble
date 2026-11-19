@@ -75,6 +75,7 @@ mod dockui;
 mod webdock;
 mod numfield;
 mod pathpaste;
+mod scriptpaste;
 mod shaderui;
 mod sdfui;
 mod geolightui;
@@ -5421,7 +5422,7 @@ enum AssetAct {
 }
 
 enum TrackAction {
-    Start(engine::graph::TrackerParams),
+    Start(engine::graph::TrackerParams, tracker::TrackDir),
     Cancel,
     Add,
     Remove(usize),
@@ -10851,6 +10852,12 @@ impl Gfx {
     /// generator set to "inherit" — or anything with no picture input —
     /// lands on. The globals… window sets it; unset, the plates' canvas
     /// (largest loaded source). None when unset and nothing is loaded.
+    /// The size a pasted script's pixels are divided by when it does not
+    /// say: the comp's format, else HD.
+    fn paste_format(&self) -> [f32; 2] {
+        self.script_format().map_or([1920.0, 1080.0], |(w, h)| [w as f32, h as f32])
+    }
+
     fn script_format(&self) -> Option<(u32, u32)> {
         self.canvas_override.or_else(|| {
             self.loaded
@@ -12629,6 +12636,19 @@ impl Gfx {
     /// the playhead is parked on. Like the other bakes this is explicit and
     /// cancellable, and only one runs at a time.
     fn start_track(&mut self, node: u64, params: engine::graph::TrackerParams) {
+        self.start_track_dir(node, params, tracker::TrackDir::Forward);
+    }
+
+    /// `start_track` in a direction: to the end, back to the start, or one
+    /// frame either way. Only the frames the track will cover lose their
+    /// keys, so a backward track extends a forward one (and vice versa)
+    /// instead of replacing it.
+    fn start_track_dir(
+        &mut self,
+        node: u64,
+        params: engine::graph::TrackerParams,
+        dir: tracker::TrackDir,
+    ) {
         let Some((_, frames)) = self.input_frames(node) else {
             self.render_status =
                 Some("wire a Load with footage into the Tracker's input first".into());
@@ -12679,18 +12699,43 @@ impl Gfx {
                 }
             }
         }
-        // The solve's reference: every point at the seed frame, in pixels
-        // of this plate.
-        params.anchors = (0..params.count()).filter_map(|i| params.point(i)).map(|p| p.center).collect();
-        params.frame = [info.width as f32, info.height as f32];
-        // A track is a fresh answer: the old keys would otherwise survive
-        // past the end of a shorter one.
+        // The frames this track covers lose their old keys — they would
+        // otherwise survive past the end of a shorter track. Keys on the
+        // far side of the seed stay: tracking backward from where a forward
+        // track began extends it.
+        let last = frames.len() as u64 - 1;
+        let (end, cut): (u64, Option<std::ops::RangeInclusive<f64>>) = match dir {
+            tracker::TrackDir::Forward => (last, Some(t as f64..=f64::INFINITY)),
+            tracker::TrackDir::Backward => (0, Some(f64::NEG_INFINITY..=t as f64)),
+            tracker::TrackDir::NextFrame => ((idx + 1).min(last), None),
+            tracker::TrackDir::PrevFrame => (idx.saturating_sub(1), None),
+        };
+        let mut kept = false;
         if let Some(n) = self.egraph.node_mut(node) {
             for i in 0..params.count() {
                 for c in tracker::chans(i) {
-                    n.anim.remove(&c);
+                    if let Some(curve) = n.anim.get_mut(&c) {
+                        if let Some(cut) = &cut {
+                            curve.keys.retain(|k| !cut.contains(&k.frame));
+                        }
+                        if curve.keys.is_empty() {
+                            n.anim.remove(&c);
+                        } else {
+                            kept = true;
+                        }
+                    }
                 }
             }
+        }
+        // The solve's reference: every point at the seed frame, in pixels
+        // of this plate — unless this track extends one already there,
+        // whose reference the solved pin on its frames is measured from.
+        if !kept || params.anchors.len() != params.count() {
+            params.anchors =
+                (0..params.count()).filter_map(|i| params.point(i)).map(|p| p.center).collect();
+        }
+        params.frame = [info.width as f32, info.height as f32];
+        if let Some(n) = self.egraph.node_mut(node) {
             if let NodeKind::Tracker(a) = &mut n.kind {
                 *a = params.clone();
             }
@@ -12698,7 +12743,7 @@ impl Gfx {
         self.render_status = None;
         self.track_job = Some((
             node,
-            tracker::spawn(self.decoder.clone(), frames, info, idx, tick0, params),
+            tracker::spawn(self.decoder.clone(), frames, info, idx, end, tick0, params),
         ));
     }
 
@@ -14900,6 +14945,7 @@ impl Gfx {
                     self.node_editor.cost_flow = self.cost_flow.clone();
                     self.node_editor.busy_nodes = self.genai_busy();
                     self.node_editor.eval_tick = self.eval_tick();
+                    self.node_editor.paste_format = self.paste_format();
                 self.node_editor.in_noise =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Noise);
                 self.node_editor.in_geo =
@@ -19003,6 +19049,7 @@ impl Gfx {
                 self.node_editor.in_tool = !self.dive.is_empty();
                 self.node_editor.cost_flow = self.cost_flow.clone();
                 self.node_editor.busy_nodes = self.genai_busy();
+                self.node_editor.paste_format = self.paste_format();
                 self.node_editor.eval_tick = self.eval_tick();
                 self.node_editor.in_noise =
                     self.dive.last().is_some_and(|d| d.kind == DiveKind::Noise);
@@ -24993,7 +25040,7 @@ impl Gfx {
                     None => {}
                 }
                 match track_click {
-                    Some(TrackAction::Start(p)) => self.start_track(key, p),
+                    Some(TrackAction::Start(p, dir)) => self.start_track_dir(key, p, dir),
                     Some(TrackAction::Add) => {
                         use innards::Provider;
                         if let Some(i) = tracker::POINTS.add(&mut self.egraph, key) {

@@ -90,16 +90,34 @@ pub(crate) fn panel(
             if ui.button("cancel").clicked() {
                 *track_click = Some(TrackAction::Cancel);
             }
-        } else if ui
-            .button("track")
-            .on_hover_text(format!(
-                "an explicit bake: decodes the input sequence once \
-                 from the current frame ({cur_t}) to the end and \
-                 keys every point per frame",
-            ))
-            .clicked()
-        {
-            *track_click = Some(TrackAction::Start(tk.clone()));
+        } else {
+            use tracker::TrackDir;
+            for (dir, label, tip) in [
+                (
+                    TrackDir::Backward,
+                    "◀ track",
+                    format!(
+                        "an explicit bake: decodes the input sequence once \
+                         from the current frame ({cur_t}) back to the start \
+                         and keys every point per frame",
+                    ),
+                ),
+                (TrackDir::PrevFrame, "◀1", "track one frame back".to_string()),
+                (TrackDir::NextFrame, "1▶", "track one frame on".to_string()),
+                (
+                    TrackDir::Forward,
+                    "track ▶",
+                    format!(
+                        "an explicit bake: decodes the input sequence once \
+                         from the current frame ({cur_t}) to the end and \
+                         keys every point per frame",
+                    ),
+                ),
+            ] {
+                if ui.button(label).on_hover_text(tip).clicked() {
+                    *track_click = Some(TrackAction::Start(tk.clone(), dir));
+                }
+            }
         }
         clear_track = ui
             .button("clear")

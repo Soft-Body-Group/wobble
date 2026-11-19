@@ -287,7 +287,7 @@ impl Gfx {
                     fail(format!("the stabilise CornerPin leaves the points {stab:.3} px off their seed positions"));
                 }
                 println!(
-                    "TRACK TEST PASS: blob follows the disc and re-tracks from the playhead; pattern tracks \
+                    "TRACK TEST PASS: blob follows the disc, re-tracks from the playhead and tracks backward; pattern tracks \
                      {PN} frames placed at {PLACE} to {:.3} px; zoomed in, + added three points, a click \
                      picked one, a node drag moved one, point 4's wire unplugged and re-plugged; four points track to {:.3} px and the driven CornerPin carries them \
                      {worst:.3} px from the truth, and a stabilise CornerPin holds them within {stab:.3} px",
