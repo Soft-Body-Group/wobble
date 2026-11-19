@@ -1,7 +1,7 @@
 //! The clip browser for Load nodes: seq_manip's browser (`seq_manip_imfram`)
 //! on imfram's pieces, over wobble's own decoders. Along the top, the path
 //! bar (back / forward / up, rescan, favourite, the path with Tab
-//! completion) and the view's controls. Down the left, favourites, recent
+//! completion) and the view's controls. Down the left, home, favourites, recent
 //! folders, the folder tree and the bin. In the middle, imfram's gallery
 //! (tiles) or list (rows, sortable columns) over the folder: numbered
 //! frames collapse into one sequence item, versions of a shot into one
@@ -1617,6 +1617,9 @@ impl SeqBrowser {
             egui::Panel::left(egui::Id::new("seq-side")).resizable(true).default_size(210.0).show(ui, |ui| {
                 egui::Panel::bottom(egui::Id::new("seq-bin")).resizable(false).show(ui, |ui| self.bin_ui(ui));
                 egui::ScrollArea::vertical().id_salt("seq-side-scroll").auto_shrink([false, false]).show(ui, |ui| {
+                    if let Some(h) = nav::home_place(ui, &self.dir) {
+                        nav = Some(h);
+                    }
                     let ev = nav::places(ui, "Favourites", pinned, &self.dir, true, Some("☆ in the path bar adds the folder shown"));
                     if let Some(p) = ev.go {
                         nav = Some(p);
