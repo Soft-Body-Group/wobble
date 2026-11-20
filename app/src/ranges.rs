@@ -372,7 +372,7 @@ mod tests {
         // Slip +5 delays the clip: frames 10..20 play at 15..25.
         let slip = NodeKind::Slip(SlipParams { delay: 5 });
         assert_eq!(time_shift(&slip, (10, 20)), Some((15, 25)));
-        // al's case: a 1000-frame slip moves the range 1000 later, not
+        // the reported case: a 1000-frame slip moves the range 1000 later, not
         // off the front of the timeline to 0..0.
         let slip = NodeKind::Slip(SlipParams { delay: 1000 });
         assert_eq!(time_shift(&slip, (1001, 1100)), Some((2001, 2100)));

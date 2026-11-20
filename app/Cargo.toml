@@ -31,7 +31,7 @@ serde_json = "1"
 wgpu = { workspace = true }
 winit = { workspace = true }
 egui = { workspace = true }
-imfram = { git = "https://github.com/Soft-Body-Group/imfram.git", rev = "bb05a3aa980c0901d3870943bdbd330deec611d9" }
+imfram = { git = "https://github.com/Soft-Body-Group/imfram.git", rev = "1f46e068b9bb4854cca8f4686b27545004405bf8" }
 egui-wgpu = { workspace = true }
 # Not inherited: the web build (web/) needs its default features OFF, which
 # a workspace dependency cannot switch off per member. Native turns them all
