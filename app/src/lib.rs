@@ -10741,6 +10741,47 @@ impl Gfx {
         self.node_resolution_full(src, visited)
     }
 
+    /// The format a node with none of its own lands in, looking DOWNSTREAM:
+    /// through consumers that take their format from it (a Blur on the
+    /// matte, a chained Spline) to the first one that does not — a Mask's
+    /// matte port, a Blend's A — and that node's format. None when nothing
+    /// downstream has one.
+    fn consumer_res(
+        &self,
+        id: u64,
+        visited: &mut std::collections::HashSet<u64>,
+        seen: &mut std::collections::HashSet<u64>,
+    ) -> Option<(u32, u32)> {
+        let mut consumers: Vec<(u64, usize)> = self
+            .egraph
+            .edges
+            .iter()
+            .filter(|(_, _, src)| *src == id)
+            .map(|(dst, input, _)| (*dst, *input))
+            .collect();
+        consumers.sort_unstable();
+        for (dst, input) in consumers {
+            if !seen.insert(dst) {
+                continue;
+            }
+            let Some(n) = self.egraph.node(dst) else { continue };
+            // A Blend's format is its background's: a shape on A lands there.
+            let over_b = matches!(n.kind, NodeKind::Blend { .. })
+                && input == 0
+                && (n.blend_res.is_some() || self.egraph.input_of(dst, 1).is_some());
+            let r = if n.kind.inherits_from(input) && !over_b {
+                // Its format would be ours: keep going down.
+                self.consumer_res(dst, visited, seen)
+            } else {
+                self.node_resolution_full(dst, visited)
+            };
+            if r.is_some() {
+                return r;
+            }
+        }
+        None
+    }
+
     fn node_resolution_walk(
         &self,
         id: u64,
@@ -10834,6 +10875,13 @@ impl Gfx {
             // A roto shape declares one only when asked to; otherwise it
             // inherits like any node with no picture input (the canvas).
             NodeKind::Spline(sp) if sp.format.is_some() => sp.format,
+            // No format and no matte feeding it: the format of the picture
+            // it ends up masking. Left to the canvas it took the VIEW's
+            // size, so the same shape sat in different pixels when viewing
+            // the Mask and when viewing a Blend over a bigger plate.
+            NodeKind::Spline(_) => self
+                .input_res(id, 0, visited)
+                .or_else(|| self.consumer_res(id, visited, &mut std::collections::HashSet::new())),
             // A layer stack is a CANVAS: its format is the bottom layer's,
             // the way a Blend's is its background's, and an explicit
             // override wins over both.
