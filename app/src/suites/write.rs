@@ -220,10 +220,80 @@ impl Gfx {
                     println!("WRITE TEST FAIL: no-footage render did not write {}", missing.display());
                     std::process::exit(1);
                 }
+                // Then the same Render as a movie under proxy (a movie
+                // build with a ProRes encoder; a stock build stops here).
+                let fmt = engine::graph::WriteFormat::ProRes422Hq;
+                if movieout::MovieOut::can_encode(fmt).is_ok() {
+                    if let Some(NodeKind::Write(wp)) = self.egraph.node_mut(wid).map(|n| &mut n.kind) {
+                        wp.path.clear();
+                        wp.location = dir.to_string_lossy().into_owned();
+                        wp.name = "noise".into();
+                        wp.subfolder = false;
+                        wp.format = fmt;
+                    }
+                    self.proxy = 0.5;
+                    self.playback_dirty = true;
+                    self.last_engine_graph = None;
+                    next = 5;
+                } else {
+                    println!(
+                        "WRITE TEST PASS: wrote and read back 3 graded, moving EXRs under \
+                         location/name/, made a Load of them over the render's frames, then \
+                         rendered a Noise with no footage in the comp through an old-style path \
+                         (no movie encoder in this build: movie stage skipped)"
+                    );
+                    let _ = std::fs::remove_dir_all(&dir);
+                    std::process::exit(0);
+                }
+            }
+            5 if frames > 30 => {
+                let Some(NodeKind::Write(wp)) = self.egraph.node(wid).map(|n| n.kind.clone()) else {
+                    return;
+                };
+                self.start_write(wid, &wp);
+                if self.graph_bake.is_none() {
+                    println!(
+                        "WRITE TEST FAIL: a proxy movie render did not start ({})",
+                        self.load_errors.get(&wid).map(|s| s.as_str()).unwrap_or("no reason")
+                    );
+                    std::process::exit(1);
+                }
+                next = 6;
+            }
+            6 if self.graph_bake.is_some() => {
+                frames = 0;
+            }
+            6 => {
+                if let Some(e) = self.load_errors.get(&wid) {
+                    println!("WRITE TEST FAIL: proxy movie render: {e}");
+                    std::process::exit(1);
+                }
+                #[cfg_attr(not(feature = "movie"), allow(unused_variables))]
+                let mov = dir.join("noise_prx.mov");
+                #[cfg(feature = "movie")]
+                let wp_size = |w: u32, h: u32| match self.egraph.node(wid).map(|n| &n.kind) {
+                    Some(NodeKind::Write(wp)) => wp.movie_size(w, h),
+                    _ => (w, h),
+                };
+                #[cfg(feature = "movie")]
+                {
+                    let dec = engine::movie::MovieDecoder::default();
+                    let n = dec.frame_count(&mov).ok();
+                    let size = dec.read_header(&mov).ok().map(|i| (i.width, i.height));
+                    let want = self.comp.output_size().map(|(w, h)| wp_size(w, h));
+                    if n != Some(3) || size.is_none() || size != want {
+                        println!(
+                            "WRITE TEST FAIL: {} has {n:?} frames at {size:?} (proxy canvas {want:?})",
+                            mov.display()
+                        );
+                        std::process::exit(1);
+                    }
+                }
                 println!(
                     "WRITE TEST PASS: wrote and read back 3 graded, moving EXRs under \
-                     location/name/, made a Load of them over the render's frames, then \
-                     rendered a Noise with no footage in the comp through an old-style path"
+                     location/name/, made a Load of them over the render's frames, \
+                     rendered a Noise with no footage through an old-style path, then \
+                     the same as a 3-frame ProRes .mov under proxy, named _prx"
                 );
                 let _ = std::fs::remove_dir_all(&dir);
                 std::process::exit(0);

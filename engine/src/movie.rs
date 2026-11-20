@@ -707,6 +707,210 @@ pub fn encode_mp4(path: &Path, frames: &[Vec<u8>], w: u32, h: u32, fps: f32) -> 
     Ok(())
 }
 
+/// The H.264 encoders a movie Render tries, best first. Unlike
+/// [`MP4_ENCODERS`] there is no MPEG-4 Part 2 fallback: a file labelled
+/// H.264 must be H.264.
+const H264_ENCODERS: [&str; 3] = ["h264_videotoolbox", "libx264", "libopenh264"];
+
+/// The encoder a movie Render of `format` would use, or why there is none.
+fn movie_encoder(format: crate::graph::WriteFormat) -> Result<ff::Codec> {
+    init();
+    if format.prores_profile().is_some() {
+        return ff::encoder::find_by_name("prores_ks").ok_or_else(|| {
+            anyhow!(
+                "this build's FFmpeg cannot encode ProRes (no prores_ks encoder: \
+                 release builds ship a decode-only FFmpeg)"
+            )
+        });
+    }
+    match format {
+        crate::graph::WriteFormat::H264 => H264_ENCODERS
+            .iter()
+            .find_map(|n| ff::encoder::find_by_name(n))
+            .ok_or_else(|| {
+                anyhow!(
+                    "this build's FFmpeg has no H.264 encoder (needs VideoToolbox, \
+                     libx264 or OpenH264; release builds ship a decode-only FFmpeg)"
+                )
+            }),
+        _ => Err(anyhow!("{} is not a movie format", format.label())),
+    }
+}
+
+/// Can this build write `format`? `Err` says why not, in words a Render
+/// panel can show.
+pub fn can_encode(format: crate::graph::WriteFormat) -> std::result::Result<(), String> {
+    movie_encoder(format).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// One movie file being written, frame by frame and in order: what a
+/// Render with a movie `WriteFormat` feeds. Frames go in as 16-bit RGBA
+/// code values (the output space already applied); swscale makes them
+/// Rec.709 YCbCr, studio range, at the codec's subsampling and depth.
+pub struct MovieWriter {
+    octx: ff::format::context::Output,
+    enc: ff::codec::encoder::Video,
+    sc: ff::software::scaling::Context,
+    tb: ff::Rational,
+    stream_tb: ff::Rational,
+    index: usize,
+    yuv: ff::format::Pixel,
+    w: u32,
+    h: u32,
+    n: i64,
+}
+
+impl MovieWriter {
+    /// Open `path` (its extension picks the container) for a `w`×`h` movie
+    /// at `fps`. `w` and `h` must suit the codec's subsampling
+    /// (`WriteParams::movie_size`). `rec709` tags the stream's primaries
+    /// and transfer as Rec.709; otherwise only the matrix is tagged, since
+    /// a label that does not match the pixels is worse than none.
+    pub fn create(
+        path: &Path,
+        w: u32,
+        h: u32,
+        fps: f32,
+        format: crate::graph::WriteFormat,
+        rec709: bool,
+    ) -> Result<Self> {
+        let codec = movie_encoder(format)?;
+        let (sx, sy) = format.subsampled();
+        anyhow::ensure!(
+            w > 0 && h > 0 && !(sx && w % 2 != 0) && !(sy && h % 2 != 0),
+            "{} cannot be {w}x{h}: its chroma needs even sides",
+            format.label()
+        );
+        let yuv = match format {
+            crate::graph::WriteFormat::H264 => ff::format::Pixel::YUV420P,
+            crate::graph::WriteFormat::ProRes4444 | crate::graph::WriteFormat::ProRes4444Xq => {
+                ff::format::Pixel::YUVA444P10LE
+            }
+            _ => ff::format::Pixel::YUV422P10LE,
+        };
+        let mut octx = ff::format::output(&path).with_context(|| format!("open {}", path.display()))?;
+        let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
+        // Whole-number rates stay exact; 23.976 and friends go over 1001.
+        let tb = if (fps - fps.round()).abs() < 1e-3 {
+            ff::Rational::new(fps.round().max(1.0) as i32, 1).invert()
+        } else {
+            ff::Rational::new(1001, (fps * 1001.0).round() as i32)
+        };
+        let mut ctx = ff::codec::context::Context::new_with_codec(codec);
+        ctx.set_threading(ff::codec::threading::Config::kind(ff::codec::threading::Type::Frame));
+        let mut enc = ctx.encoder().video()?;
+        enc.set_width(w);
+        enc.set_height(h);
+        enc.set_format(yuv);
+        enc.set_time_base(tb);
+        enc.set_frame_rate(Some(tb.invert()));
+        enc.set_colorspace(ff::color::Space::BT709);
+        enc.set_color_range(ff::color::Range::MPEG);
+        if rec709 {
+            enc.set_color_primaries(ff::color::Primaries::BT709);
+            enc.set_color_transfer_characteristic(ff::color::TransferCharacteristic::BT709);
+        }
+        let mut opts = ff::Dictionary::new();
+        if let Some(profile) = format.prores_profile() {
+            opts.set("profile", &profile.to_string());
+            // Apple's own vendor tag: some players are fussy without it.
+            opts.set("vendor", "apl0");
+        } else {
+            // A review file: generous, ~0.25 bits per pixel per frame (2K at
+            // 24 is about 13 Mbit/s) for the encoders that take a rate, and
+            // a near-transparent constant quality for libx264.
+            enc.set_bit_rate(((w as f64 * h as f64 * fps as f64) * 0.25).max(2e6) as usize);
+            enc.set_gop((fps.round() as u32).max(1) * 2);
+            opts.set("crf", "16");
+            opts.set("preset", "medium");
+        }
+        if global_header {
+            enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+        }
+        let enc = enc
+            .open_as_with(codec, opts)
+            .with_context(|| format!("opening the {} encoder", codec.name()))?;
+        let mut stream = octx.add_stream(codec)?;
+        stream.set_parameters(&enc);
+        stream.set_time_base(tb);
+        let index = stream.index();
+        octx.write_header().with_context(|| format!("writing {}", path.display()))?;
+        // After write_header: the muxer picks its own timescale.
+        let stream_tb = octx.stream(index).unwrap().time_base();
+        let mut sc = ff::software::scaling::Context::get(
+            ff::format::Pixel::RGBA64LE,
+            w,
+            h,
+            yuv,
+            w,
+            h,
+            ff::software::scaling::Flags::BICUBIC | ff::software::scaling::Flags::ACCURATE_RND,
+        )?;
+        unsafe {
+            let coeffs = ff::ffi::sws_getCoefficients(ff::ffi::SWS_CS_ITU709 as i32);
+            // Full-range RGB in, studio-range Rec.709 YCbCr out.
+            ff::ffi::sws_setColorspaceDetails(sc.as_mut_ptr(), coeffs, 1, coeffs, 0, 0, 1 << 16, 1 << 16);
+        }
+        Ok(Self { octx, enc, sc, tb, stream_tb, index, yuv, w, h, n: 0 })
+    }
+
+    /// The next frame: tight RGBA, four `u16` per pixel, `w`×`h`.
+    pub fn push(&mut self, rgba: &[u16]) -> Result<()> {
+        let row = self.w as usize * 4;
+        anyhow::ensure!(
+            rgba.len() == row * self.h as usize,
+            "movie frame {} is {} samples, not {}",
+            self.n,
+            rgba.len(),
+            row * self.h as usize
+        );
+        let mut src = ff::frame::Video::new(ff::format::Pixel::RGBA64LE, self.w, self.h);
+        let stride = src.stride(0);
+        let data = src.data_mut(0);
+        for (y, line) in rgba.chunks_exact(row).enumerate() {
+            let out = &mut data[y * stride..y * stride + row * 2];
+            for (o, v) in out.chunks_exact_mut(2).zip(line) {
+                o.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        // A FRESH output frame each time: the encoder may hold on to it.
+        let mut out = ff::frame::Video::new(self.yuv, self.w, self.h);
+        self.sc.run(&src, &mut out)?;
+        out.set_pts(Some(self.n));
+        out.set_color_space(ff::color::Space::BT709);
+        out.set_color_range(ff::color::Range::MPEG);
+        self.enc.send_frame(&out)?;
+        self.n += 1;
+        self.drain()
+    }
+
+    fn drain(&mut self) -> Result<()> {
+        let mut packet = ff::Packet::empty();
+        while self.enc.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(self.index);
+            // One frame long, each, or the last frame has no length.
+            if packet.duration() == 0 {
+                packet.set_duration(1);
+            }
+            packet.rescale_ts(self.tb, self.stream_tb);
+            packet.write_interleaved(&mut self.octx)?;
+        }
+        Ok(())
+    }
+
+    /// Flush the encoder and close the file. Frames written: `frames()`.
+    pub fn finish(mut self) -> Result<()> {
+        self.enc.send_eof()?;
+        self.drain()?;
+        self.octx.write_trailer()?;
+        Ok(())
+    }
+
+    pub fn frames(&self) -> i64 {
+        self.n
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ff, rgba_scaler};

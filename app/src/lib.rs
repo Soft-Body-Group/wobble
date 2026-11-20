@@ -105,6 +105,7 @@ mod snapshot;
 mod layerpick;
 mod layerui;
 mod minibar;
+mod movieout;
 mod hudkeys;
 mod pointpick;
 mod modelui;
@@ -4631,6 +4632,9 @@ struct Gfx {
     /// finishes (marks itself done, is adopted) only once these are zero.
     bake_writes: Arc<std::sync::atomic::AtomicUsize>,
     bake_write_err: Arc<std::sync::Mutex<Option<String>>>,
+    /// A movie Render's encoder (`movieout`): frames go here, in order,
+    /// instead of to the EXR workers. `None` between renders.
+    movie_out: Option<movieout::MovieOut>,
     jobs: state::NodeJobs,
     render_play: Option<RenderPlay>,
     render_status: Option<String>,
@@ -6754,6 +6758,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         graph_bake_origin: (0, 0),
         bake_writes: Default::default(),
         bake_write_err: Default::default(),
+        movie_out: None,
         jobs: state::NodeJobs {
             genai: Default::default(),
             corridor: Default::default(),
@@ -7555,11 +7560,16 @@ impl Gfx {
         let err = |s: &mut Self, msg: &str| {
             s.load_errors.insert(node, msg.to_string());
         };
-        // A deliverable never renders at proxy; refusing beats a half-res
-        // file nobody asked for (manifesto: never wrong silently).
-        if self.proxy < 1.0 {
-            return err(self, "proxy 1/2 is on — switch to full res to render");
-        }
+        // Under proxy a Render renders what proxy shows, half res, and says
+        // so in its file name (`_prx`): never mistaken for, or written over,
+        // the full-res render.
+        let proxied;
+        let params = if self.proxy < 1.0 {
+            proxied = params.proxied();
+            &proxied
+        } else {
+            params
+        };
         if !params.is_set() {
             return err(self, "set a location first");
         }
@@ -7582,10 +7592,39 @@ impl Gfx {
             return err(self, "no output yet");
         };
         let info = engine::decode::ImageInfo { width: w, height: h };
+        let movie = params.format.is_movie();
+        if movie {
+            if self.write_takes_data(node) {
+                return err(self, "data renders are EXR only: a movie cannot hold float data");
+            }
+            if let Err(e) = movieout::MovieOut::can_encode(params.format) {
+                return err(self, &e);
+            }
+        }
         let dir = params.dir();
         if !dir.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 return err(self, &format!("output dir: {e}"));
+            }
+        }
+        // A movie is one stream: open it now (a refusal is a message here,
+        // not a failed first frame), at even sides where the codec needs.
+        self.movie_out = None;
+        if movie {
+            let (mw, mh) = params.movie_size(w, h);
+            let out = params.effective_output(self.egraph.working, &colorui::defaults());
+            let rec709 = out.primaries == engine::color::Primaries::Rec709;
+            *self.bake_write_err.lock().unwrap() = None;
+            match movieout::MovieOut::start(
+                &params.resolve_frame(0),
+                (mw, mh),
+                self.fps,
+                params.format,
+                rec709,
+                self.bake_write_err.clone(),
+            ) {
+                Ok(m) => self.movie_out = Some(m),
+                Err(e) => return err(self, &e),
             }
         }
         // No rig for a procedural comp: nothing to decode (see above).
@@ -8040,6 +8079,37 @@ impl Gfx {
                         | Some(NodeKind::SoftCrop(engine::graph::SoftCropParams { bake: Some(_), .. }))
                 )
                 && self.bake_pack(bake.node).single.is_on();
+            // A movie Render: the frame goes to its encoder, in order,
+            // rather than to an EXR worker.
+            if let (BakeSink::Write { params, .. }, Some(mo)) = (&bake.sink, &self.movie_out) {
+                if params.format.is_movie() {
+                    use engine::graph::WriteChannel;
+                    let mono = params.single_channel().map(|(ch, _)| match ch {
+                        WriteChannel::R => [1.0, 0.0, 0.0, 0.0],
+                        WriteChannel::G => [0.0, 1.0, 0.0, 0.0],
+                        WriteChannel::B => [0.0, 0.0, 1.0, 0.0],
+                        WriteChannel::A => [0.0, 0.0, 0.0, 1.0],
+                        WriteChannel::Luma => {
+                            let l = out_space.unwrap_or(working).primaries.luma_weights();
+                            [l[0], l[1], l[2], 0.0]
+                        }
+                    });
+                    let stride = bake.info.row_stride_f16();
+                    if !mo.send(movieout::Frame { px: owned, stride, mono }) {
+                        let e = self.bake_write_err.lock().unwrap().take();
+                        self.movie_out = None;
+                        self.load_errors.insert(
+                            bake.node,
+                            format!("movie write failed: {}", e.unwrap_or_else(|| "the encoder stopped".into())),
+                        );
+                        return;
+                    }
+                    self.timeline_pos = set_tick;
+                    self.seek_target = None;
+                    bake.next += 1;
+                    continue;
+                }
+            }
             // The write runs on a worker while the next frame renders (an
             // EXR's compression is the slowest part of a frame); a handful
             // in flight at most, so a slow disk cannot pile frames up in
@@ -8193,12 +8263,26 @@ impl Gfx {
         }
         // A Write's frames ARE the deliverable: nothing to mark, nothing to
         // adopt, just say what landed and where.
-        if let BakeSink::Write { .. } = bake.sink {
+        if let BakeSink::Write { params, .. } = &bake.sink {
             let n = bake.len.saturating_sub(bake.first_tick());
-            self.written.insert(
-                bake.node,
-                (bake.first_tick()..bake.len).map(|t| bake.file_for(t)).collect(),
-            );
+            // A movie: close the stream now every frame is in.
+            if params.format.is_movie() {
+                let Some(mo) = self.movie_out.take() else {
+                    self.load_errors.insert(bake.node, "movie write failed: no encoder".into());
+                    return;
+                };
+                if let Err(e) = mo.finish() {
+                    *self.bake_write_err.lock().unwrap() = None;
+                    self.load_errors.insert(bake.node, format!("movie write failed: {e}"));
+                    return;
+                }
+                self.written.insert(bake.node, vec![bake.file_for(bake.first_tick())]);
+            } else {
+                self.written.insert(
+                    bake.node,
+                    (bake.first_tick()..bake.len).map(|t| bake.file_for(t)).collect(),
+                );
+            }
             self.render_status = Some(format!(
                 "wrote {n} frames to {}",
                 bake.file_for(bake.first_tick()).display()
@@ -16424,7 +16508,8 @@ impl Gfx {
                 .on_hover_text(
                     "evaluate the whole comp at half resolution: ~4x faster \
                      passes, quarter-size cache entries (their own NVMe keys, \
-                     populated lazily). Renders refuse while on.",
+                     populated lazily). A Render under proxy is half res too, and \
+                     says so in its name (_prx).",
                 )
                 .clicked()
             {
@@ -24279,6 +24364,7 @@ impl Gfx {
                                 make_load_click: &mut make_load_click,
                                 write_click: &mut write_click,
                                 graph_bake_cancel: &mut graph_bake_cancel,
+                                proxy: self.proxy < 1.0,
                             });
                     }
                     NodeKind::Shuffle(sh) => {
@@ -24863,6 +24949,8 @@ impl Gfx {
                 }
                 if graph_bake_cancel {
                     self.graph_bake = None;
+                    // A movie closes with the frames it has.
+                    self.movie_out = None;
                 }
                 if layer_changed {
                     layerui::prune_outputs(&mut self.egraph, node);

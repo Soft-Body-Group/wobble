@@ -3306,7 +3306,7 @@ source — and nothing else in the app knows a URL.
 
 ## Render
 
-**Render** (stored as `Write` in setups) renders the comp above it to an EXR sequence. The image passes
+**Render** (stored as `Write` in setups) renders the comp above it to an EXR sequence or a movie. The image passes
 through untouched, so a Render sits inline in a chain rather than terminating
 it, and rendering is a BUTTON — nothing lands on disk while you scrub, and
 the frames are never written behind your back (rule 7).
@@ -3334,6 +3334,25 @@ Fed the **data** pipe (a Depth node, a ToData), a Render writes the data as
 data: one float32 channel named `Z` per frame, with no colour transform and
 no colour tag — the numbers the comp holds, exactly. The panel says so in
 place of the output space.
+
+**format** picks an EXR sequence (the default) or ONE movie file:
+**ProRes** 422 Proxy / LT / 422 / HQ (10-bit 4:2:2) and 4444 / 4444 XQ (with
+alpha) in a `.mov`, or **H.264** (8-bit 4:2:0) in an `.mp4`, named
+`location/[name/]name.mov`. A movie is display-referred: its output space
+defaults to Rec.709 BT.1886 (the `movie` row of the output defaults table),
+and pick ACES Output - Rec.709 or similar for a tone-mapped look; values are
+clipped to [0, 1] and tagged Rec.709 when the primaries are. Frames go to the
+encoder in order on its own thread (`app/src/movieout.rs`,
+`engine::movie::MovieWriter`). An odd side loses a column (4:2:x) or row
+(4:2:0). A data render is EXR only; a single-channel pick goes in as grey.
+Movies need a `movie` build AND an encoder in its FFmpeg: ProRes is FFmpeg's
+own `prores_ks`, H.264 VideoToolbox, libx264 or OpenH264. A decode-only FFmpeg
+(the release builds') refuses in words, in the panel and on render.
+
+**Under proxy** a Render renders at proxy resolution, and `_prx` goes on the
+end of the name (`comp_prx.1001.exr`, `comp_prx/` when enclosed,
+`comp_prx.mov`), so it can never land on or pass for the full-res render. The
+panel shows the `_prx` path while proxy is on.
 
 ## Channels
 

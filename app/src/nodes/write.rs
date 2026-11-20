@@ -23,6 +23,8 @@ pub(crate) struct Cx<'a> {
     pub make_load_click: &'a mut Option<engine::graph::WriteParams>,
     pub write_click: &'a mut Option<engine::graph::WriteParams>,
     pub graph_bake_cancel: &'a mut bool,
+    /// Proxy is on: a render is half res and named `_prx`.
+    pub proxy: bool,
 }
 
 /// Write (Render): the file, the format, the range and the render buttons.
@@ -49,6 +51,7 @@ pub(crate) fn panel(
         make_load_click,
         write_click,
         graph_bake_cancel,
+        proxy,
     } = cx;
     // Rendering is a BUTTON. Nothing here writes to disk
     // as you scrub, and the image passes through
@@ -182,6 +185,28 @@ pub(crate) fn panel(
                 .on_hover_text("location/name/name.####.exr rather than location/name.####.exr");
         });
     }
+    // The file format: an EXR sequence, or one movie file.
+    ui.horizontal(|ui| {
+        lab(ui, "format");
+        egui::ComboBox::from_id_salt(("write-fmt", node))
+            .selected_text(wp.format.label())
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for f in engine::graph::WriteFormat::ALL {
+                    ui.selectable_value(&mut wp.format, f, f.label()).on_hover_text(f.hint());
+                }
+            })
+            .response
+            .on_hover_text(wp.format.hint());
+    });
+    let movie = wp.format.is_movie();
+    if movie {
+        if write_data {
+            ui.colored_label(theme::error(), egui::RichText::new("data renders are EXR only").small());
+        } else if let Err(e) = movieout::MovieOut::can_encode(wp.format) {
+            ui.colored_label(theme::error(), egui::RichText::new(e).small());
+        }
+    }
     if write_data {
         // Data is written as data: no output space to pick.
         ui.weak("data in: one float32 channel Z per frame, no colour transform");
@@ -218,7 +243,7 @@ pub(crate) fn panel(
                 })
                 .response
                 .on_hover_text("write every channel, or just one");
-            if let Some(c) = wp.channel {
+            if let Some(c) = wp.channel.filter(|_| !movie) {
                 ui.label(egui::RichText::new("as").small());
                 let w = text_w(ui, 0.0).min(90.0);
                 ui.add(
@@ -230,7 +255,8 @@ pub(crate) fn panel(
             }
         });
     }
-    // Compression: every method the EXR writer has.
+    // Compression: every method the EXR writer has. A movie's is its codec.
+    if !movie {
     ui.horizontal(|ui| {
         lab(ui, "compression");
         egui::ComboBox::from_id_salt(("write-comp", node))
@@ -256,12 +282,14 @@ pub(crate) fn panel(
             .small(),
         );
     }
+    // A movie has no frame numbers in its name.
     ui.horizontal(|ui| {
         lab(ui, "start");
         crate::widgets::num_field_w(ui, widgets::NUM_W + 6.0, egui::DragValue::new(&mut wp.start).update_while_editing(false).speed(widgets::rated(ui, 1.0)),
         )
         .on_hover_text("frame number the first written file gets");
     });
+    }
     let (input_span, global_span) =
         write_spans.unwrap_or((shot_span_now, shot_span_now));
     ui.horizontal(|ui| {
@@ -319,11 +347,19 @@ pub(crate) fn panel(
     }
     // The full path the render will write, wrapped
     // rather than cut: the first file, and the last.
+    if proxy {
+        ui.colored_label(
+            theme::warn(),
+            egui::RichText::new("proxy is on: renders at proxy res, named _prx").small(),
+        );
+    }
     if wp.is_set() {
         let (a, b) = wp.resolve_range(input_span, global_span);
         let n = b.saturating_sub(a) + 1;
-        let first = wp.resolve_frame(0);
-        let last = wp.resolve_frame(n - 1);
+        // What a render NOW writes: under proxy, the `_prx` name.
+        let shown = if proxy { wp.proxied() } else { wp.clone() };
+        let first = shown.resolve_frame(0);
+        let last = shown.resolve_frame(n - 1);
         ui.add(
             egui::Label::new(
                 egui::RichText::new(first.display().to_string()).small().monospace(),
@@ -335,11 +371,17 @@ pub(crate) fn panel(
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let new_dir = !wp.dir().is_dir();
+        let new_dir = !shown.dir().is_dir();
         ui.label(
             egui::RichText::new(format!(
                 "{}{n} frame{}{}",
-                if n > 1 { format!("through {last_name}, ") } else { String::new() },
+                if movie {
+                    "one file, ".to_string()
+                } else if n > 1 {
+                    format!("through {last_name}, ")
+                } else {
+                    String::new()
+                },
                 if n == 1 { "" } else { "s" },
                 if new_dir { " · the folder will be made" } else { "" },
             ))
@@ -415,5 +457,9 @@ pub(crate) fn panel(
         &wp.clean_name(),
         if running { &[] } else { written.get(&key).map(Vec::as_slice).unwrap_or(&[]) },
     );
-    ui.weak("EXR, RGBA half — the image passes through untouched");
+    ui.weak(if movie {
+        "one movie file, display-referred — the image passes through untouched"
+    } else {
+        "EXR, RGBA half — the image passes through untouched"
+    });
 }

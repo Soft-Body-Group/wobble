@@ -10201,3 +10201,61 @@ mod layer_extend_tests {
         assert!(!lp.is_identity());
     }
 }
+
+#[cfg(test)]
+mod write_format_tests {
+    use super::{WriteFormat, WriteParams};
+    use std::path::PathBuf;
+
+    fn w() -> WriteParams {
+        WriteParams { location: "/r".into(), name: "shot".into(), ..WriteParams::default() }
+    }
+
+    #[test]
+    fn a_movie_is_one_file_named_by_its_codec() {
+        let mov = WriteParams { format: WriteFormat::ProRes422Hq, ..w() };
+        assert_eq!(mov.resolve_frame(0), PathBuf::from("/r/shot/shot.mov"));
+        assert_eq!(mov.resolve_frame(40), mov.resolve_frame(0));
+        let mp4 = WriteParams { format: WriteFormat::H264, subfolder: false, ..w() };
+        assert_eq!(mp4.resolve_frame(3), PathBuf::from("/r/shot.mp4"));
+        // A legacy EXR pattern keeps its folder.
+        let old = WriteParams { path: "/o/c.####.exr".into(), location: String::new(), format: WriteFormat::H264, ..w() };
+        assert_eq!(old.resolve_frame(0), PathBuf::from("/o/shot.mp4"));
+    }
+
+    #[test]
+    fn proxy_renders_are_named_prx() {
+        assert_eq!(w().proxied().resolve_frame(0), PathBuf::from("/r/shot_prx/shot_prx.1001.exr"));
+        let mov = WriteParams { format: WriteFormat::ProRes4444, subfolder: false, ..w() };
+        assert_eq!(mov.proxied().resolve_frame(0), PathBuf::from("/r/shot_prx.mov"));
+        let old = WriteParams { path: "/o/c.####.exr".into(), start: 1, ..WriteParams::default() };
+        assert_eq!(old.proxied().resolve_frame(0), PathBuf::from("/o/c_prx.0001.exr"));
+        let dir = WriteParams { path: "/o/v3".into(), start: 1, ..WriteParams::default() };
+        assert_eq!(dir.proxied().resolve_frame(0), PathBuf::from("/o/v3/frame_prx.0001.exr"));
+    }
+
+    #[test]
+    fn movie_sides_are_even_where_the_chroma_needs() {
+        let f = |format| WriteParams { format, ..w() }.movie_size(1025, 541);
+        assert_eq!(f(WriteFormat::H264), (1024, 540));
+        assert_eq!(f(WriteFormat::ProRes422), (1024, 541));
+        assert_eq!(f(WriteFormat::ProRes4444), (1025, 541));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn old_setups_load_as_exr() {
+        let p: WriteParams = serde_json::from_str(r#"{"location":"/r","name":"x","start":1}"#).unwrap();
+        assert_eq!(p.format, WriteFormat::Exr);
+    }
+
+    #[test]
+    fn movies_default_to_display_rec709() {
+        let d = crate::color::FormatDefaults::default();
+        assert_eq!(d.output_for("/r/x.mov"), Some(crate::color::MOVIE_OUTPUT));
+        let mut old = d.clone();
+        old.output.remove("movie");
+        assert_eq!(old.output_for("/r/x.mp4"), Some(crate::color::MOVIE_OUTPUT));
+        assert_eq!(d.output_for("/r/x.####.exr"), None);
+    }
+}

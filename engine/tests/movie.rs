@@ -328,3 +328,60 @@ fn encode_mp4_round_trips() {
     }
     assert!(engine::movie::encode_mp4(&path, &frames, W + 1, H, 24.0).is_err(), "odd sizes refused");
 }
+
+/// A movie Render's writer: what goes in comes back out — every frame, in
+/// order, at the right size, the grey near the code value written (a
+/// full-range RGB grey survives the trip through studio-range YCbCr), and
+/// ProRes 4444 keeps its alpha.
+fn writer_round_trip(format: engine::graph::WriteFormat, name: &str) {
+    use engine::movie::MovieWriter;
+    if let Err(e) = engine::movie::can_encode(format) {
+        eprintln!("SKIP: {e}");
+        return;
+    }
+    let path = tmp(name);
+    let mut mw = MovieWriter::create(&path, W, H, 24.0, format, true).unwrap();
+    for n in 0..FRAMES {
+        let v = (n as f32 + 2.0) / (FRAMES as f32 + 4.0);
+        let code = (v * 65535.0) as u16;
+        let a = if format.has_alpha() { 32768 } else { 65535 };
+        let px: Vec<u16> = (0..W * H).flat_map(|_| [code, code, code, a]).collect();
+        mw.push(&px).unwrap();
+    }
+    mw.finish().unwrap();
+    let dec = MovieDecoder::default();
+    assert_eq!(dec.frame_count(&path).unwrap(), FRAMES, "{name}: frame count");
+    let info = dec.read_header(&path).unwrap();
+    assert_eq!((info.width, info.height), (W, H));
+    let mut last = -1.0;
+    for n in 0..FRAMES {
+        let g = grey_at(&dec, &path, n);
+        let want = (n as f32 + 2.0) / (FRAMES as f32 + 4.0);
+        assert!((g - want).abs() < 0.02, "{name}: frame {n} read {g}, wrote {want}");
+        assert!(g > last, "{name}: frame {n} out of order");
+        last = g;
+    }
+    if format.prores_profile().is_some_and(|p| p >= 4) {
+        let stride = info.row_stride_f16();
+        let mut buf = vec![f16::ZERO; stride * H as usize];
+        dec.decode_frame_into(&path, info, stride, None, 3, &mut buf).unwrap();
+        let a = buf[(H as usize / 2) * stride + (W as usize / 2) * 4 + 3].to_f32();
+        assert!((a - 0.5).abs() < 0.02, "{name}: alpha read {a}, wrote 0.5");
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn the_writer_round_trips_prores_hq() {
+    writer_round_trip(engine::graph::WriteFormat::ProRes422Hq, "writer_hq.mov");
+}
+
+#[test]
+fn the_writer_round_trips_prores_4444_with_alpha() {
+    writer_round_trip(engine::graph::WriteFormat::ProRes4444, "writer_4444.mov");
+}
+
+#[test]
+fn the_writer_round_trips_h264() {
+    writer_round_trip(engine::graph::WriteFormat::H264, "writer_h264.mp4");
+}
