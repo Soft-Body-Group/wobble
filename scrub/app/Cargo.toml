@@ -19,7 +19,9 @@ ab_glyph = "0.2"
 # The clip browser (seq_manip on imfram); the `clips` feature.
 seq = { git = "https://github.com/Soft-Body-Group/seq_manip.git", rev = "ae2841c99760db35d4efdff92055ea4c62b4f511", optional = true }
 imfram.workspace = true
-wobble_app = { package = "app", path = "../../app", optional = true, features = ["movie"] }
+# No default features: wobble's default `commerce` (accounts, payments) must
+# never ride into a Scrub build, and release builds turn `fold` on.
+wobble_app = { package = "app", path = "../../app", optional = true, default-features = false, features = ["movie"] }
 egui.workspace = true
 egui-wgpu.workspace = true
 wgpu.workspace = true
@@ -50,7 +52,8 @@ clips = ["dep:seq"]
 # Experimental: apply a Wobble comp to a clip (docs/wobble-clips.md). Off by
 # default; also needs sequence > experimental > Wobble clips at run time.
 wobble = []
-# EXPERIMENT (branch exp/scrub-fold): wobble hosted in process (src/fold.rs).
+# Experimental, ON in release builds (tools/release_public*): wobble hosted in
+# process (src/fold.rs), so clips can be Wobble comps.
 # Links wobble's app as a library: this build is GPL-3.0-or-later.
 fold = ["dep:wobble_app"]
 

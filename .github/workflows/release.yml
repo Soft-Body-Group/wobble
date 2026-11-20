@@ -4,17 +4,20 @@ name: release
 # through the LGPL decode-only FFmpeg) — for macOS arm64, Windows x64 and
 # Linux x86_64, made by the same scripts a hand-run release uses:
 #
-# Each archive carries Scrub (scrub/app) beside wobble.
+# Each archive carries Scrub (scrub/app) beside wobble, and each platform
+# writes it twice: as wobble-<...> and as scrub-<...>, the same build under
+# the editor's name (one codebase, two entry points, two sites).
 #
-#   macOS    tools/release_public.sh        -> wobble-<ver>-<git>-macos-arm64.zip
-#   Windows  tools/release_public_win.ps1   -> wobble-<ver>-<git>-windows-x86_64.zip
-#   Linux    tools/release_public_linux.sh  -> wobble-<ver>-<git>-linux-x86_64.tar.gz
+#   macOS    tools/release_public.sh        -> {wobble,scrub}-<ver>-<git>-macos-arm64.zip
+#   Windows  tools/release_public_win.ps1   -> {wobble,scrub}-<ver>-<git>-windows-x86_64.zip
+#   Linux    tools/release_public_linux.sh  -> {wobble,scrub}-<ver>-<git>-linux-x86_64.tar.gz
 #
 # Runs on a `v*` tag (release_public.sh tags v<version> locally; pushing the
 # tag is the choice to release) or by hand: the Actions tab, or
-# `gh workflow run release.yml`. Nothing is published: the three archives
+# `gh workflow run release.yml`. Nothing is published: the six archives
 # are attached to the run, and putting them on R2 / the download worker
-# stays a manual step.
+# stays a manual step. Both names go under public/: download.wobble.ing
+# serves wobble-*, download.scrub.ing (scrub.ing's buttons) scrub-*.
 #
 # ci.yml (build + unit tests on all three) runs ALONGSIDE packaging on the
 # same commit: a red test shows on the run, but the archives never wait for
