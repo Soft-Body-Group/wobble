@@ -2690,7 +2690,19 @@ impl Gfx {
         self.jobs.genai.account = Account::Unknown;
     }
 
+    /// A run that ended before it began, for the panel that asked: mid-run
+    /// (the run already exists) it stays that run's, so a step's panel
+    /// still finds it.
     fn genai_fail(&mut self, node: u64, pipeline: Pipeline, msg: impl Into<String>) {
+        let (to, group) =
+            self.jobs.genai.run.as_ref().filter(|r| r.node == node).map_or((None, None), |r| (r.to_step, r.group));
+        self.genai_fail_at(node, pipeline, to, group, msg);
+    }
+
+    /// `genai_fail` for a run being started: it is step `to`'s (or group
+    /// `group`'s), or the step's panel never shows why its click did
+    /// nothing.
+    fn genai_fail_at(&mut self, node: u64, pipeline: Pipeline, to: Option<usize>, group: Option<usize>, msg: impl Into<String>) {
         self.jobs.genai.run = Some(Run {
             node,
             pipeline,
@@ -2704,12 +2716,12 @@ impl Gfx {
             frames: vec![],
             lead: None,
             texts: BTreeMap::new(),
-            to_step: None,
+            to_step: to,
             keys: vec![],
             used: vec![],
             t0: web_time::Instant::now(),
             since: BTreeMap::new(),
-            group: None,
+            group,
             rest: vec![],
             keys_more: vec![],
         });
@@ -2724,14 +2736,17 @@ impl Gfx {
     /// as a step of its own would be (Output reading it in the run's
     /// copy), and each lands in its own gallery.
     fn genai_prepare_group(&mut self, node: u64, g: usize) {
-        let Some(base) = self.genai_runnable(node) else { return };
+        let Some(base) = self.genai_runnable(node) else {
+            self.render_status = Some("this node has no pipeline to run".into());
+            return;
+        };
         let models: Vec<usize> = base
             .group_models(g)
             .into_iter()
             .filter(|&m| base.steps[m].op.output().is_some_and(|p| p != genai::Pipe::Text))
             .collect();
         let Some((&first, rest)) = models.split_first() else {
-            return self.genai_fail(node, base, "the group has no model in it: drag model nodes onto its backdrop");
+            return self.genai_fail_at(node, base, None, Some(g), "the group has no model in it: drag model nodes onto its backdrop");
         };
         let rest: Vec<Pipeline> = rest.iter().filter_map(|&m| self.genai_runnable_to(node, Some(m))).collect();
         self.genai_prepare_many(node, Some(first), Some(g), rest);
@@ -2760,24 +2775,39 @@ impl Gfx {
         }
         // Its last ended run makes way.
         self.jobs.genai.background.retain(|r| r.active() || !(r.node == node && r.to_step == to));
-        let Some(pl) = self.genai_runnable_to(node, to) else { return };
+        let Some(pl) = self.genai_runnable_to(node, to) else {
+            match self.genai_runnable(node) {
+                Some(base) => {
+                    let msg = if base.output().is_none() {
+                        "the pipeline has no Output step"
+                    } else {
+                        "this step makes nothing an Output can take, so it cannot run on its own"
+                    };
+                    return self.genai_fail_at(node, base, to, group, msg);
+                }
+                None => {
+                    self.render_status = Some("this node has no pipeline to run".into());
+                    return;
+                }
+            }
+        };
         // Everything that can be said without rendering or sending, first.
         let Some(out) = pl.output() else {
-            return self.genai_fail(node, pl, "the pipeline has no Output step");
+            return self.genai_fail_at(node, pl, to, group, "the pipeline has no Output step");
         };
         if let Err(e) = pl.plan(out) {
-            return self.genai_fail(node, pl, e);
+            return self.genai_fail_at(node, pl, to, group, e);
         }
         let video_step = pl.plan(out).unwrap().into_iter().any(|i| {
             matches!(&pl.steps[i].op, Op::Generate { model, .. }
                 if catalog::get(model).is_some_and(|m| m.task.is_video()))
         });
         if video_step && !video_ok() {
-            return self.genai_fail(node, pl, NO_VIDEO);
+            return self.genai_fail_at(node, pl, to, group, NO_VIDEO);
         }
         if pl.plan(out).unwrap().iter().any(|&i| pl.steps[i].op.is_remote()) {
             if let Err(e) = self.jobs.genai.cfg.can_bill() {
-                return self.genai_fail(node, pl, e);
+                return self.genai_fail_at(node, pl, to, group, e);
             }
         }
         // What has to be rendered, over every pipeline of the run (a
@@ -2845,18 +2875,18 @@ impl Gfx {
             }
         }
         if let Some(e) = refused {
-            return self.genai_fail(node, pl, e);
+            return self.genai_fail_at(node, pl, to, group, e);
         }
         if !todo.is_empty() {
             if let Some(up) = self.genai_unrun_upstream(node) {
-                return self.genai_fail(node, pl, format!("{up} upstream has no take yet: run it first"));
+                return self.genai_fail_at(node, pl, to, group, format!("{up} upstream has no take yet: run it first"));
             }
         }
         if !todo.is_empty() && self.graph_bake.is_some() {
-            return self.genai_fail(node, pl, "a bake is running: wait for it, then run");
+            return self.genai_fail_at(node, pl, to, group, "a bake is running: wait for it, then run");
         }
         let Some(comp) = self.comp.output_size() else {
-            return self.genai_fail(node, pl, "nothing is rendering yet");
+            return self.genai_fail_at(node, pl, to, group, "nothing is rendering yet");
         };
         let vary = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.vary.clone()).unwrap_or_default();
         // One step, once: a fan-out or a batch is the whole pipeline's.
@@ -2866,13 +2896,15 @@ impl Gfx {
         let mut ticks = match vary.ticks() {
             Ok(t) if !todo.is_empty() => t,
             Ok(_) => vec![],
-            Err(e) => return self.genai_fail(node, pl, format!("frames: {e}")),
+            Err(e) => return self.genai_fail_at(node, pl, to, group, format!("frames: {e}")),
         };
         let runs = vary.count(&pl) * ticks.len().max(1);
         if runs > genai::vary::MAX_RUNS {
-            return self.genai_fail(
+            return self.genai_fail_at(
                 node,
                 pl,
+                to,
+                group,
                 format!("{runs} runs in one go is more than {}: shorten a list", genai::vary::MAX_RUNS),
             );
         }
@@ -5049,6 +5081,19 @@ impl Gfx {
                         .unwrap_or_else(|| fail("no schnell step inside".into()));
                     let owner = t.pipe;
                     self.genai_in_comp(|me| me.genai_action(owner, Action::Dismiss));
+                    // A step's run refused before it starts (here: nothing
+                    // to bill with) says so on the STEP's panel, not only
+                    // the pipeline's: the click must never look dead.
+                    let cfg = self.jobs.genai.cfg.clone();
+                    self.jobs.genai.cfg.route = Route::Own;
+                    self.jobs.genai.cfg.fal_key = None;
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareStep(step)));
+                    self.jobs.genai.cfg = cfg;
+                    match self.genai_view_of(owner, Some(step)).state {
+                        ViewState::Failed(e) if e.contains("fal key") => {}
+                        _ => fail("a step's refused run showed nothing on the step's own panel".into()),
+                    }
+                    self.genai_in_comp(|me| me.genai_action(owner, Action::DismissStep(step)));
                     self.genai_in_comp(|me| me.genai_action(owner, Action::PrepareStep(step)));
                     // And the whole pipeline BESIDE it: two runs at once.
                     self.genai_in_comp(|me| me.genai_action(owner, Action::Prepare));
