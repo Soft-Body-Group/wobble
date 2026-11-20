@@ -173,6 +173,13 @@ impl Gfx {
                         egui::Pos2::ZERO,
                         egui::vec2(size.0, size.1),
                     ));
+                    // Two Transform HUDs up at once list their keys once.
+                    if !hud_key_list.iter().any(|k| k.label == "drag centre: move pivot") {
+                        use hudkeys::{chord, key};
+                        hud_key_list.push(key("D", "drag centre: move pivot", egui::Key::D));
+                        hud_key_list.push(chord("ctrl", "drag corner: distort"));
+                        hud_key_list.push(chord("cmd", "drag edge: scale about pivot"));
+                    }
                     let moved = layerui::transform_gizmo(
                         ui,
                         ink,

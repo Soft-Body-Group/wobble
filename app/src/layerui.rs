@@ -857,6 +857,8 @@ pub fn transform_gizmo(
         egui::Sense::drag(),
     );
     ink.circle_stroke(pivot_pts, 12.0, 2.0, 1.0, rt.hovered());
+    // The exact pivot, so a D-drag can be placed precisely.
+    ink.circle_fill(pivot_pts, 1.5, 1.0, rt.hovered());
     // drag_started is skipped everywhere: egui's first-frame delta spans all
     // motion since before the press (a hitch or coalesced input turns that
     // into a teleport).
