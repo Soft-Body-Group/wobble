@@ -1980,9 +1980,10 @@ pub(crate) fn paste_nodes(
 /// What a held-key swipe of a dragged node across another makes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SwipeOp {
-    /// B (and M with an image in hand): the dragged node OVER the
-    /// swiped-onto one.
+    /// B: the dragged node OVER the swiped-onto one.
     Blend,
+    /// M with an image in hand: a Blend like B's, set to MULTIPLY.
+    Multiply,
     /// I (and M with a matte in hand): the swiped-onto image ISOLATED by
     /// the dragged matte — the usual "mask", image × matte.
     In,
@@ -1995,7 +1996,7 @@ impl SwipeOp {
     /// The swipe needs a matte in hand (I, O) — the dragged node must
     /// output one.
     pub(crate) fn wants_matte(self) -> bool {
-        !matches!(self, SwipeOp::Blend)
+        !matches!(self, SwipeOp::Blend | SwipeOp::Multiply)
     }
 }
 
@@ -2013,7 +2014,6 @@ impl SwipeOp {
 /// A consumer is left alone when rerouting it would close a loop (it feeds
 /// `dragged`), when it reads another of `under`'s outputs, or when it
 /// wants a matte or data rather than a picture.
-#[cfg(test)]
 pub(crate) fn swipe_op(
     graph: &mut EditorGraph,
     op: SwipeOp,
@@ -2046,6 +2046,9 @@ pub(crate) fn swipe_op_on(
     let size = graph.node(under).map(|n| n.size).unwrap_or(1.0);
     let kind = match op {
         SwipeOp::Blend => NodeKind::blend(),
+        SwipeOp::Multiply => {
+            NodeKind::Blend { op: engine::graph::BlendOp::Multiply, mix: 1.0, gain: [1.0, 1.0] }
+        }
         SwipeOp::In | SwipeOp::Out => {
             NodeKind::Blend { op: engine::graph::BlendOp::Replace, mix: 1.0, gain: [1.0, 1.0] }
         }
@@ -2054,13 +2057,13 @@ pub(crate) fn swipe_op_on(
     if let Some(n) = graph.nodes.get_mut(&b) {
         n.size = size;
         n.ui_label = match op {
-            SwipeOp::Blend => String::new(),
+            SwipeOp::Blend | SwipeOp::Multiply => String::new(),
             SwipeOp::In => "mask".into(),
             SwipeOp::Out => "stencil".into(),
         };
     }
     match op {
-        SwipeOp::Blend => {
+        SwipeOp::Blend | SwipeOp::Multiply => {
             connect_or_bridge(graph, dragged, 0, b, 0, zoom);
             connect_or_bridge(graph, under, 0, b, 1, zoom);
         }

@@ -250,7 +250,7 @@ impl Provider for Shapes {
             return None;
         }
         let op = match op {
-            SwipeOp::Blend => MatteOp::Union,
+            SwipeOp::Blend | SwipeOp::Multiply => MatteOp::Union,
             SwipeOp::In => MatteOp::Intersect,
             SwipeOp::Out => MatteOp::Subtract,
         };

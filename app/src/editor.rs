@@ -3199,6 +3199,9 @@ pub struct NodeEditor {
     chan_springs: std::collections::HashMap<(u64, crate::anim::Channel, bool), (Pos2, Vec2)>,
     /// Wire a dragged node would splice into on drop: (dst, input, src).
     insert_target: Option<(u64, usize, u64)>,
+    /// M held with a matte in hand, hovering an image noodle: letting go
+    /// masks that wire. (dst, input, src), drawn like a splice preview.
+    mask_wire: Option<(u64, usize, u64)>,
     /// The lines a node drag snapped to this frame (graph space).
     snap_guides: Vec<(Pos2, Pos2)>,
     /// Primary press bookkeeping for click-selection: (origin, node hit,
@@ -3649,6 +3652,7 @@ impl Default for NodeEditor {
             reorder_to: None,
             chan_springs: std::collections::HashMap::new(),
             insert_target: None,
+            mask_wire: None,
             snap_guides: Vec::new(),
             press_state: None,
             ctx_target: None,
@@ -6320,18 +6324,21 @@ impl NodeEditor {
                 // the under node's place downstream). The dragged set glides
                 // back to where it started, and the drag carries on with the
                 // Blend, so letting go is what places it.
-                // M, I and O hold the same swipe; the first held wins. I
+                // M, B, I and O hold the same swipe; the first held wins. I
                 // and O need a MATTE in hand, and an image to act on. M with
                 // a matte in hand MASKS an image (the I swipe on the key the
-                // hand is already on); over another matte it still blends.
-                // B is always a plain blend, so two mattes can still meet.
+                // hand is already on); with an image in hand, or over another
+                // matte, it makes a MULTIPLY Blend. B is always a plain
+                // (over) blend.
                 let (armed, m_held) = if *merged || ui.ctx().egui_wants_keyboard_input() {
                     (None, false)
                 } else {
                     use crate::keymap::{down, Act};
                     ui.input(|i| {
                         let m = down(i, Act::GraphRegionMenu);
-                        let op = if m || down(i, Act::GraphSwipeBlend) {
+                        let op = if m {
+                            Some(SwipeOp::Multiply)
+                        } else if down(i, Act::GraphSwipeBlend) {
                             Some(SwipeOp::Blend)
                         } else if down(i, Act::GraphSwipeIn) {
                             Some(SwipeOp::In)
@@ -6372,61 +6379,58 @@ impl NodeEditor {
                         .map(|(nid, _)| *nid)
                 });
                 let armed = match (armed, under) {
-                    (Some(SwipeOp::Blend), Some(u)) if m_masks => Some(
+                    (Some(SwipeOp::Multiply), Some(u)) if m_masks => Some(
                         if graph.node(u).is_some_and(|n| n.kind.output_kind() == PortKind::Image) {
                             SwipeOp::In
                         } else {
-                            SwipeOp::Blend
+                            SwipeOp::Multiply
                         },
                     ),
-                    (Some(SwipeOp::Blend), None) if m_masks => Some(SwipeOp::In),
+                    (Some(SwipeOp::Multiply), None) if m_masks => Some(SwipeOp::In),
                     (a, _) => a,
                 };
-                // A matte swiped over an image's NOODLE masks (or stencils)
-                // just that wire: the source's other consumers keep the
-                // plain picture.
-                let mut only = None;
-                let under = under.or_else(|| {
-                    let p = pointer?;
-                    if !armed.is_some_and(SwipeOp::wants_matte) {
-                        return None;
+                // M with a matte DROPPED on an image's NOODLE masks just that
+                // wire (the source's other consumers keep the plain picture).
+                // A drop, not a crossing: a swipe aimed at a node would
+                // otherwise be caught by every wire on the way.
+                self.mask_wire = None;
+                if under.is_none() && m_masks && armed == Some(SwipeOp::In) {
+                    if let Some(p) = pointer {
+                        let mut best: Option<((u64, usize, u64), f32)> = None;
+                        for (dst, input, src) in &graph.edges {
+                            if ids.contains(dst) || ids.contains(src) || graph.out_of(*dst, *input) != 0 {
+                                continue;
+                            }
+                            let (Some(nd), Some(ns)) = (graph.node(*dst), graph.node(*src)) else {
+                                continue;
+                            };
+                            if ns.kind.output_kind() != PortKind::Image
+                                || nd.kind.input_kind(*input) != PortKind::Image
+                            {
+                                continue;
+                            }
+                            let from = view.to_screen(tip(
+                                &tips,
+                                *src,
+                                out_stalk(0),
+                                output_rest_of(&graph.nodes, *src, 0, dz(*src)),
+                            ));
+                            let to = view.to_screen(tip(
+                                &tips,
+                                *dst,
+                                *input,
+                                rest_of(graph, &mask_dirs, *dst, *input, dp(*dst), ds(*dst)),
+                            ));
+                            let side = side_of(graph, *dst, *input);
+                            let d = wire_path(from, to, zoom, tan(*src), tan(*dst), side, ortho)
+                                .min_dist(p);
+                            if d < 12.0 && best.is_none_or(|(_, bd)| d < bd) {
+                                best = Some(((*dst, *input, *src), d));
+                            }
+                        }
+                        self.mask_wire = best.map(|(e, _)| e);
                     }
-                    let mut best: Option<((u64, usize, u64), f32)> = None;
-                    for (dst, input, src) in &graph.edges {
-                        if ids.contains(dst) || ids.contains(src) || graph.out_of(*dst, *input) != 0 {
-                            continue;
-                        }
-                        let (Some(nd), Some(ns)) = (graph.node(*dst), graph.node(*src)) else {
-                            continue;
-                        };
-                        if ns.kind.output_kind() != PortKind::Image
-                            || nd.kind.input_kind(*input) != PortKind::Image
-                        {
-                            continue;
-                        }
-                        let from = view.to_screen(tip(
-                            &tips,
-                            *src,
-                            out_stalk(0),
-                            output_rest_of(&graph.nodes, *src, 0, dz(*src)),
-                        ));
-                        let to = view.to_screen(tip(
-                            &tips,
-                            *dst,
-                            *input,
-                            rest_of(graph, &mask_dirs, *dst, *input, dp(*dst), ds(*dst)),
-                        ));
-                        let side = side_of(graph, *dst, *input);
-                        let d = wire_path(from, to, zoom, tan(*src), tan(*dst), side, ortho)
-                            .min_dist(p);
-                        if d < 10.0 && best.is_none_or(|(_, bd)| d < bd) {
-                            best = Some(((*dst, *input, *src), d));
-                        }
-                    }
-                    let ((dst, input, src), _) = best?;
-                    only = Some((dst, input));
-                    Some(src)
-                });
+                }
                 if let (Some(under), Some(p), Some(op)) = (under, pointer, armed) {
                     let at = view.to_graph(p);
                     for (nid, p0) in from.iter() {
@@ -6437,7 +6441,7 @@ impl NodeEditor {
                             self.anim.insert(*nid, (was - *p0, 0.0));
                         }
                     }
-                    let b = swipe_op_on(graph, op, idv, under, only, at, zoom);
+                    let b = swipe_op(graph, op, idv, under, at, zoom);
                     *selection = vec![b];
                     // M's release is not a region-popup tap.
                     if m_held {
@@ -6907,8 +6911,23 @@ impl NodeEditor {
                         }
                     }
                 }
-                Some(DragKind::Node { id, unjoin, .. }) => {
-                    if let Some((dst, input, src)) = self.insert_target.take() {
+                Some(DragKind::Node { id, unjoin, from, .. }) => {
+                    if let Some((dst, input, src)) = self.mask_wire.take() {
+                        // M + a matte let go on an image noodle: mask that
+                        // wire, the matte gliding home like a swipe.
+                        let at = pointer.map(|p| view.to_graph(p));
+                        for (nid, p0) in from.iter() {
+                            if let Some(n) = graph.node_mut(*nid) {
+                                let was = n.pos;
+                                n.pos = *p0;
+                                self.anim.insert(*nid, (was - *p0, 0.0));
+                            }
+                        }
+                        let at = at.unwrap_or_else(|| graph.node(dst).map(|n| n.pos).unwrap_or_default());
+                        let b = swipe_op_on(graph, SwipeOp::In, id, src, Some((dst, input)), at, zoom);
+                        *selection = vec![b];
+                        self.m_used = true;
+                    } else if let Some((dst, input, src)) = self.insert_target.take() {
                         // The spliced wire keeps its SOURCE OUTPUT: a node
                         // dropped on a harp string (or a band's matte)
                         // grades THAT string, not output 0.
@@ -6984,6 +7003,7 @@ impl NodeEditor {
                 _ => {}
             }
             self.insert_target = None;
+            self.mask_wire = None;
         }
 
         // --- `.` + press: cut (or take) the dot and start its pull ---
@@ -8805,7 +8825,7 @@ impl NodeEditor {
                 item(km::Act::GraphGrab, "grab a noodle"),
                 item(km::Act::GraphTidy, "tidy"),
                 item(km::Act::GraphRename, "rename"),
-                item(km::Act::GraphRegionMenu, "tap: region · hold + swipe: blend (a matte: mask)"),
+                item(km::Act::GraphRegionMenu, "tap: region · hold + swipe: multiply (a matte: mask)"),
                 item(km::Act::GraphSwipeBlend, "hold + swipe: blend"),
                 (
                     "I / O".to_string(),
@@ -9007,7 +9027,9 @@ impl NodeEditor {
             // this wire's history takes a pass of its own — so the cost of a
             // comp is legible from the wires, without opening a panel. A
             // loaded Bake turns it cyan again, which is the whole point.
-            let stroke = if self.insert_target == Some((*dst, *input, *src)) {
+            let stroke = if self.insert_target == Some((*dst, *input, *src))
+                || self.mask_wire == Some((*dst, *input, *src))
+            {
                 Stroke::new(4.0, theme::selection()) // splice preview
             } else if hidden {
                 Stroke::new(2.0 * zoom.min(1.5), theme::hidden_wire())
@@ -9082,7 +9104,10 @@ impl NodeEditor {
                 // breathing with the node's halo, so the chain that
                 // dominates the frame glows the whole way down.
                 let plain =
-                    !hidden && !self.patch_mode && self.insert_target != Some((*dst, *input, *src));
+                    !hidden
+                        && !self.patch_mode
+                        && self.insert_target != Some((*dst, *input, *src))
+                        && self.mask_wire != Some((*dst, *input, *src));
                 if let Some(g) = plain.then(|| flow.wire_glow(*src)).flatten() {
                     let t = ui.input(|i| i.time) as f32;
                     let breathe = 0.82 + 0.18 * (t * 1.5).sin();
@@ -9864,8 +9889,10 @@ impl NodeEditor {
                 .is_some_and(|n| n.kind.output_kind() == PortKind::Mask);
             let say = ui.input(|i| {
                 if down(i, Act::GraphRegionMenu) && matte {
-                    Some(("mask: swipe over an image or its noodle (a matte: blend)", true))
-                } else if down(i, Act::GraphRegionMenu) || down(i, Act::GraphSwipeBlend) {
+                    Some(("mask: swipe over an image, or drop on its noodle (a matte: multiply)", true))
+                } else if down(i, Act::GraphRegionMenu) {
+                    Some(("multiply: swipe over a node", true))
+                } else if down(i, Act::GraphSwipeBlend) {
                     Some(("blend: swipe over a node", true))
                 } else if down(i, Act::GraphSwipeIn) {
                     Some(if matte {

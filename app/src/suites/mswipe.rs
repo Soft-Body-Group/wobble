@@ -119,6 +119,12 @@ impl Gfx {
                 let [b] = made[..] else {
                     fail(format!("the swipe should make exactly one Blend, made {made:?}"))
                 };
+                if !matches!(
+                    self.egraph.node(b).map(|n| &n.kind),
+                    Some(NodeKind::Blend { op: engine::graph::BlendOp::Multiply, .. })
+                ) {
+                    fail("an M swipe of an image should make a MULTIPLY Blend".into());
+                }
                 if self.egraph.input_of(b, 0) != Some(rb) || self.egraph.input_of(b, 1) != Some(tf) {
                     fail(format!(
                         "Blend inputs {:?}/{:?}, want Read B over the Transform",
@@ -356,16 +362,98 @@ impl Gfx {
                 if self.egraph.nodes.len() as f32 != home.x {
                     fail("a tap of B must not add or remove nodes".into());
                 }
+                self.test.mswipe = Some((500, frames, home, drop));
+                return;
+            }
+            // --- M + a matte DROPPED on an image noodle masks that wire ---
+            500 => {
+                // A fresh Spline, and a wire to aim at: Read B -> anything,
+                // picture to picture.
+                let Some(p) = self.egraph.node(rb).map(|n| n.pos) else { return };
+                let sp = self.egraph.add(NodeKind::Spline(Default::default()), p + egui::vec2(150.0, 70.0));
+                self.test.mswipe = Some((501, frames, egui::pos2(sp as f32, 0.0), drop));
+                return;
+            }
+            501 | 502 => next = stage + 1,
+            503 => {
+                // Read B is still gliding home from the B swipe: aim at a
+                // settled graph.
+                let c = rect_of(self, rb).map(|r| r.center()).unwrap_or_default();
+                if c != drop {
+                    self.test.mswipe = Some((503, frames, home, c));
+                    return;
+                }
+                let sp = home.x as u64;
+                let Some(r) = rect_of(self, sp) else { return };
+                m_key(raw, true);
+                self.selected = vec![sp];
+                btn(raw, r.center(), true);
+                next = 504;
+            }
+            504..=515 => {
+                let sp = home.x as u64;
+                // Just below Read B, where its noodles leave it.
+                let (Some(a), Some(start)) =
+                    (rect_of(self, rb), rect_of(self, sp).map(|r| r.center()))
+                else {
+                    return;
+                };
+                let aim = a.center_bottom() + egui::vec2(0.0, 10.0);
+                let k = (stage - 503) as f32 / 12.0;
+                let p = start + (aim - start) * k;
+                raw.events.push(egui::Event::PointerMoved(p));
+                self.test.mswipe = Some((stage + 1, frames, home, p));
+                return;
+            }
+            516 => next = 517, // let the hover register
+            517 => {
+                btn(raw, drop, false);
+                next = 518;
+            }
+            518 => {
+                m_key(raw, false);
+                next = 519;
+            }
+            519 | 520 => next = stage + 1,
+            521 => {
+                let sp = home.x as u64;
+                let masks: Vec<u64> = self
+                    .egraph
+                    .nodes
+                    .iter()
+                    .filter(|(id, n)| {
+                        n.ui_label == "mask"
+                            && self.egraph.input_of(**id, 0) == Some(rb)
+                            && self.egraph.input_of(**id, 2) == Some(sp)
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+                let [m] = masks[..] else {
+                    fail(format!(
+                        "dropping the Spline on a Read B noodle with M should make one mask, made {masks:?}"
+                    ))
+                };
+                let readers = self.egraph.edges.iter().filter(|(_, _, s)| *s == m).count();
+                let direct = self.egraph.edges.iter().filter(|(d, _, s)| *s == rb && *d != m).count();
+                if readers != 1 || direct == 0 {
+                    fail(format!(
+                        "the noodle mask should take ONE wire ({readers} read it) and leave Read B's \
+                         others alone ({direct} still read Read B)"
+                    ));
+                }
+                if self.node_editor.test_region_menu_open() {
+                    fail("an M noodle drop must not open the region popup".into());
+                }
                 println!(
                     "MSWIPE TEST PASS: holding M and swiping Read B across the Transform \
-                     made a Blend (B over, Transform under) that took the Transform's \
+                     made a Multiply Blend (B over, Transform under) that took the Transform's \
                      place above the Grade, Read B went home, the Blend landed where it \
                      was let go, the spent M opened no popup and a tap of M still does; \
-                     M swiped a Spline over the Transform into a MASK (no popup) and O over Read A \
-                     into a STENCIL (Replace Blends with the matte on its matte input, \
+                     M swiped a Spline over the Transform into a MASK (no popup) and O over \
+                     Read A into a STENCIL (Replace Blends with the matte on its matte input, \
                      each taking its image's place downstream, the Spline going home); \
-                     holding B made the same Blend of Read B over the stencil, and a tap of B \
-                     does nothing"
+                     holding B made a Blend of Read B over the stencil, a tap of B does \
+                     nothing, and a Spline dropped with M on Read B's noodle masked that wire"
                 );
                 std::process::exit(0);
             }
