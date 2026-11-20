@@ -23840,6 +23840,14 @@ impl Gfx {
                 // the Spline's transform bakes in pixel space and cannot ask
                 // for it once the node is borrowed.
                 let node_px = self.node_res_f32(node).map(|(w, h)| [w, h]);
+                // What a roto shape's "inherit" lands on: the picture it
+                // masks (`node_resolution_walk`), not the viewed canvas.
+                let shape_inherit = {
+                    let mut v = std::collections::HashSet::from([node]);
+                    self.input_res(node, 0, &mut v)
+                        .or_else(|| self.consumer_res(node, &mut v, &mut Default::default()))
+                        .unwrap_or(canvas_res)
+                };
                 // Same reason as `shader_dirty`: read before the borrow.
                 let nc_upstream =
                     self.cost_flow.is_nc(node).then(|| (costviz::nc_sources(&self.egraph), costviz::any_research_only(&self.egraph)));
@@ -24882,7 +24890,7 @@ impl Gfx {
                     NodeKind::Spline(full) => {
                         if let Some(h) = nodes::spline::panel(ui, &mut rcx, nodes::spline::Cx {
                                 full,
-                                canvas_res,
+                                canvas_res: shape_inherit,
                                 cur_t,
                                 node,
                                 node_px,

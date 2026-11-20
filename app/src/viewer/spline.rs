@@ -48,6 +48,13 @@ impl Gfx {
             let Some(ekind) = self.live_kind(node, cur_t) else {
                 continue;
             };
+            // A roto shape lives in its OWN format's pixels (the picture it
+            // masks), not the viewed node's: viewing a Blend over a bigger
+            // plate, `hd` carries it from those pixels into the output's.
+            let (owf, ohf) = match &ekind {
+                NodeKind::Spline(_) => self.node_res_f32(node).unwrap_or((owf, ohf)),
+                _ => (owf, ohf),
+            };
             // A field Roto is the same outline, so it borrows this whole
             // gizmo: it becomes a SplineParams for the frame and is
             // written back below. Its points live in FIELD space (y in
