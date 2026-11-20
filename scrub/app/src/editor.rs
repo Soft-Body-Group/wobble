@@ -84,6 +84,31 @@ pub const KEYS: &[HudKey] = &[
     hudkeys::chord("H  shift H", "key hints / readouts"),
 ];
 
+/// A viewer's key hints in motion (`Editor::hints_over`): how far they are
+/// shown (0 hidden .. 1) and each row's words out (0..1).
+#[derive(Clone, Default)]
+struct HintAnim {
+    vis: f32,
+    rows: Vec<f32>,
+}
+
+/// `v` a step `k` of the way to `target`, settling on it when close. True
+/// while it is still on its way (keep repainting).
+fn approach(v: &mut f32, target: f32, k: f32) -> bool {
+    *v += (target - *v) * k;
+    if (target - *v).abs() > 0.004 {
+        true
+    } else {
+        *v = target;
+        false
+    }
+}
+
+/// Ease out: quick to start, gentle to settle.
+fn ease(t: f32) -> f32 {
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
 pub fn style(ctx: &egui::Context) {
     // Wobble's dark (imfram's `DARK` overrides: near-black background, dim
     // borders, teal-grey buttons) rather than the core table's lighter
@@ -1496,9 +1521,9 @@ impl Editor {
     // --- drawing ---------------------------------------------------------------------
 
     /// A viewer's title bar; on the right a "clear in/out" button (enabled
-    /// while that side has a mark) and the zoom when not fitted. True when
-    /// the button was clicked.
-    fn title_bar(&self, ui: &mut egui::Ui, rect: Rect, text: &str, focused: bool, marks: bool, zoom: f32) -> bool {
+    /// while that side has a mark), the key hints' on / off button and the
+    /// zoom when not fitted. (clear clicked, keys clicked).
+    fn title_bar(&self, ui: &mut egui::Ui, rect: Rect, text: &str, focused: bool, marks: bool, zoom: f32) -> (bool, bool) {
         let v = ui.visuals().clone();
         let p = ui.painter_at(rect);
         let fill = if focused { v.selection.bg_fill } else { v.widgets.noninteractive.bg_fill };
@@ -1517,10 +1542,16 @@ impl Editor {
                 .put(b, egui::Button::new(egui::RichText::new("× clear in/out").size(12.0).strong().color(Color32::WHITE)).fill(CLEAR_MARKS))
                 .on_hover_text("clear the in and out marks (alt X; alt I / alt O: one of them)")
                 .clicked();
+        // The key hints over the viewers, on / off (H).
+        let k = Rect::from_min_max(pos2(b.min.x - 4.0 - 40.0, rect.min.y + 2.0), pos2(b.min.x - 4.0, rect.max.y - 2.0));
+        let keys = ui
+            .put(k, egui::Button::new(egui::RichText::new("keys").size(11.0)).selected(self.panes.hints))
+            .on_hover_text(if self.panes.hints { "hide the key hints  (H)" } else { "show the key hints  (H)" })
+            .clicked();
         if (zoom - 1.0).abs() > 1e-3 {
-            p.text(pos2(b.min.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, format!("{:.0}%  (R: fit)", zoom * 100.0), FontId::proportional(11.0), col);
+            p.text(pos2(k.min.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, format!("{:.0}%  (R: fit)", zoom * 100.0), FontId::proportional(11.0), col);
         }
-        clicked
+        (clicked, keys)
     }
 
     /// RV-style scrub by dragging viewer `slot`'s picture: from the frame
@@ -1872,10 +1903,15 @@ impl Editor {
             if c.optimised { format!("source: {n}  (optimised copy)") } else { format!("source: {n}") }
         });
         let has_marks = self.source.as_ref().is_some_and(|c| c.marks.inp.is_some() || c.marks.out.is_some());
-        if self.title_bar(ui, title, &name, focused, has_marks, self.views[0].zoom) {
+        let (clear, keys) = self.title_bar(ui, title, &name, focused, has_marks, self.views[0].zoom);
+        if clear {
             if let Some(c) = &mut self.source {
                 c.marks.clear();
             }
+        }
+        if keys {
+            let on = !self.panes.hints;
+            self.panes.set_hints(on);
         }
         let hand = ui.interact(pic, ui.id().with("source-viewer"), Sense::click_and_drag());
         if hand.clicked() {
@@ -1991,8 +2027,13 @@ impl Editor {
         let pic = Rect::from_min_max(pos2(rect.min.x, title.max.y), pos2(rect.max.x, rect.max.y - SCRUB_H));
         let focused = self.focus == Focus::Record;
         let has_marks = self.rec.marks.inp.is_some() || self.rec.marks.out.is_some();
-        if self.title_bar(ui, title, "record: sequence", focused, has_marks, self.views[1].zoom) {
+        let (clear, keys) = self.title_bar(ui, title, "record: sequence", focused, has_marks, self.views[1].zoom);
+        if clear {
             self.rec.marks.clear();
+        }
+        if keys {
+            let on = !self.panes.hints;
+            self.panes.set_hints(on);
         }
         let hand = ui.interact(pic, ui.id().with("record-viewer"), Sense::click_and_drag());
         if hand.clicked() {
@@ -3067,13 +3108,26 @@ impl Editor {
         }
     }
 
-    /// The key hints along the top of a viewer (H hides them): the keys
-    /// split into even rows over the viewers in this window (two rows over
-    /// each, four over one alone), so no cap is cut off.
+    /// The key hints along the top of a viewer (H or the bar's keys button
+    /// hides them): the keys split into even rows over the viewers in this
+    /// window (two rows over each, four over one alone), so no cap is cut
+    /// off. Wobble's motion: hovering a row fans its words out one after
+    /// another (and back in), hiding / showing unfolds the rows top down,
+    /// and the rows under a row whose words are out dim so the words read.
     fn hints_over(&mut self, ui: &egui::Ui, pane: crate::panes::Pane, rect: Rect) {
         use crate::panes::Pane;
-        if !self.panes.hints {
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("hint-bottom", rect.min.x as i32)), TITLE_H));
+        let bottom_id = egui::Id::new(("hint-bottom", rect.min.x as i32));
+        let anim_id = egui::Id::new(("hint-anim", pane as u8));
+        let on = self.panes.hints;
+        let mut anim: HintAnim = ui.ctx().data(|d| d.get_temp(anim_id)).unwrap_or(HintAnim { vis: if on { 1.0 } else { 0.0 }, rows: Vec::new() });
+        let k = 1.0 - (-ui.input(|i| i.stable_dt).min(0.1) * 12.0).exp();
+        let mut moving = approach(&mut anim.vis, if on { 1.0 } else { 0.0 }, k);
+        if anim.vis <= 0.0 {
+            anim.rows.clear();
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(bottom_id, TITLE_H);
+                d.insert_temp(anim_id, anim);
+            });
             return;
         }
         let mut views: Vec<Pane> = self.panes.in_host(self.panes.host).into_iter().map(|(p, _)| p).filter(|p| matches!(p, Pane::Source | Pane::Record)).collect();
@@ -3083,9 +3137,7 @@ impl Editor {
         views.sort_by_key(|p| *p as u8);
         let me = views.iter().position(|p| *p == pane).unwrap_or(0);
         // This viewer's share of the keys, wrapped into as many rows as its
-        // width needs. Every row's plate and caps are drawn first and the
-        // hovered row's words (they fan downward) last, so no row hides
-        // another's.
+        // width needs.
         let n = views.len().clamp(1, 2);
         let per = KEYS.len().div_ceil(n);
         let mine = &KEYS[(me * per).min(KEYS.len())..((me + 1) * per).min(KEYS.len())];
@@ -3108,16 +3160,62 @@ impl Editor {
             rows.push(strip);
             start = end;
         }
-        for strip in &rows {
-            painter.rect_filled(strip.row().expand2(vec2(4.0, 3.0)), 4.0, Color32::from_black_alpha(170));
-            strip.draw_caps(&painter);
+        anim.rows.resize(rows.len(), 0.0);
+        // Each row's share of the show / hide, a beat after the row above
+        // (so hiding folds them away bottom up).
+        const ROW_STAGGER: f32 = 0.2;
+        let nr = rows.len() as f32;
+        let show: Vec<f32> = (0..rows.len()).map(|i| ease((anim.vis * (1.0 + ROW_STAGGER * nr) - ROW_STAGGER * i as f32).clamp(0.0, 1.0))).collect();
+        // The row the hand is on: its caps, or (once they are out) where
+        // its words land, so moving down to read one keeps it up. A row's
+        // own caps win, so the rows under an open one stay in reach.
+        let pointer = if on && ui.rect_contains_pointer(area) { ui.ctx().pointer_hover_pos() } else { None };
+        let hot = pointer.and_then(|p| {
+            rows.iter().position(|s| s.row().expand2(vec2(6.0, 3.0)).contains(p)).or_else(|| {
+                (0..rows.len()).filter(|&i| anim.rows[i] > 0.3 && rows[i].fan(&painter).contains(p)).max_by(|&a, &b| anim.rows[a].total_cmp(&anim.rows[b]))
+            })
+        });
+        for (i, r) in anim.rows.iter_mut().enumerate() {
+            moving |= approach(r, if hot == Some(i) { 1.0 } else { 0.0 }, k);
         }
-        if let Some(strip) = rows.iter().find(|s| ui.rect_contains_pointer(s.row())) {
-            strip.draw_words(&painter, 1.0);
+        // Every row's plate and caps first, the words (they fan downward)
+        // last, so no row hides another's.
+        for (i, strip) in rows.iter().enumerate() {
+            let s = show[i];
+            if s <= 0.0 {
+                continue;
+            }
+            let plate = strip.row().expand2(vec2(4.0, 3.0));
+            // Fading in, the row unfolds left to right.
+            let wipe = Rect::from_min_max(plate.min - vec2(2.0, 2.0), pos2(plate.min.x - 2.0 + (plate.width() + 4.0) * s, plate.max.y + 2.0));
+            let mut p = painter.with_clip_rect(wipe);
+            p.multiply_opacity(s);
+            p.rect_filled(plate, 4.0, Color32::from_black_alpha(170));
+            strip.draw_caps(&p);
+            // Under a row whose words are out: dimmed, so its words read.
+            let dim = anim.rows[..i].iter().fold(0.0f32, |a, r| a.max(*r));
+            if dim > 0.0 {
+                p.rect_filled(plate.expand(1.0), 4.0, Color32::from_black_alpha((200.0 * dim) as u8));
+            }
         }
-        // Where the hints end: the readouts sit under them.
-        let bottom = rows.last().map_or(area.min.y, |s| s.row().max.y) - rect.min.y;
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("hint-bottom", rect.min.x as i32)), bottom));
+        let mut out: Vec<usize> = (0..rows.len()).filter(|&i| anim.rows[i] > 0.001).collect();
+        out.sort_by_key(|&i| hot == Some(i));
+        for i in out {
+            let mut p = painter.clone();
+            p.multiply_opacity(show[i]);
+            rows[i].draw_words(&p, anim.rows[i]);
+        }
+        // Where the hints end: the readouts sit under them (and follow them
+        // up and down as they hide and show).
+        let full = rows.last().map_or(area.min.y, |s| s.row().max.y) - rect.min.y;
+        let bottom = TITLE_H + (full - TITLE_H) * ease(anim.vis);
+        if moving {
+            ui.ctx().request_repaint();
+        }
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(bottom_id, bottom);
+            d.insert_temp(anim_id, anim);
+        });
     }
 
     /// The dock's state as the panels' API reads it (open, solo).
