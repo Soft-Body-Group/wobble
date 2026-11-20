@@ -596,7 +596,7 @@ pub fn lower(g: &mut Graph) {
         next += 1;
         g.nodes.insert(
             fit,
-            NodeKind::Reformat(ReformatParams { size: (0, 0), mode: ResizeMode::Distort, scale: 1.0, center: false }),
+            NodeKind::Reformat(ReformatParams { size: (0, 0), mode: ResizeMode::Distort, scale: 1.0, center: false, ..Default::default() }),
         );
         g.connect_out(fit, 0, src, out);
         g.connect_out(id, ENV_INPUT, fit, 0);
