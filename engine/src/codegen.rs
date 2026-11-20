@@ -969,11 +969,13 @@ fn over(a: vec4f, b: vec4f) -> vec4f {
     return a + b * (1.0 - a.a);
 }
 // Spline mask: signed distance to a closed polyline packed in the uniform
-// (2 normalized points per vec4 after the header and control slots),
-// feathered to coverage.
+// (2 points per vec4 after the header and control slots), feathered to
+// coverage. Points are PIXELS of the shape's own format, never scaled by
+// the output size: a matte on a small plate merged over a big one must stay
+// on the plate, not stretch to the big frame.
 fn spt(slot: u32, i: u32) -> vec2f {
     let v = P.v[slot + 2u + (i >> 1u)];
-    return select(v.xy, v.zw, (i & 1u) == 1u) * P.v[0].xy;
+    return select(v.xy, v.zw, (i & 1u) == 1u);
 }
 // Per-sample soft BAND, packed 4 to a vec4 after the positions: the block
 // starts 2 + ceil(n / 2) vec4s from the node's own slot. Each lane holds
@@ -998,11 +1000,11 @@ fn spline_mask(p: vec2f, slot: u32) -> f32 {
     // No shape at all still honours invert: an inverted empty matte is a
     // full one, which is what makes "invert" a usable garbage switch.
     if (n < 3u) { return select(0.0, ctl.x, ctl.w > 0.5); }
-    // Outside the bounding circle (header: radius in pixels, already grown
-    // by half the widest feather + a positive expand; centre normalized)
+    // Outside the bounding circle (header: radius and centre in pixels, the
+    // radius already grown by half the widest feather + a positive expand)
     // no segment can lift coverage off zero, so the walk is skipped: a
     // small shape stops costing its whole outline at every pixel.
-    let q = p - h.zw * P.v[0].xy;
+    let q = p - h.zw;
     if (dot(q, q) > h.y * h.y) { return select(0.0, ctl.x, ctl.w > 0.5); }
     var d = 1e20;
     var band = vec2f(-0.5, 0.5);
@@ -4285,16 +4287,17 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                     let pick = |i: usize| poly[i * poly.len() / fit.max(1)];
                     for i in 0..fit {
                         let o = base + 8 + i * 2;
+                        // Pixels of the node's own format (see `spt`).
                         let p = pick(i).0;
-                        v[o] = p[0];
-                        v[o + 1] = p[1];
+                        v[o] = p[0] * sz[0];
+                        v[o + 1] = p[1] * sz[1];
                     }
                     for i in 0..fit {
                         v[base + foff * 4 + i] = spline_band_lane(pick(i).1);
                     }
                     // Bounding circle of the samples the shader walks: the
-                    // box's centre, and the farthest sample in OUTPUT pixels
-                    // (the space the shader measures in) plus how far the
+                    // box's centre, and the farthest sample, in the node's
+                    // pixels (the space the shader measures in), plus how far the
                     // soft edge reaches past the outline — half the widest
                     // feather, a positive expand, and a pixel of slack.
                     let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
@@ -4309,16 +4312,16 @@ pub fn pack_params(graph: &Graph, layout: &ParamLayout, out_size: [f32; 2]) -> V
                     let (mut r, mut reach) = (0.0f32, 1e-3f32);
                     for i in 0..fit {
                         let (p, b) = pick(i);
-                        let dx = (p[0] - c[0]) * out_size[0];
-                        let dy = (p[1] - c[1]) * out_size[1];
+                        let dx = (p[0] - c[0]) * sz[0];
+                        let dy = (p[1] - c[1]) * sz[1];
                         r = r.max((dx * dx + dy * dy).sqrt());
                         // How far past the outline coverage can still be
                         // above zero: the band's outer edge.
                         reach = reach.max(b[1]);
                     }
                     v[base + 1] = r + reach + sp.expand.max(0.0) + 1.0;
-                    v[base + 2] = c[0];
-                    v[base + 3] = c[1];
+                    v[base + 2] = c[0] * sz[0];
+                    v[base + 3] = c[1] * sz[1];
                 }
             }
             NodeKind::Curve(cv) => {
@@ -6406,9 +6409,11 @@ mod spline_curve_tests {
         // The last packed sample belongs to the last stretch of the outline,
         // not to wherever a truncation happened to stop.
         let last = [v[base + 8 + (fit - 1) * 2], v[base + 9 + (fit - 1) * 2]];
-        let want = poly[(fit - 1) * poly.len() / fit].0;
+        // Packed in pixels: no format here, so the output's 100x100.
+        let w = poly[(fit - 1) * poly.len() / fit].0;
+        let want = [w[0] * 100.0, w[1] * 100.0];
         assert!(
-            (last[0] - want[0]).abs() < 1e-6 && (last[1] - want[1]).abs() < 1e-6,
+            (last[0] - want[0]).abs() < 1e-4 && (last[1] - want[1]).abs() < 1e-4,
             "last packed {last:?} wanted {want:?}"
         );
     }
@@ -6559,8 +6564,9 @@ mod spline_curve_tests {
         let v = pack_params(&g, &plan.layout, [64.0, 64.0]);
         let base = plan.layout.node_slot[&7] * 4;
         let want = spline_polyline(&sp, [200.0, 100.0]);
-        assert!((v[base + 8] - want[0].0[0]).abs() < 1e-6, "packed against out_size");
-        assert!((v[base + 9] - want[0].0[1]).abs() < 1e-6);
+        // In the node's PIXELS, not normalized against the output size.
+        assert!((v[base + 8] - want[0].0[0] * 200.0).abs() < 1e-3, "packed in node pixels");
+        assert!((v[base + 9] - want[0].0[1] * 100.0).abs() < 1e-3);
         // Which is NOT what the output-sized transform would have given.
         let other = spline_polyline(&sp, [64.0, 64.0]);
         assert!((want[0].0[0] - other[0].0[0]).abs() > 1e-4, "aspect must matter");

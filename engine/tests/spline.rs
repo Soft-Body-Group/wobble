@@ -408,3 +408,23 @@ fn tension_reaches_the_rendered_matte_without_a_recompile() {
     assert!(outside(&a) > 2.0, "an untensioned Catmull-Rom rect should bulge ({})", outside(&a));
     assert!(outside(&b) < 0.5, "tension 1 should sit on the rect ({})", outside(&b));
 }
+
+/// A shape lives in its OWN format's pixels, not the output's. A small
+/// plate masked and merged over a bigger one rendered the matte stretched
+/// to the big frame, because the points were scaled by the output size:
+/// right when viewing the Mask (output = plate), wrong at the Merge.
+#[test]
+fn a_shape_on_a_smaller_format_stays_in_that_formats_pixels() {
+    let Some(ctx) = ctx() else { return };
+    let mut comp = Compositor::new(ctx.device.clone(), ctx.queue.clone(), 2);
+    comp.ensure_output(W, H);
+    comp.ensure_reader(0, ImageInfo { width: W, height: H });
+    let mut g = spline_graph(rect(0.25, 0.75, 1.0));
+    // Half the output: the rect is x 8..24, y 4..12, not x 16..48.
+    g.formats.insert(7, (W / 2, H / 2));
+    let out = render(&ctx, &mut comp, &g);
+    let at = |x: u32, y: u32| out[(y * W + x) as usize];
+    assert!(at(16, 8)[3] > 0.99, "inside the small-format rect {:?}", at(16, 8));
+    assert!(at(40, 20)[3] < 0.01, "stretched to the output size {:?}", at(40, 20));
+    assert!(at(28, 8)[3] < 0.01, "past the small rect's right edge {:?}", at(28, 8));
+}
