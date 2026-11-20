@@ -891,7 +891,12 @@ pub struct FormatDefaults {
 /// The formats a Read can decode, as rows of the defaults table.
 pub const INPUT_FORMATS: [&str; 5] = ["exr", "dpx", "png", "jpg", "movie"];
 /// The formats a Write can encode.
-pub const OUTPUT_FORMATS: [&str; 1] = ["exr"];
+pub const OUTPUT_FORMATS: [&str; 2] = ["exr", "movie"];
+
+/// A movie Write's built-in output space: display-referred Rec.709 (BT.1886,
+/// a 2.4 power), what a ProRes or H.264 review file is expected to hold. A
+/// movie in the scene-linear working space would play back far too dark.
+pub const MOVIE_OUTPUT: Colorspace = Colorspace::REC709_BT1886;
 
 /// The defaults-table row a file extension belongs to.
 pub fn format_key(ext: &str) -> Option<&'static str> {
@@ -925,7 +930,10 @@ impl Default for FormatDefaults {
                 (f.to_string(), v)
             })
             .collect();
-        let output = OUTPUT_FORMATS.iter().map(|f| (f.to_string(), None)).collect();
+        let output = OUTPUT_FORMATS
+            .iter()
+            .map(|f| (f.to_string(), (*f == "movie").then_some(MOVIE_OUTPUT)))
+            .collect();
         Self { input, output }
     }
 }
@@ -946,7 +954,13 @@ impl FormatDefaults {
     }
 
     pub fn output_for_format(&self, format: &str) -> Option<Colorspace> {
-        self.output.get(format).copied().flatten()
+        match self.output.get(format) {
+            Some(v) => *v,
+            // Prefs saved before movies were written have no row: the
+            // built-in default, not the working space.
+            None if format == "movie" => Some(MOVIE_OUTPUT),
+            None => None,
+        }
     }
 
     /// What a Write to `path` encodes into when following the default.
