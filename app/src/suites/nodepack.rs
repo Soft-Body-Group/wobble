@@ -166,7 +166,7 @@ impl Gfx {
             // two readers holding two frames at once, not a conflict.
             6 => {
                 let off = self.egraph.add(
-                    NodeKind::Slip(engine::graph::SlipParams { offset: 3 }),
+                    NodeKind::Slip(engine::graph::SlipParams { delay: -3 }),
                     egui::pos2(-300.0, 0.0),
                 );
                 // DIFFERENCE, so the assertion is about pixels: if both
@@ -232,7 +232,7 @@ impl Gfx {
                 if let Some(editor::ENode { kind: NodeKind::Slip(p), .. }) =
                     self.egraph.node_mut(chain)
                 {
-                    p.offset = 9;
+                    p.delay = -9;
                 }
                 // `chain` becomes the displayed-total mark from here on.
                 self.test.nodepack = Some((9, 0, shown));

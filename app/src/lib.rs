@@ -1207,7 +1207,7 @@ fn migrate_setup_json(val: &mut serde_json::Value) {
                     let speed = tw.get("speed").and_then(|v| v.as_f64()).unwrap_or(1.0);
                     let start = tw.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0);
                     *k = if (speed - 1.0).abs() < 1e-3 {
-                        serde_json::json!({ "Slip": { "offset": start.round() as i64 } })
+                        serde_json::json!({ "Slip": { "delay": -(start.round() as i64) } })
                     } else {
                         serde_json::json!({
                             "Speed": { "speed": speed, "anchor": start / (1.0 - speed) }
@@ -15794,6 +15794,7 @@ impl Gfx {
             // Bookmarks live in prefs; hand the browser a copy and write back
             // whatever it changed.
             let mut marks = self.bookmarks();
+            b.comp_dir = self.current_setup.as_deref().and_then(std::path::Path::parent).filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
             let act = b.show(&ctx, &mut marks, &self.recent_dirs);
             self.set_bookmarks(marks);
             // A Render's location: a folder, from the folder shown (or the

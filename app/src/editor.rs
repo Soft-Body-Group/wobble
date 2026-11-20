@@ -12280,7 +12280,7 @@ mod cost_look_tests {
         let rb = g.add(NodeKind::read(1, ""), Pos2::new(60.0, -260.0));
         place(&mut g, rb, 1001, 1048);
         let sl = g.add(
-            NodeKind::Slip(engine::graph::SlipParams { offset: -20 }),
+            NodeKind::Slip(engine::graph::SlipParams { delay: 20 }),
             Pos2::new(60.0, -110.0),
         );
         g.connect(sl, 0, rb);

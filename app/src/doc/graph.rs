@@ -1122,7 +1122,7 @@ impl EditorGraph {
             // A Time Range that starts elsewhere IS a Slip to the engine.
             let mut kind = match &n.kind {
                 NodeKind::TimeRange(p) => NodeKind::Slip(engine::graph::SlipParams {
-                    offset: p.slip().unwrap_or(0) as i32,
+                    delay: -(p.slip().unwrap_or(0) as i32),
                 }),
                 k => k.clone(),
             };

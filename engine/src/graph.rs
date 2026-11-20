@@ -1599,6 +1599,110 @@ pub struct WriteParams {
     /// What that channel is called in the file; empty = the pick's own
     /// name (`WriteChannel::default_name`).
     pub channel_name: String,
+    /// The file format: an EXR sequence (the default, and every setup saved
+    /// before the pick), or ONE movie file (`WriteFormat::is_movie`).
+    pub format: WriteFormat,
+}
+
+/// What a Render writes: an EXR per frame, or a single movie file.
+///
+/// The movie formats need the `movie` feature's FFmpeg AND an encoder in it:
+/// ProRes is FFmpeg's own `prores_ks` (in every FFmpeg built with encoders),
+/// H.264 is VideoToolbox on a Mac, else libx264 / OpenH264. A build without
+/// one refuses the render in words (`movie::can_encode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum WriteFormat {
+    #[default]
+    Exr,
+    ProResProxy,
+    ProResLt,
+    ProRes422,
+    ProRes422Hq,
+    ProRes4444,
+    ProRes4444Xq,
+    H264,
+}
+
+impl WriteFormat {
+    pub const ALL: [WriteFormat; 8] = [
+        WriteFormat::Exr,
+        WriteFormat::ProRes422Hq,
+        WriteFormat::ProRes422,
+        WriteFormat::ProResLt,
+        WriteFormat::ProResProxy,
+        WriteFormat::ProRes4444,
+        WriteFormat::ProRes4444Xq,
+        WriteFormat::H264,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WriteFormat::Exr => "EXR sequence",
+            WriteFormat::ProResProxy => "ProRes 422 Proxy",
+            WriteFormat::ProResLt => "ProRes 422 LT",
+            WriteFormat::ProRes422 => "ProRes 422",
+            WriteFormat::ProRes422Hq => "ProRes 422 HQ",
+            WriteFormat::ProRes4444 => "ProRes 4444",
+            WriteFormat::ProRes4444Xq => "ProRes 4444 XQ",
+            WriteFormat::H264 => "H.264",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            WriteFormat::Exr => "one half-float EXR per frame, scene-linear by default: the master",
+            WriteFormat::ProResProxy => "one .mov, 10-bit 4:2:2, smallest ProRes: offline and dailies",
+            WriteFormat::ProResLt => "one .mov, 10-bit 4:2:2, lighter than standard",
+            WriteFormat::ProRes422 => "one .mov, 10-bit 4:2:2, standard ProRes",
+            WriteFormat::ProRes422Hq => "one .mov, 10-bit 4:2:2, the usual review and editorial delivery",
+            WriteFormat::ProRes4444 => "one .mov, 4:4:4 with alpha",
+            WriteFormat::ProRes4444Xq => "one .mov, 4:4:4 with alpha, highest data rate",
+            WriteFormat::H264 => "one .mp4, 8-bit 4:2:0: small, plays anywhere, for review",
+        }
+    }
+
+    /// One file for the whole render, not a file per frame.
+    pub fn is_movie(self) -> bool {
+        self != WriteFormat::Exr
+    }
+
+    /// The file extension, without the dot.
+    pub fn ext(self) -> &'static str {
+        match self {
+            WriteFormat::Exr => "exr",
+            WriteFormat::H264 => "mp4",
+            _ => "mov",
+        }
+    }
+
+    /// `prores_ks`'s profile number, for the ProRes formats.
+    pub fn prores_profile(self) -> Option<u8> {
+        match self {
+            WriteFormat::ProResProxy => Some(0),
+            WriteFormat::ProResLt => Some(1),
+            WriteFormat::ProRes422 => Some(2),
+            WriteFormat::ProRes422Hq => Some(3),
+            WriteFormat::ProRes4444 => Some(4),
+            WriteFormat::ProRes4444Xq => Some(5),
+            _ => None,
+        }
+    }
+
+    /// Does the file carry alpha?
+    pub fn has_alpha(self) -> bool {
+        matches!(self, WriteFormat::Exr | WriteFormat::ProRes4444 | WriteFormat::ProRes4444Xq)
+    }
+
+    /// Chroma subsampling across x / y: a movie of an odd size loses its
+    /// last column (and row, for 4:2:0) — `WriteParams::movie_size`.
+    pub fn subsampled(self) -> (bool, bool) {
+        match self {
+            WriteFormat::Exr | WriteFormat::ProRes4444 | WriteFormat::ProRes4444Xq => (false, false),
+            WriteFormat::H264 => (true, true),
+            _ => (true, false),
+        }
+    }
 }
 
 /// EXR compression a Render can write with: every method the `exr` crate
@@ -1738,6 +1842,8 @@ struct WriteCompat {
     channel: Option<WriteChannel>,
     #[serde(default)]
     channel_name: String,
+    #[serde(default)]
+    format: WriteFormat,
 }
 
 #[cfg(feature = "serde")]
@@ -1759,6 +1865,7 @@ impl From<WriteCompat> for WriteParams {
             compression: c.compression,
             channel: c.channel,
             channel_name: c.channel_name,
+            format: c.format,
         };
         if !split {
             if w.path.trim().is_empty() {
@@ -1789,6 +1896,7 @@ impl Default for WriteParams {
             compression: ExrCompression::Rle,
             channel: None,
             channel_name: String::new(),
+            format: WriteFormat::Exr,
         }
     }
 }
@@ -1874,11 +1982,26 @@ impl WriteParams {
     /// `location/[name/]name.####.exr` — what a Load reads it back by.
     /// Not home-expanded: that happens at resolution.
     pub fn pattern(&self) -> String {
-        if !self.path.trim().is_empty() {
+        // A movie is named by location + name alone: a legacy path is an EXR
+        // pattern, so a movie takes its folder and nothing else.
+        if self.format.is_movie() && !self.path.trim().is_empty() && self.location.trim().is_empty() {
+            let legacy = std::path::Path::new(self.path.trim());
+            let dir = if legacy.extension().is_some() || self.path.contains('#') {
+                legacy.parent().map(|d| d.to_path_buf()).unwrap_or_default()
+            } else {
+                legacy.to_path_buf()
+            };
+            return dir.join(format!("{}.{}", self.clean_name(), self.format.ext())).to_string_lossy().into_owned();
+        }
+        if !self.path.trim().is_empty() && !self.format.is_movie() {
             return self.path.clone();
         }
         let name = self.clean_name();
-        let file = format!("{name}.{}.exr", "#".repeat(self.padding.clamp(1, 12) as usize));
+        let file = if self.format.is_movie() {
+            format!("{name}.{}", self.format.ext())
+        } else {
+            format!("{name}.{}.exr", "#".repeat(self.padding.clamp(1, 12) as usize))
+        };
         let mut p = std::path::PathBuf::from(self.location.trim());
         if self.subfolder {
             p.push(&name);
@@ -1939,6 +2062,10 @@ impl WriteParams {
         // BEFORE the `#` substitution, which only ever edits the numeric
         // field and would otherwise leave the tilde in the written path.
         let expanded = crate::paths::expand_home(&self.pattern());
+        // A movie is one file, whichever frame.
+        if self.format.is_movie() {
+            return expanded;
+        }
         let p = expanded.to_string_lossy();
         let p = p.as_ref();
         if let Some(start) = p.find('#') {
@@ -1959,6 +2086,38 @@ impl WriteParams {
             return dir.join(format!("{}.{n:04}.exr", stem.unwrap_or_default()));
         }
         path.join(format!("frame.{n:04}.exr"))
+    }
+
+    /// The same Render under proxy: `_prx` on the end of the name (before
+    /// the frame number and extension), so a half-res render never lands on
+    /// top of, or is mistaken for, the full one.
+    pub fn proxied(&self) -> WriteParams {
+        let mut w = self.clone();
+        if !w.path.trim().is_empty() && !w.format.is_movie() {
+            // A legacy pattern: the suffix goes on the file's stem, before
+            // the first `.` or `#` run.
+            let p = std::path::PathBuf::from(w.path.trim());
+            let file = p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            if file.contains('.') || file.contains('#') {
+                let at = file.find(['.', '#']).unwrap_or(file.len());
+                let named = format!("{}_prx{}", &file[..at], &file[at..]);
+                w.path = p.with_file_name(named).to_string_lossy().into_owned();
+            } else {
+                // A bare directory: frames are `frame.####.exr` inside it.
+                w.path = p.join("frame_prx.####.exr").to_string_lossy().into_owned();
+            }
+        } else {
+            w.name = format!("{}_prx", w.clean_name());
+        }
+        w
+    }
+
+    /// The size a movie of a `w`×`h` render is encoded at: the codec's
+    /// chroma subsampling needs even sides, so an odd one loses its last
+    /// column or row. An EXR is written as it is.
+    pub fn movie_size(&self, w: u32, h: u32) -> (u32, u32) {
+        let (sx, sy) = self.format.subsampled();
+        (if sx { w & !1 } else { w }, if sy { h & !1 } else { h })
     }
 
     /// The single channel to write and its name in the file, if any.
@@ -2648,16 +2807,40 @@ impl SwitchParams {
     }
 }
 
+/// Slip: move the clip in time by whole frames. Positive DELAYS it — the
+/// clip plays `delay` frames later, so its range moves by `+delay` (Nuke's
+/// TimeOffset convention). Tick `t` reads source frame `t - delay`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(from = "SlipWire"))]
 pub struct SlipParams {
-    /// Frames to shift the upstream readers by (positive = later footage).
-    pub offset: i32,
+    /// Frames the clip plays later (negative = earlier).
+    pub delay: i32,
 }
 
 impl Default for SlipParams {
     fn default() -> Self {
-        Self { offset: 0 }
+        Self { delay: 0 }
+    }
+}
+
+/// What a saved Slip may hold. Setups before the flip stored `offset` with
+/// the OPPOSITE sign (positive = later footage at the same tick, i.e. the
+/// clip arriving earlier); reading one negates it so old comps keep their
+/// timing exactly.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+struct SlipWire {
+    #[serde(default)]
+    delay: Option<i32>,
+    #[serde(default)]
+    offset: Option<i32>,
+}
+
+#[cfg(feature = "serde")]
+impl From<SlipWire> for SlipParams {
+    fn from(w: SlipWire) -> Self {
+        Self { delay: w.delay.unwrap_or_else(|| -w.offset.unwrap_or(0)) }
     }
 }
 
@@ -6066,7 +6249,7 @@ impl NodeKind {
     /// all but the time nodes).
     pub fn time_map(&self) -> TimeMap {
         match self {
-            NodeKind::Slip(p) => TimeMap::affine(1.0, p.offset as f32),
+            NodeKind::Slip(p) => TimeMap::affine(1.0, -(p.delay as f32)),
             NodeKind::TimeRemap(p) => p.map(),
             NodeKind::Speed(p) => p.map(),
             NodeKind::RangeRemap(p) => p.map(),
@@ -9773,7 +9956,7 @@ mod placement_tests {
     #[test]
     fn placement_composes_with_a_slip() {
         let mut g = read_at(Some(1001));
-        g.nodes.insert(2, NodeKind::Slip(SlipParams { offset: 3 }));
+        g.nodes.insert(2, NodeKind::Slip(SlipParams { delay: -3 }));
         g.edges.insert((2, 0), 1);
         g.view = Some(2);
         let inst = g.reader_instances();
@@ -9790,6 +9973,24 @@ mod placement_tests {
             assert_eq!(inst[0].map.apply(7), 7);
             assert!(inst[0].map.is_identity() || inst[0].map.apply(0) == 0);
         }
+    }
+
+    /// A positive Slip delays the clip; a setup saved before the flip
+    /// (`offset`, opposite sign) reads back with the same timing.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn slip_delays_and_old_offsets_migrate() {
+        let mut g = read_at(None);
+        g.nodes.insert(2, NodeKind::Slip(SlipParams { delay: 1000 }));
+        g.edges.insert((2, 0), 1);
+        g.view = Some(2);
+        assert_eq!(g.reader_instances()[0].map.apply(1010), 10);
+        let old: NodeKind = serde_json::from_str(r#"{"Slip":{"offset":5}}"#).unwrap();
+        assert_eq!(old, NodeKind::Slip(SlipParams { delay: -5 }));
+        let new = serde_json::to_string(&NodeKind::Slip(SlipParams { delay: 7 })).unwrap();
+        assert_eq!(new, r#"{"Slip":{"delay":7}}"#);
+        let back: NodeKind = serde_json::from_str(&new).unwrap();
+        assert_eq!(back, NodeKind::Slip(SlipParams { delay: 7 }));
     }
 }
 

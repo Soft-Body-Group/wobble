@@ -3907,7 +3907,9 @@ somewhere plausible.
 
 **Slip**, **Speed** and **TimeRemap** are not shader effects at all: they
 remap which frame each reader upstream of them decodes. Slip shifts by whole
-frames. Speed is a constant rate around an anchor frame — the anchor stays
+frames; a positive offset delays the clip (Nuke's TimeOffset way), so its
+range moves by the same amount. Setups saved before that flip stored the
+opposite sign and are negated on load. Speed is a constant rate around an anchor frame — the anchor stays
 put while everything else stretches away from it, and a negative rate runs
 backwards. **TimeRemap is a single animatable number**: which source frame
 this timeline frame shows. Key it and its curve *is* the retime, shaped in

@@ -5813,7 +5813,7 @@ mod node_pack_tests {
         // Time nodes, the tracker and premult take no uniform slots, so the
         // fused pass is exactly the upstream one plus (for premult) ALU.
         for kind in [
-            NodeKind::Slip(SlipParams { offset: 12 }),
+            NodeKind::Slip(SlipParams { delay: -12 }),
             NodeKind::Speed(SpeedParams { speed: 0.5, anchor: 3.0, ..Default::default() }),
             NodeKind::Tracker(TrackerParams::default()),
             NodeKind::Premult { premult: false },
@@ -5827,8 +5827,8 @@ mod node_pack_tests {
             );
         }
         // A time param edit is not a recompile.
-        let a = one_node(NodeKind::Slip(SlipParams { offset: 0 }));
-        let b = one_node(NodeKind::Slip(SlipParams { offset: 40 }));
+        let a = one_node(NodeKind::Slip(SlipParams { delay: 0 }));
+        let b = one_node(NodeKind::Slip(SlipParams { delay: -40 }));
         assert_eq!(a.topology_hash(), b.topology_hash());
         // But unpremult and premult are different formulas.
         let un = one_node(NodeKind::Premult { premult: false });
@@ -5910,7 +5910,7 @@ mod node_pack_tests {
         // Read(1) -> offset(7, +5) -> warp(8, x2) -> view.
         let mut g = Graph::default();
         g.nodes.insert(1, NodeKind::read(0, ""));
-        g.nodes.insert(7, NodeKind::Slip(SlipParams { offset: 5 }));
+        g.nodes.insert(7, NodeKind::Slip(SlipParams { delay: -5 }));
         g.nodes.insert(8, NodeKind::Speed(SpeedParams { speed: 2.0, anchor: 0.0, ..Default::default() }));
         g.edges.insert((7, 0), 1);
         g.edges.insert((8, 0), 7);
@@ -5936,7 +5936,7 @@ mod node_pack_tests {
         // +5 offset. Both frames are wanted at once, so both exist.
         let mut g = Graph::default();
         g.nodes.insert(1, NodeKind::read(0, ""));
-        g.nodes.insert(7, NodeKind::Slip(SlipParams { offset: 5 }));
+        g.nodes.insert(7, NodeKind::Slip(SlipParams { delay: -5 }));
         g.nodes.insert(9, NodeKind::blend());
         g.edges.insert((7, 0), 1);
         g.edges.insert((9, 0), 7);
@@ -5962,10 +5962,10 @@ mod node_pack_tests {
         // Dragging the offset must NOT recompile: only the frame each
         // reader decodes moves, and that is the player's business.
         let h = g.topology_hash();
-        g.nodes.insert(7, NodeKind::Slip(SlipParams { offset: 99 }));
+        g.nodes.insert(7, NodeKind::Slip(SlipParams { delay: -99 }));
         assert_eq!(g.topology_hash(), h, "a time param edit is a uniform-free no-op");
         // Passing through zero is still its own branch of time.
-        g.nodes.insert(7, NodeKind::Slip(SlipParams { offset: 0 }));
+        g.nodes.insert(7, NodeKind::Slip(SlipParams { delay: 0 }));
         assert_eq!(g.topology_hash(), h);
         assert_eq!(g.reader_instances().len(), 2);
         // But REMOVING the time node collapses the two paths into one.
@@ -5981,7 +5981,7 @@ mod node_pack_tests {
         let mut g = Graph::default();
         g.nodes.insert(1, NodeKind::read(0, ""));
         g.nodes.insert(2, NodeKind::Blur(crate::graph::BlurParams::default()));
-        g.nodes.insert(7, NodeKind::Slip(SlipParams { offset: 5 }));
+        g.nodes.insert(7, NodeKind::Slip(SlipParams { delay: -5 }));
         g.nodes.insert(9, NodeKind::blend());
         g.edges.insert((2, 0), 1);
         g.edges.insert((7, 0), 2);

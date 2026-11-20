@@ -11,11 +11,11 @@ pub(crate) fn panel(
 ) {
     ui.horizontal(|ui| {
         ui.label("offset");
-        crate::widgets::num_field_w(ui, widgets::NUM_W + 14.0, egui::DragValue::new(&mut to.offset).update_while_editing(false)
+        crate::widgets::num_field_w(ui, widgets::NUM_W + 14.0, egui::DragValue::new(&mut to.delay).update_while_editing(false)
                 .speed(widgets::rated(ui, 0.25))
                 .suffix(" f"),
         )
-        .on_hover_text("positive = later footage at the same tick");
+        .on_hover_text("positive = the clip plays later (its range moves by +delay)");
     });
     if let Some(n) = extra_readers {
         ui.weak(format!(

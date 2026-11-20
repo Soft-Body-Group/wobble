@@ -173,7 +173,7 @@ pub fn resolve(
 /// input's range and says so.
 pub fn time_shift(kind: &NodeKind, input: Range) -> Option<Range> {
     let (speed, offset) = match kind {
-        NodeKind::Slip(p) => (1.0f32, p.offset as f32),
+        NodeKind::Slip(p) => (1.0f32, -(p.delay as f32)),
         NodeKind::Speed(p) => (p.speed, p.anchor - p.anchor * p.speed),
         NodeKind::RangeRemap(p) => p.affine(),
         // Anchored on the input's first frame: the shot starts where it
@@ -369,10 +369,14 @@ mod tests {
 
     #[test]
     fn a_shift_moves_the_range_and_a_rate_stretches_it() {
-        // Slip +5: the clip's frames 0..10 now arrive 5 ticks EARLIER, so
-        // the ticks that reach them are -5..5, clamped at zero.
-        let slip = NodeKind::Slip(SlipParams { offset: 5 });
-        assert_eq!(time_shift(&slip, (10, 20)), Some((5, 15)));
+        // Slip +5 delays the clip: frames 10..20 play at 15..25.
+        let slip = NodeKind::Slip(SlipParams { delay: 5 });
+        assert_eq!(time_shift(&slip, (10, 20)), Some((15, 25)));
+        // al's case: a 1000-frame slip moves the range 1000 later, not
+        // off the front of the timeline to 0..0.
+        let slip = NodeKind::Slip(SlipParams { delay: 1000 });
+        assert_eq!(time_shift(&slip, (1001, 1100)), Some((2001, 2100)));
+        assert_eq!(time_shift(&slip, (0, 99)), Some((1000, 1099)));
         // Half speed over an anchor of 0: 20 source frames take 40 ticks.
         let half = NodeKind::Speed(SpeedParams { speed: 0.5, ..Default::default() });
         assert_eq!(time_shift(&half, (0, 20)), Some((0, 40)));
@@ -450,7 +454,7 @@ mod tests {
         assert_eq!(g.resolve_dot(t), Some(t));
         let eg = g.to_engine_graph_at_f(None);
         match eg.nodes.get(&t) {
-            Some(NodeKind::Slip(p)) => assert_eq!(1001 + p.offset as i64, 10),
+            Some(NodeKind::Slip(p)) => assert_eq!(1001 - p.delay as i64, 10),
             k => panic!("expected a Slip, got {k:?}"),
         }
         assert_eq!(eg.edges.get(&(c, 0)), Some(&t));
