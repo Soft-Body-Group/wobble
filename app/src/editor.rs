@@ -6321,13 +6321,17 @@ impl NodeEditor {
                 // back to where it started, and the drag carries on with the
                 // Blend, so letting go is what places it.
                 // M, I and O hold the same swipe; the first held wins. I
-                // and O need a MATTE in hand, and an image to act on.
-                let armed = if *merged || ui.ctx().egui_wants_keyboard_input() {
-                    None
+                // and O need a MATTE in hand, and an image to act on. M with
+                // a matte in hand MASKS an image (the I swipe on the key the
+                // hand is already on); over another matte it still blends.
+                // B is always a plain blend, so two mattes can still meet.
+                let (armed, m_held) = if *merged || ui.ctx().egui_wants_keyboard_input() {
+                    (None, false)
                 } else {
                     use crate::keymap::{down, Act};
                     ui.input(|i| {
-                        if down(i, Act::GraphRegionMenu) || down(i, Act::GraphSwipeBlend) {
+                        let m = down(i, Act::GraphRegionMenu);
+                        let op = if m || down(i, Act::GraphSwipeBlend) {
                             Some(SwipeOp::Blend)
                         } else if down(i, Act::GraphSwipeIn) {
                             Some(SwipeOp::In)
@@ -6335,13 +6339,15 @@ impl NodeEditor {
                             Some(SwipeOp::Out)
                         } else {
                             None
-                        }
+                        };
+                        (op, m)
                     })
                 };
                 let holds_matte = graph
                     .node(idv)
                     .is_some_and(|n| n.kind.output_kind() == PortKind::Mask);
                 let armed = armed.filter(|op| !op.wants_matte() || holds_matte);
+                let m_masks = m_held && holds_matte;
                 let under = pointer.filter(|_| armed.is_some()).and_then(|p| {
                     graph
                         .nodes
@@ -6365,6 +6371,62 @@ impl NodeEditor {
                         })
                         .map(|(nid, _)| *nid)
                 });
+                let armed = match (armed, under) {
+                    (Some(SwipeOp::Blend), Some(u)) if m_masks => Some(
+                        if graph.node(u).is_some_and(|n| n.kind.output_kind() == PortKind::Image) {
+                            SwipeOp::In
+                        } else {
+                            SwipeOp::Blend
+                        },
+                    ),
+                    (Some(SwipeOp::Blend), None) if m_masks => Some(SwipeOp::In),
+                    (a, _) => a,
+                };
+                // A matte swiped over an image's NOODLE masks (or stencils)
+                // just that wire: the source's other consumers keep the
+                // plain picture.
+                let mut only = None;
+                let under = under.or_else(|| {
+                    let p = pointer?;
+                    if !armed.is_some_and(SwipeOp::wants_matte) {
+                        return None;
+                    }
+                    let mut best: Option<((u64, usize, u64), f32)> = None;
+                    for (dst, input, src) in &graph.edges {
+                        if ids.contains(dst) || ids.contains(src) || graph.out_of(*dst, *input) != 0 {
+                            continue;
+                        }
+                        let (Some(nd), Some(ns)) = (graph.node(*dst), graph.node(*src)) else {
+                            continue;
+                        };
+                        if ns.kind.output_kind() != PortKind::Image
+                            || nd.kind.input_kind(*input) != PortKind::Image
+                        {
+                            continue;
+                        }
+                        let from = view.to_screen(tip(
+                            &tips,
+                            *src,
+                            out_stalk(0),
+                            output_rest_of(&graph.nodes, *src, 0, dz(*src)),
+                        ));
+                        let to = view.to_screen(tip(
+                            &tips,
+                            *dst,
+                            *input,
+                            rest_of(graph, &mask_dirs, *dst, *input, dp(*dst), ds(*dst)),
+                        ));
+                        let side = side_of(graph, *dst, *input);
+                        let d = wire_path(from, to, zoom, tan(*src), tan(*dst), side, ortho)
+                            .min_dist(p);
+                        if d < 10.0 && best.is_none_or(|(_, bd)| d < bd) {
+                            best = Some(((*dst, *input, *src), d));
+                        }
+                    }
+                    let ((dst, input, src), _) = best?;
+                    only = Some((dst, input));
+                    Some(src)
+                });
                 if let (Some(under), Some(p), Some(op)) = (under, pointer, armed) {
                     let at = view.to_graph(p);
                     for (nid, p0) in from.iter() {
@@ -6375,11 +6437,10 @@ impl NodeEditor {
                             self.anim.insert(*nid, (was - *p0, 0.0));
                         }
                     }
-                    let b = swipe_op(graph, op, idv, under, at, zoom);
+                    let b = swipe_op_on(graph, op, idv, under, only, at, zoom);
                     *selection = vec![b];
-                    if op == SwipeOp::Blend
-                        && ui.input(|i| crate::keymap::down(i, crate::keymap::Act::GraphRegionMenu))
-                    {
+                    // M's release is not a region-popup tap.
+                    if m_held {
                         self.m_used = true;
                     }
                     self.insert_target = None;
@@ -8744,7 +8805,7 @@ impl NodeEditor {
                 item(km::Act::GraphGrab, "grab a noodle"),
                 item(km::Act::GraphTidy, "tidy"),
                 item(km::Act::GraphRename, "rename"),
-                item(km::Act::GraphRegionMenu, "tap: region · hold + swipe: blend"),
+                item(km::Act::GraphRegionMenu, "tap: region · hold + swipe: blend (a matte: mask)"),
                 item(km::Act::GraphSwipeBlend, "hold + swipe: blend"),
                 (
                     "I / O".to_string(),
@@ -9802,7 +9863,9 @@ impl NodeEditor {
                 .node(*did)
                 .is_some_and(|n| n.kind.output_kind() == PortKind::Mask);
             let say = ui.input(|i| {
-                if down(i, Act::GraphRegionMenu) || down(i, Act::GraphSwipeBlend) {
+                if down(i, Act::GraphRegionMenu) && matte {
+                    Some(("mask: swipe over an image or its noodle (a matte: blend)", true))
+                } else if down(i, Act::GraphRegionMenu) || down(i, Act::GraphSwipeBlend) {
                     Some(("blend: swipe over a node", true))
                 } else if down(i, Act::GraphSwipeIn) {
                     Some(if matte {
@@ -11622,6 +11685,22 @@ mod tests {
             assert_eq!(g.input_of(b, 2), Some(matte), "{op:?}: the matte on the matte input");
             assert_eq!(g.input_of(2, 0), Some(b), "{op:?}: it takes A's place downstream");
         }
+    }
+
+    /// A matte swiped onto a NOODLE masks only that wire: the source's
+    /// other consumers keep the plain image.
+    #[test]
+    fn a_mask_swiped_onto_a_noodle_takes_only_that_wire() {
+        let mut g = chain(); // R(0) -> A(1) -> B(2) -> M(3)
+        let other = g.add(NodeKind::Grade(Default::default()), Pos2::new(300.0, 0.0));
+        g.connect(other, 0, 1);
+        let matte = g.add(NodeKind::Spline(Default::default()), Pos2::new(200.0, 0.0));
+        let b = swipe_op_on(&mut g, SwipeOp::In, matte, 1, Some((2, 0)), Pos2::ZERO, 1.0);
+        assert_eq!(g.node(b).unwrap().ui_label, "mask");
+        assert_eq!(g.input_of(b, 0), Some(1));
+        assert_eq!(g.input_of(b, 2), Some(matte));
+        assert_eq!(g.input_of(2, 0), Some(b), "the swiped wire now reads the mask");
+        assert_eq!(g.input_of(other, 0), Some(1), "the other consumer keeps A");
     }
 
     /// Inside a Noise node: a slider is a number, an fBm a pattern, a roto

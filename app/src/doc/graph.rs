@@ -1980,10 +1980,11 @@ pub(crate) fn paste_nodes(
 /// What a held-key swipe of a dragged node across another makes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SwipeOp {
-    /// M: the dragged node OVER the swiped-onto one.
+    /// B (and M with an image in hand): the dragged node OVER the
+    /// swiped-onto one.
     Blend,
-    /// I: the swiped-onto image ISOLATED by the dragged matte — the
-    /// usual "mask", image × matte.
+    /// I (and M with a matte in hand): the swiped-onto image ISOLATED by
+    /// the dragged matte — the usual "mask", image × matte.
     In,
     /// O: the dragged matte CUT OUT of the swiped-onto image — the
     /// usual "stencil", image × (1 − matte).
@@ -2012,6 +2013,7 @@ impl SwipeOp {
 /// A consumer is left alone when rerouting it would close a loop (it feeds
 /// `dragged`), when it reads another of `under`'s outputs, or when it
 /// wants a matte or data rather than a picture.
+#[cfg(test)]
 pub(crate) fn swipe_op(
     graph: &mut EditorGraph,
     op: SwipeOp,
@@ -2020,10 +2022,25 @@ pub(crate) fn swipe_op(
     at: Pos2,
     zoom: f32,
 ) -> u64 {
+    swipe_op_on(graph, op, dragged, under, None, at, zoom)
+}
+
+/// `swipe_op`, but with `only = Some((dst, input))` the swipe landed on ONE
+/// noodle out of `under`: just that consumer is rerouted, `under`'s other
+/// consumers keep the plain image.
+pub(crate) fn swipe_op_on(
+    graph: &mut EditorGraph,
+    op: SwipeOp,
+    dragged: u64,
+    under: u64,
+    only: Option<(u64, usize)>,
+    at: Pos2,
+    zoom: f32,
+) -> u64 {
     let consumers: Vec<(u64, usize, u32)> = graph
         .edges
         .iter()
-        .filter(|(_, _, s)| *s == under)
+        .filter(|(d, i, s)| *s == under && only.is_none_or(|o| o == (*d, *i)))
         .map(|(d, i, _)| (*d, *i, graph.out_of(*d, *i)))
         .collect();
     let size = graph.node(under).map(|n| n.size).unwrap_or(1.0);

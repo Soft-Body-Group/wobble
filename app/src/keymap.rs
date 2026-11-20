@@ -810,7 +810,7 @@ pub const DEFS: &[Def] = &[
     def(
         Act::GraphRegionMenu,
         "graph.region_menu",
-        "tap: selection to region popup · hold + swipe a dragged node over another: blend",
+        "tap: selection to region popup · hold + swipe a dragged node over another: blend (a matte over an image or its noodle: mask)",
         Scope::Graph,
         Binding::plain(Key::M),
         Exact,

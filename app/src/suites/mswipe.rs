@@ -180,9 +180,10 @@ impl Gfx {
                 return;
             }
             201 | 202 => next = stage + 1, // let the new node be drawn
-            // 203 swipes onto the Transform with I; 303 onto Read A with O.
+            // 203 swipes onto the Transform with M (a matte in hand: mask,
+            // the same op as I); 303 onto Read A with O.
             203 | 303 => {
-                let key = if stage == 203 { egui::Key::I } else { egui::Key::O };
+                let key = if stage == 203 { egui::Key::M } else { egui::Key::O };
                 let Some(sp) = spline_of(self) else { fail("the Spline vanished".into()) };
                 let Some(r) = rect_of(self, sp) else { return };
                 raw.events.push(egui::Event::Key {
@@ -220,7 +221,7 @@ impl Gfx {
                 next = stage + 1;
             }
             219 | 319 => {
-                let key = if stage == 219 { egui::Key::I } else { egui::Key::O };
+                let key = if stage == 219 { egui::Key::M } else { egui::Key::O };
                 raw.events.push(egui::Event::Key {
                     key,
                     physical_key: None,
@@ -266,6 +267,9 @@ impl Gfx {
                     fail(format!("the {label} node should take its image's place downstream"));
                 }
                 let back = self.egraph.node(sp).map(|n| n.pos);
+                if stage == 222 && self.node_editor.test_region_menu_open() {
+                    fail("an M mask swipe must not open the region popup".into());
+                }
                 if stage == 222 && back != Some(home) {
                     fail(format!("the Spline should go home to {home:?}, is at {back:?}"));
                 }
@@ -357,7 +361,7 @@ impl Gfx {
                      made a Blend (B over, Transform under) that took the Transform's \
                      place above the Grade, Read B went home, the Blend landed where it \
                      was let go, the spent M opened no popup and a tap of M still does; \
-                     I swiped a Spline over the Transform into a MASK and O over Read A \
+                     M swiped a Spline over the Transform into a MASK (no popup) and O over Read A \
                      into a STENCIL (Replace Blends with the matte on its matte input, \
                      each taking its image's place downstream, the Spline going home); \
                      holding B made the same Blend of Read B over the stencil, and a tap of B \
