@@ -27,6 +27,12 @@
 //! they are catalog rows (`vda-*`), fetched by the download gate the
 //! properties panel draws for any node that declares models, and handed to
 //! the driver by path (`models::ready_path`).
+//!
+//! **Two tools, one runner.** Depth Pro 2 (Apple) is a second checkout
+//! (`~/.wobble/DepthPro2`, `$WOBBLE_DEPTHPRO2_DIR`) with its own driver
+//! (`tools/wobble_depthpro2.py`, which imports `wobble_depth.py`'s EXR
+//! reader and writer, so both are written beside it). `Tool::of` picks by
+//! the node's model; everything from the result on is shared.
 
 use crate::corridorkey::{push_log, spawn, uv, Msg, UV_MISSING};
 use crate::{editor, Gfx};
@@ -38,6 +44,116 @@ use std::sync::Arc;
 
 pub const DRIVER: &str = include_str!("../../tools/wobble_depth.py");
 const DRIVER_NAME: &str = "wobble_depth.py";
+pub const PRO2_DRIVER: &str = include_str!("../../tools/wobble_depthpro2.py");
+const PRO2_DRIVER_NAME: &str = "wobble_depthpro2.py";
+pub const PRO2_REPO: &str = "https://github.com/apple-aiml-research/ml-depth-pro-2.git";
+/// The commit the Depth Pro 2 driver is written against (it builds
+/// `DepthPro2` from the tool's `PRESETS` and calls `infer_video`). Bump it
+/// and re-test, never float it.
+pub const PRO2_COMMIT: &str = "aa389cbb0b74341664ed663a0966c859905cd6c0";
+pub const PRO2_LICENCE_URL: &str = "https://github.com/apple-aiml-research/ml-depth-pro-2/blob/main/LICENSE";
+/// Upstream's own project, plus what the driver reads and writes EXRs
+/// with; written over the checkout's `pyproject.toml` by `install…` (the
+/// package still builds from `src/`). Windows gets PyTorch's CUDA wheels.
+pub const PRO2_PYPROJECT: &str = r#"[project]
+name = "depth_pro_2"
+version = "0.1"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "av>=14.1",
+    "click",
+    "huggingface-hub>=1.0",
+    "matplotlib",
+    "numpy",
+    "pillow>=11.3",
+    "pillow-heif",
+    "safetensors",
+    "timm>=1.0.27,<1.1",
+    "torch>=2.7",
+    # wobble's driver: EXR in and out (OpenCV is only the reader's fallback;
+    # 5.x's Windows wheel has no EXR codec).
+    "OpenEXR>=3.3",
+    "opencv-python<5",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+"#;
+
+/// Which tool runs a node: picked by its model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// Video Depth Anything (ByteDance).
+    Vda,
+    /// Depth Pro 2 (Apple).
+    Pro2,
+}
+
+impl Tool {
+    pub fn of(p: &DepthParams) -> Tool {
+        if p.model.pro2() {
+            Tool::Pro2
+        } else {
+            Tool::Vda
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Vda => "Video Depth Anything",
+            Tool::Pro2 => "Depth Pro 2",
+        }
+    }
+
+    pub fn repo(self) -> &'static str {
+        match self {
+            Tool::Vda => REPO,
+            Tool::Pro2 => PRO2_REPO,
+        }
+    }
+
+    fn commit(self) -> &'static str {
+        match self {
+            Tool::Vda => COMMIT,
+            Tool::Pro2 => PRO2_COMMIT,
+        }
+    }
+
+    fn pyproject(self) -> &'static str {
+        match self {
+            Tool::Vda => PYPROJECT,
+            Tool::Pro2 => PRO2_PYPROJECT,
+        }
+    }
+
+    /// Who made it, and its CODE licence (the weights' is the catalog's).
+    pub fn credit(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Tool::Vda => ("Video Depth Anything by ByteDance", "Apache-2.0", LICENCE_URL),
+            Tool::Pro2 => ("Depth Pro 2 by Apple", "Apple sample code licence", PRO2_LICENCE_URL),
+        }
+    }
+
+    /// Where it runs and how it walks a clip, for the panel.
+    pub fn about(self) -> &'static str {
+        match self {
+            Tool::Vda => "runs on Apple Silicon (MPS), an NVIDIA GPU (CUDA) or, slowly, the CPU. The clip is solved in overlapping 32-frame windows, each aligned to the last, so the depth holds steady over time; memory does not grow with the clip",
+            Tool::Pro2 => "runs on an NVIDIA GPU (CUDA), Apple Silicon (MPS) or, slowly, the CPU. Metres at the network's input size, the clip in overlapping 16-frame windows cross-faded, one focal length estimated for the whole clip; memory does not grow with the clip",
+        }
+    }
+}
 pub const REPO: &str = "https://github.com/DepthAnything/Video-Depth-Anything.git";
 /// The commit the driver is written against: it calls the tool's
 /// `VideoDepthAnything.forward` and re-does `infer_video_depth`'s windowing
@@ -81,21 +197,29 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 "#;
 
-pub fn install_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("WOBBLE_DEPTH_DIR") {
+pub fn install_dir(tool: Tool) -> PathBuf {
+    let (var, name) = match tool {
+        Tool::Vda => ("WOBBLE_DEPTH_DIR", "VideoDepthAnything"),
+        Tool::Pro2 => ("WOBBLE_DEPTHPRO2_DIR", "DepthPro2"),
+    };
+    if let Some(d) = std::env::var_os(var) {
         return PathBuf::from(d);
     }
     let home = engine::paths::home().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".wobble").join("VideoDepthAnything")
+    home.join(".wobble").join(name)
 }
 
 /// Installed, AND synced against the environment this build needs: a
 /// checkout whose `pyproject.toml` is an older `PYPROJECT` shows as not
 /// installed, so `install…` comes back and re-syncs it.
-pub fn installed(dir: &Path) -> bool {
-    dir.join("video_depth_anything").join("video_depth.py").is_file()
+pub fn installed(tool: Tool, dir: &Path) -> bool {
+    let code = match tool {
+        Tool::Vda => dir.join("video_depth_anything").join("video_depth.py"),
+        Tool::Pro2 => dir.join("src").join("depth_pro_2").join("model.py"),
+    };
+    code.is_file()
         && dir.join(".venv").is_dir()
-        && std::fs::read_to_string(dir.join("pyproject.toml")).is_ok_and(|t| t == PYPROJECT)
+        && std::fs::read_to_string(dir.join("pyproject.toml")).is_ok_and(|t| t == tool.pyproject())
 }
 
 /// A suite's stand-in command replaces the tool (and its weights).
@@ -125,6 +249,7 @@ impl Run {
 }
 
 pub struct Install {
+    pub tool: Tool,
     rx: Receiver<Msg>,
     pub log: Vec<String>,
     pub result: Option<Result<(), String>>,
@@ -159,6 +284,8 @@ pub fn read_meta(out: &Path) -> (f32, bool) {
 
 /// What the panel is told, built by `Gfx::depth_view`.
 pub struct View {
+    /// The tool the node's model runs on.
+    pub tool: Tool,
     pub dir: String,
     pub installed: bool,
     pub uv: bool,
@@ -199,19 +326,24 @@ pub fn params(kind: &NodeKind) -> Option<&DepthParams> {
     }
 }
 
-/// The picked model's weights on disk, or why not. Under the stand-in the
-/// weights are optional (it reads none).
-fn weights(p: &DepthParams) -> Result<Option<PathBuf>, String> {
-    match engine::models::ready_path(p.model.model_id()) {
-        Ok(path) => Ok(Some(path)),
-        Err(_) if stand_in() => Ok(None),
-        Err(e) => Err(e.to_string()),
+/// Every weights file the picked model needs (`DepthParams::models`, the
+/// network first) on disk, or why not. Under the stand-in the weights are
+/// optional (it reads none): an empty list.
+fn weights(p: &DepthParams) -> Result<Vec<PathBuf>, String> {
+    let mut out = vec![];
+    for id in p.models() {
+        match engine::models::ready_path(id) {
+            Ok(path) => out.push(path),
+            Err(_) if stand_in() => return Ok(vec![]),
+            Err(e) => return Err(e.to_string()),
+        }
     }
+    Ok(out)
 }
 
 /// The command that runs the driver: `$WOBBLE_DEPTH_CMD` (a suite's
 /// stand-in, whitespace-split) or `uv run --project <dir> python <driver>`.
-fn command(dir: &Path) -> Result<std::process::Command, String> {
+fn command(tool: Tool, dir: &Path) -> Result<std::process::Command, String> {
     if let Ok(s) = std::env::var("WOBBLE_DEPTH_CMD") {
         let mut parts = s.split_whitespace();
         let exe = parts.next().ok_or("WOBBLE_DEPTH_CMD is empty")?;
@@ -220,8 +352,14 @@ fn command(dir: &Path) -> Result<std::process::Command, String> {
         return Ok(c);
     }
     let uv = uv().ok_or(UV_MISSING)?;
-    let driver = dir.join(DRIVER_NAME);
+    // Depth Pro 2's driver imports Video Depth Anything's EXR reader and
+    // writer: both go beside it.
+    let mut driver = dir.join(DRIVER_NAME);
     std::fs::write(&driver, DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
+    if tool == Tool::Pro2 {
+        driver = dir.join(PRO2_DRIVER_NAME);
+        std::fs::write(&driver, PRO2_DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
+    }
     let mut c = std::process::Command::new(uv);
     c.arg("run").arg("--project").arg(dir).arg("python").arg(&driver);
     c.current_dir(dir);
@@ -254,7 +392,10 @@ impl Gfx {
     }
 
     pub(crate) fn depth_view(&self, node: u64) -> View {
-        let dir = install_dir();
+        let p = self.egraph.node(node).and_then(|n| params(&n.kind));
+        let tool = p.map(Tool::of).unwrap_or(Tool::Vda);
+        let dir = install_dir(tool);
+        let install = self.jobs.depth.install.as_ref().filter(|i| i.tool == tool);
         let mine = self.jobs.depth.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
@@ -271,13 +412,13 @@ impl Gfx {
             let current = want.as_ref().is_some_and(|d| l.path == d.to_string_lossy());
             (l.seq.frames.len(), current)
         });
-        let p = self.egraph.node(node).and_then(|n| params(&n.kind));
         View {
+            tool,
             dir: dir.to_string_lossy().into_owned(),
-            installed: installed(&dir) || stand_in(),
+            installed: installed(tool, &dir) || stand_in(),
             uv: uv().is_some(),
-            installing: self.jobs.depth.install.as_ref().filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.jobs.depth.install.as_ref().and_then(|i| i.result.clone()),
+            installing: install.filter(|i| i.result.is_none()).map(|i| i.log.last().cloned().unwrap_or_default()),
+            install_result: install.and_then(|i| i.result.clone()),
             weights: p.map(|p| weights(p).map(|_| ())).unwrap_or(Ok(())),
             state,
             log: mine.map(|r| r.log.clone()).unwrap_or_default(),
@@ -304,7 +445,10 @@ impl Gfx {
                     }
                 }
             }
-            Action::Install => self.depth_install(),
+            Action::Install => {
+                let tool = self.egraph.node(node).and_then(|n| params(&n.kind)).map(Tool::of).unwrap_or(Tool::Vda);
+                self.depth_install(tool)
+            }
             Action::Dismiss => {
                 if self.jobs.depth.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
                     self.jobs.depth.run = None;
@@ -325,34 +469,34 @@ impl Gfx {
 
     /// `install…`: fetch the pinned checkout and build its environment, on
     /// a thread, its output streamed to the panel.
-    fn depth_install(&mut self) {
+    fn depth_install(&mut self, tool: Tool) {
         if self.jobs.depth.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
-        let dir = install_dir();
+        let dir = install_dir(tool);
         let (tx, rx) = std::sync::mpsc::channel();
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (&dir, &tx);
-            self.jobs.depth.install = Some(Install { rx, log: vec![], result: Some(Err("the tool runs as a process: not in the web build".into())) });
+            self.jobs.depth.install = Some(Install { tool, rx, log: vec![], result: Some(Err("the tool runs as a process: not in the web build".into())) });
             return;
         }
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
         let Some(uv) = uv() else {
-            self.jobs.depth.install = Some(Install { rx, log: vec![], result: Some(Err(UV_MISSING.into())) });
+            self.jobs.depth.install = Some(Install { tool, rx, log: vec![], result: Some(Err(UV_MISSING.into())) });
             return;
         };
         let spawned = std::thread::Builder::new()
             .name("depth-install".into())
             .spawn(move || {
-                let result = install_into(&dir, &uv, &tx);
+                let result = install_into(tool, &dir, &uv, &tx);
                 let _ = tx.send(match result {
                     Ok(()) => Msg::Done,
                     Err(e) => Msg::Failed(e),
                 });
             })
             .is_ok();
-        self.jobs.depth.install = Some(Install { rx, log: vec![], result: (!spawned).then_some(Err("could not start a thread".into())) });
+        self.jobs.depth.install = Some(Install { tool, rx, log: vec![], result: (!spawned).then_some(Err("could not start a thread".into())) });
     }
 
     /// The `run` click: adopt a result on disk, else render the input.
@@ -376,8 +520,9 @@ impl Gfx {
             self.jobs.depth.run = Some(Run { node, dir, phase: Phase::Done("loaded the result on disk".into()), log: vec![] });
             return;
         }
-        if !installed(&install_dir()) && !stand_in() {
-            return self.depth_fail(node, "Video Depth Anything is not installed: press install…");
+        let tool = self.egraph.node(node).and_then(|n| params(&n.kind)).map(Tool::of).unwrap_or(Tool::Vda);
+        if !installed(tool, &install_dir(tool)) && !stand_in() {
+            return self.depth_fail(node, &format!("{} is not installed: press install…", tool.name()));
         }
         if let Some(Err(e)) = self.egraph.node(node).and_then(|n| params(&n.kind)).map(weights) {
             return self.depth_fail(node, &e);
@@ -400,20 +545,24 @@ impl Gfx {
             Ok(w) => w,
             Err(e) => return self.depth_fail(node, &e),
         };
-        let mut cmd = match command(&install_dir()) {
+        let tool = Tool::of(&p);
+        let mut cmd = match command(tool, &install_dir(tool)) {
             Ok(c) => c,
             Err(e) => return self.depth_fail(node, &e),
         };
-        cmd.arg("--shot")
-            .arg(&dir)
-            .arg("--encoder")
-            .arg(p.model.encoder())
-            .arg("--size")
-            .arg(p.size_arg().to_string())
-            .arg("--weights")
-            .arg(w.unwrap_or_default());
-        if p.model.metric() {
-            cmd.arg("--metric");
+        let mut w = w.into_iter();
+        cmd.arg("--shot").arg(&dir).arg("--size").arg(p.size_arg().to_string());
+        cmd.arg("--weights").arg(w.next().unwrap_or_default());
+        match tool {
+            Tool::Vda => {
+                cmd.arg("--encoder").arg(p.model.encoder());
+                if p.model.metric() {
+                    cmd.arg("--metric");
+                }
+            }
+            Tool::Pro2 => {
+                cmd.arg("--preset").arg(p.model.encoder()).arg("--focal").arg(w.next().unwrap_or_default());
+            }
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -500,7 +649,8 @@ impl Gfx {
 
 /// Fetch the pinned commit into `dir` (fresh, or an earlier install at
 /// another commit), write our project file and `uv sync` it.
-fn install_into(dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
+fn install_into(tool: Tool, dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
+    let (repo, commit) = (tool.repo(), tool.commit());
     let run = |mut c: std::process::Command| -> Result<(), String> {
         use std::io::BufRead;
         use std::process::Stdio;
@@ -534,10 +684,10 @@ fn install_into(dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
         let _ = tx.send(Msg::Line(format!("git init {}", dir.display())));
         run(git(&["init", "-q"])).map_err(|e| format!("git init: {e}"))?;
     }
-    let _ = tx.send(Msg::Line(format!("git fetch {REPO} {}", &COMMIT[..12])));
-    run(git(&["fetch", "-q", "--depth", "1", REPO, COMMIT])).map_err(|e| format!("git fetch: {e}"))?;
+    let _ = tx.send(Msg::Line(format!("git fetch {repo} {}", &commit[..12])));
+    run(git(&["fetch", "-q", "--depth", "1", repo, commit])).map_err(|e| format!("git fetch: {e}"))?;
     run(git(&["checkout", "-q", "--force", "FETCH_HEAD"])).map_err(|e| format!("git checkout: {e}"))?;
-    std::fs::write(dir.join("pyproject.toml"), PYPROJECT).map_err(|e| format!("writing pyproject.toml: {e}"))?;
+    std::fs::write(dir.join("pyproject.toml"), tool.pyproject()).map_err(|e| format!("writing pyproject.toml: {e}"))?;
     let _ = tx.send(Msg::Line("uv sync (torch and friends: a few GB, a while)".into()));
     let mut c = std::process::Command::new(uv);
     c.arg("sync").arg("--python").arg("3.12").current_dir(dir);
@@ -557,12 +707,32 @@ mod tests {
 
     #[test]
     fn the_driver_never_downloads() {
-        // The weights come through the catalog, by path.
-        for w in ["urllib", "requests", "hf_hub_download", "huggingface_hub", "wget", "http"] {
-            let code: String = DRIVER.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
+        // The weights come through the catalog, by path. (Depth Pro 2's
+        // `from_pretrained` / `create_model_and_transforms` would fetch:
+        // the driver builds the network itself and loads the files given.)
+        for (name, driver) in [("wobble_depth.py", DRIVER), ("wobble_depthpro2.py", PRO2_DRIVER)] {
+            let code: String = driver.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
             let code = code.split("\"\"\"").enumerate().filter(|(i, _)| i % 2 == 0).map(|(_, s)| s).collect::<String>();
-            assert!(!code.contains(w), "the driver mentions {w}");
+            for w in ["urllib", "requests", "hf_hub_download", "huggingface_hub", "wget", "http", "from_pretrained", "create_model_and_transforms", "snapshot_download"] {
+                assert!(!code.contains(w), "{name} mentions {w}");
+            }
         }
+    }
+
+    #[test]
+    fn the_pro2_driver_speaks_the_protocol_and_takes_both_weights() {
+        for w in ["say(\"frame\"", "say(\"done\")", "\"error\"", "--shot", "--weights", "--focal", "--preset", "--size", "infer_video", "\"Depth\"", "from wobble_depth import", "\"metric\": True"] {
+            assert!(PRO2_DRIVER.contains(w), "{w}");
+        }
+        // Every name it imports from the shared driver is defined there.
+        let import = PRO2_DRIVER.split("from wobble_depth import (").nth(1).unwrap().split(')').next().unwrap();
+        for name in import.split(',').map(|n| n.trim()).filter(|n| !n.is_empty() && !n.starts_with('#')) {
+            assert!(DRIVER.contains(&format!("def {name}(")) || DRIVER.contains(&format!("{name} = ")) || DRIVER.contains(&format!("class {name}(")), "{name}");
+        }
+        for m in engine::graph::DepthModel::ALL.into_iter().filter(|m| m.pro2()) {
+            assert_eq!(Tool::of(&DepthParams { model: m, ..Default::default() }), Tool::Pro2);
+        }
+        assert_eq!(Tool::of(&DepthParams::default()), Tool::Vda);
     }
 
     /// The driver's EXR reader on a frame from OUR writer (the one every
@@ -571,8 +741,8 @@ mod tests {
     /// Needs the tool installed (`install…`); skips, saying so, without it.
     #[test]
     fn the_driver_reads_our_exrs_and_names_a_bad_one() {
-        let dir = install_dir();
-        let Some(uv) = uv().filter(|_| installed(&dir)) else {
+        let dir = install_dir(Tool::Vda);
+        let Some(uv) = uv().filter(|_| installed(Tool::Vda, &dir)) else {
             eprintln!("skipping: Video Depth Anything is not installed at {}", dir.display());
             return;
         };
@@ -626,8 +796,12 @@ print("ok")
 
     #[test]
     fn the_install_is_pinned() {
-        assert_eq!(COMMIT.len(), 40);
-        assert!(COMMIT.chars().all(|c| c.is_ascii_hexdigit()));
+        for c in [COMMIT, PRO2_COMMIT] {
+            assert_eq!(c.len(), 40);
+            assert!(c.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+        assert!(PRO2_PYPROJECT.contains("\"opencv-python<5\"") && PRO2_PYPROJECT.contains("OpenEXR") && PRO2_PYPROJECT.contains("safetensors"));
+        assert!(PRO2_PYPROJECT.contains("where = [\"src\"]"), "the package still builds from the checkout");
         assert!(PYPROJECT.contains("torch>=2.5"), "MPS autocast needs a torch that has it");
         // 5.x's Windows wheel cannot read or write EXR; the driver needs
         // OpenEXR as its reader. Keep the pin identical to the Windows

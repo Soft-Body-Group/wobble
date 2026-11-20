@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn the_non_commercial_models_are_listed_and_their_nodes_tagged() {
         use crate::graph::{DepthModel, DepthParams};
-        let listed = ["vda-large", "vda-large-metric"];
+        let listed = ["vda-large", "vda-large-metric", "dp2-s", "dp2-b", "dp2-l", "dp2-h", "dp2-focal"];
         for m in crate::models::all() {
             assert_eq!(!m.commercial, listed.contains(&m.id), "{} is non-commercial: is its node tagged?", m.id);
         }

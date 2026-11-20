@@ -2170,6 +2170,21 @@ last, so the depth holds steady over time where a per-frame model flickers.
   everything upstream, the model and the size — STALE after an edit, never
   re-run behind your back — and clears the red above it once loaded.
 
+### Depth Pro 2
+
+AI / ML ▸ **Depth Pro 2** is the same node with Apple's
+[Depth Pro 2](https://github.com/apple-aiml-research/ml-depth-pro-2)
+picked: **metric** depth (metres along the optical axis, the sky capped at
+1000), sharp at large inputs, the clip in overlapping 16-frame windows
+cross-faded, one focal length estimated for the whole clip. Sizes S (97 MB,
+the default), B (386 MB), L (1.3 GB) and H+ (3.5 GB), each plus a 94 MB
+focal-length network they share. **Research use only**: every size's
+weights are under the Apple Machine Learning Research Model licence (no
+commercial use), so the node is tagged whichever is picked. Its own
+`install…` puts the tool in `~/.wobble/DepthPro2`. **size** is the short
+side in multiples of 32 (default 1088, never above the plate's). Measured
+on an M4 Pro: hcr080, S at 1088, about 0.7 s a frame, 3.3 GB of GPU memory.
+
 ## Sammie — click-to-roto with SAM 2
 
 **Sammie** (AI) rotos by clicking. It runs the models

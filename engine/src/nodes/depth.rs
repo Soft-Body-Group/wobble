@@ -33,6 +33,16 @@
 //! Licence (manifesto rule 10): the code is Apache-2.0. Small and Metric
 //! Small are Apache-2.0; Large and Metric Large are CC-BY-NC-4.0 and the
 //! node is tagged while one is picked (the catalog row's `commercial`).
+//!
+//! **Depth Pro 2** (Apple, 2026) is the other family the node runs: metric
+//! depth in metres at the network's full input size, a clip in overlapping
+//! 16-frame windows cross-faded (its own `infer_video`), one focal length
+//! estimated for the clip by its shared focal network. Another tool and
+//! another driver (`tools/wobble_depthpro2.py`), the same result layout,
+//! so everything from the result on is shared. Its code is Apple's sample
+//! licence (permissive); EVERY size's weights are the Apple Machine
+//! Learning Research Model licence, research only, so the node is tagged
+//! whichever size is picked.
 
 /// Which network. Each is one catalog row (`models()`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -47,11 +57,31 @@ pub enum DepthModel {
     Large,
     /// ViT-L, metric. CC-BY-NC-4.0.
     LargeMetric,
+    /// Depth Pro 2 S (24M), metres. Research only.
+    Pro2Small,
+    /// Depth Pro 2 B (97M), metres. Research only.
+    Pro2Base,
+    /// Depth Pro 2 L (334M), metres. Research only.
+    Pro2Large,
+    /// Depth Pro 2 H+ (872M), metres. Research only.
+    Pro2Huge,
 }
 
+/// Depth Pro 2's focal-length network, which every size needs beside its
+/// own weights (one estimate per clip).
+pub const PRO2_FOCAL: &str = "dp2-focal";
+
 impl DepthModel {
-    pub const ALL: [DepthModel; 4] =
-        [DepthModel::Small, DepthModel::SmallMetric, DepthModel::Large, DepthModel::LargeMetric];
+    pub const ALL: [DepthModel; 8] = [
+        DepthModel::Small,
+        DepthModel::SmallMetric,
+        DepthModel::Large,
+        DepthModel::LargeMetric,
+        DepthModel::Pro2Small,
+        DepthModel::Pro2Base,
+        DepthModel::Pro2Large,
+        DepthModel::Pro2Huge,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -59,6 +89,10 @@ impl DepthModel {
             DepthModel::SmallMetric => "small, metric",
             DepthModel::Large => "large (non-commercial)",
             DepthModel::LargeMetric => "large, metric (non-commercial)",
+            DepthModel::Pro2Small => "Depth Pro 2 S (non-commercial)",
+            DepthModel::Pro2Base => "Depth Pro 2 B (non-commercial)",
+            DepthModel::Pro2Large => "Depth Pro 2 L (non-commercial)",
+            DepthModel::Pro2Huge => "Depth Pro 2 H+ (non-commercial)",
         }
     }
 
@@ -69,20 +103,44 @@ impl DepthModel {
             DepthModel::SmallMetric => "vda-small-metric",
             DepthModel::Large => "vda-large",
             DepthModel::LargeMetric => "vda-large-metric",
+            DepthModel::Pro2Small => "dp2-s",
+            DepthModel::Pro2Base => "dp2-b",
+            DepthModel::Pro2Large => "dp2-l",
+            DepthModel::Pro2Huge => "dp2-h",
         }
     }
 
-    /// The driver's `--encoder`.
+    /// The driver's `--encoder` (Video Depth Anything) or `--preset`
+    /// (Depth Pro 2: the tool's own `PRESETS` key).
     pub fn encoder(self) -> &'static str {
         match self {
             DepthModel::Small | DepthModel::SmallMetric => "vits",
             DepthModel::Large | DepthModel::LargeMetric => "vitl",
+            DepthModel::Pro2Small => "depthpro2-s",
+            DepthModel::Pro2Base => "depthpro2-b",
+            DepthModel::Pro2Large => "depthpro2-l",
+            DepthModel::Pro2Huge => "depthpro2-h",
         }
     }
 
     /// Metres out, rather than relative disparity.
     pub fn metric(self) -> bool {
-        matches!(self, DepthModel::SmallMetric | DepthModel::LargeMetric)
+        matches!(self, DepthModel::SmallMetric | DepthModel::LargeMetric) || self.pro2()
+    }
+
+    /// Depth Pro 2 (Apple's tool), not Video Depth Anything.
+    pub fn pro2(self) -> bool {
+        matches!(self, DepthModel::Pro2Small | DepthModel::Pro2Base | DepthModel::Pro2Large | DepthModel::Pro2Huge)
+    }
+
+    /// The network's input sizes: Video Depth Anything's patches are 14
+    /// pixels, Depth Pro 2 pads to 32 and is built for large inputs.
+    pub fn size_range(self) -> (u32, u32, u32) {
+        if self.pro2() {
+            (32, 256, 2176)
+        } else {
+            (14, 140, 1400)
+        }
     }
 }
 
@@ -190,12 +248,25 @@ impl DepthParams {
             DepthModel::SmallMetric => &["vda-small-metric"],
             DepthModel::Large => &["vda-large"],
             DepthModel::LargeMetric => &["vda-large-metric"],
+            DepthModel::Pro2Small => &["dp2-s", PRO2_FOCAL],
+            DepthModel::Pro2Base => &["dp2-b", PRO2_FOCAL],
+            DepthModel::Pro2Large => &["dp2-l", PRO2_FOCAL],
+            DepthModel::Pro2Huge => &["dp2-h", PRO2_FOCAL],
         }
     }
 
-    /// The input size the tool is given: a multiple of 14, 140..=1400.
+    /// A Depth Pro 2 node, as the AI menu's "Depth Pro 2" entry makes it:
+    /// the smallest size (97 MB), at a 1088-pixel short side — the model is
+    /// built for large inputs, and 518 would waste it.
+    pub fn pro2(source: usize) -> Self {
+        Self { source, model: DepthModel::Pro2Small, size: 1088, ..Default::default() }
+    }
+
+    /// The input size the tool is given: a multiple of 14, 140..=1400
+    /// (Depth Pro 2: of 32, 256..=2176).
     pub fn size_arg(&self) -> u32 {
-        (self.size.clamp(140, 1400) + 7) / 14 * 14
+        let (m, lo, hi) = self.model.size_range();
+        (self.size.clamp(lo, hi) + m / 2) / m * m
     }
 
     /// Everything that shapes the pixels, for the app's result key. NOT
@@ -298,8 +369,25 @@ mod tests {
     #[test]
     fn each_model_names_its_own_weights() {
         for m in DepthModel::ALL {
-            assert_eq!(DepthParams { model: m, ..Default::default() }.models(), &[m.model_id()]);
+            let w = DepthParams { model: m, ..Default::default() }.models();
+            assert_eq!(w[0], m.model_id());
+            // Depth Pro 2 also needs its shared focal-length network.
+            assert_eq!(&w[1..], if m.pro2() { &[PRO2_FOCAL][..] } else { &[][..] }, "{m:?}");
         }
+    }
+
+    #[test]
+    fn depth_pro_2_is_metric_and_sized_in_32s() {
+        for m in DepthModel::ALL.into_iter().filter(|m| m.pro2()) {
+            assert!(m.metric());
+            for s in [0, 518, 1080, 1088, 9000] {
+                let a = DepthParams { model: m, size: s, ..Default::default() }.size_arg();
+                assert_eq!(a % 32, 0, "{s} -> {a}");
+                assert!((256..=2176).contains(&a));
+            }
+        }
+        assert_eq!(DepthParams::pro2(0).size_arg(), 1088);
+        assert_eq!(DepthParams::pro2(3).source, 3);
     }
 
     #[test]

@@ -4,16 +4,13 @@
 //! drawn ABOVE this panel by `properties_ui` (the node declares them in
 //! `NodeKind::models`), so nothing here offers a download.
 
-use crate::depth::{Action, View, ViewState, LICENCE_URL, REPO};
+use crate::depth::{Action, View, ViewState};
 use crate::theme;
 use egui::{Color32, Painter, Pos2, Stroke, Ui, Vec2};
 use engine::graph::{DepthModel, DepthOut, DepthParams};
 
 pub const TILES: usize = 2;
 pub const TILE_ROWS: usize = 2;
-
-/// Where it runs, for the panel.
-pub const WHERE: &str = "runs on Apple Silicon (MPS), an NVIDIA GPU (CUDA) or, slowly, the CPU. The clip is solved in overlapping 32-frame windows, each aligned to the last, so the depth holds steady over time; memory does not grow with the clip";
 
 /// The picked model's weights licence, from its catalog row (the one source
 /// of truth, rule 10), and whether it allows commercial use.
@@ -29,9 +26,11 @@ pub fn licence(model: DepthModel) -> (&'static str, bool) {
 pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Action> {
     let mut act = None;
     let (weights, commercial) = licence(p.model);
+    let (who, code_licence, code_url) = v.tool.credit();
+    let about = v.tool.about();
     ui.horizontal_wrapped(|ui| {
-        ui.weak("Video Depth Anything by ByteDance · code");
-        ui.hyperlink_to("Apache-2.0", LICENCE_URL);
+        ui.weak(format!("{who} · code"));
+        ui.hyperlink_to(code_licence, code_url);
         ui.weak("· weights");
         if commercial {
             ui.weak(weights);
@@ -42,7 +41,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Ac
     });
     // --- install --------------------------------------------------------
     if v.installed {
-        ui.weak(format!("installed at {}", v.dir)).on_hover_text(WHERE);
+        ui.weak(format!("installed at {}", v.dir)).on_hover_text(about);
     } else if let Some(line) = &v.installing {
         ui.horizontal(|ui| {
             ui.add(egui::Spinner::new().size(12.0));
@@ -52,7 +51,8 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Ac
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(theme::error(), "not installed");
             let b = ui.add_enabled(v.uv, egui::Button::new("install…")).on_hover_text(format!(
-                "fetch {REPO} (pinned) into {} and uv sync there (torch: a few GB). The weights come from the button above, not from the tool. Nothing is fetched until you press this. {WHERE}",
+                "fetch {} (pinned) into {} and uv sync there (torch: a few GB). The weights come from the button above, not from the tool. Nothing is fetched until you press this. {about}",
+                v.tool.repo(),
                 v.dir
             ));
             if b.clicked() {
@@ -75,8 +75,10 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Ac
             }
         });
         ui.label("size");
-        ui.add(egui::DragValue::new(&mut p.size).range(140..=1400).speed(2.0))
-            .on_hover_text("the network's input, short side (a multiple of 14): larger is finer and slower; the result comes back at the plate's size");
+        let (m, lo, hi) = p.model.size_range();
+        ui.add(egui::DragValue::new(&mut p.size).range(lo..=hi).speed(2.0)).on_hover_text(format!(
+            "the network's input, short side (a multiple of {m}; never more than the plate's): larger is finer and slower; the result comes back at the plate's size"
+        ));
     });
     ui.horizontal(|ui| {
         ui.label("output");
@@ -89,6 +91,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Ac
     ui.weak(match (p.model.metric(), p.output) {
         (false, DepthOut::Depth) => "RELATIVE, not metres: the nearest thing in the clip reads 1, further reads more",
         (false, DepthOut::Disparity) => "relative inverse depth, as the network made it: for a Defocus with inverse depth on",
+        (true, DepthOut::Depth) if p.model.pro2() => "metres along the optical axis (estimated, with a focal length estimated for the clip)",
         (true, DepthOut::Depth) => "metres (estimated: trained on driving and indoor scenes)",
         (true, DepthOut::Disparity) => "1 / metres: for a Defocus with inverse depth on",
         (_, DepthOut::Near) => "near 1, far 0, over the clip",
@@ -137,9 +140,10 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DepthParams, v: &View) -> Option<Ac
                 _ => "run",
             };
             let can = v.has_input && ((v.installed && v.weights.is_ok()) || v.on_disk) && !v.busy_elsewhere;
-            let b = ui.add_enabled(can, egui::Button::new(label)).on_hover_text(
-                "renders the input over its range, runs Video Depth Anything over the clip, then plays the depth here. Keyed on everything upstream: an edit shows as STALE, nothing re-runs behind your back",
-            );
+            let b = ui.add_enabled(can, egui::Button::new(label)).on_hover_text(format!(
+                "renders the input over its range, runs {} over the clip, then plays the depth here. Keyed on everything upstream: an edit shows as STALE, nothing re-runs behind your back",
+                v.tool.name()
+            ));
             if b.clicked() {
                 act = Some(Action::Run);
             }
@@ -187,6 +191,9 @@ mod tests {
         assert_eq!(licence(DepthModel::SmallMetric), ("Apache-2.0", true));
         assert_eq!(licence(DepthModel::Large), ("CC-BY-NC-4.0", false));
         assert_eq!(licence(DepthModel::LargeMetric), ("CC-BY-NC-4.0", false));
+        for m in [DepthModel::Pro2Small, DepthModel::Pro2Base, DepthModel::Pro2Large, DepthModel::Pro2Huge] {
+            assert_eq!(licence(m), ("Apple ML Research Model licence, research only", false), "{m:?}");
+        }
     }
 
     #[test]
@@ -198,6 +205,7 @@ mod tests {
             ("depth-panel-running", ViewState::Running(22, 48), true),
         ] {
             let v = View {
+                tool: crate::depth::Tool::Vda,
                 dir: "/Users/someone/.wobble/VideoDepthAnything".into(),
                 installed,
                 uv: true,

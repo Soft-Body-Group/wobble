@@ -1104,6 +1104,9 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // Video Depth Anything: steady depth for a clip on a click, played
         // back like a bake on the data pipe; the gate downloads the weights.
         e(Ai, "Depth", true, |s| NodeKind::Depth(engine::graph::DepthParams::new(s))),
+        // Depth Pro 2 (Apple): metric depth for a clip, the same node with
+        // that model picked. Research-only weights, tagged.
+        e(Ai, "Depth Pro 2", true, |s| NodeKind::Depth(engine::graph::DepthParams::pro2(s))),
         // LTX-2.5 SDR-to-HDR: clipped highlights made up by a video model on
         // a click, composited back where the plate clipped. Restricted
         // licence, tagged.

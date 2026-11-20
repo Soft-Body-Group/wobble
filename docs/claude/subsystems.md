@@ -278,6 +278,21 @@ has the user story. What must stay true:
 - **Output is the Data pipe** (`output_kind`), broadcast to rgb, alpha 1;
   no input transform. Unloaded it is 0 and does no work. Loaded it is
   `inputs_unsampled` and `clears_slow`.
+- **Depth Pro 2 is a second tool, not a second node.** Four more
+  `DepthModel`s (`pro2()`), catalog rows `dp2-s/b/l/h` + the shared
+  `dp2-focal` (`models()` declares both), all `commercial: false` (Apple
+  ML Research Model licence, research only; the code is Apple's
+  permissive sample licence). `depth::Tool::of` picks the checkout
+  (`~/.wobble/DepthPro2`, `PRO2_COMMIT`, `PRO2_PYPROJECT` = upstream's deps
+  + OpenEXR) and driver (`tools/wobble_depthpro2.py`, which imports
+  `wobble_depth.py`'s reader/writer, so both are written beside it). The
+  driver builds `DepthPro2` from the tool's `PRESETS` and loads our files:
+  `from_pretrained` / `create_model_and_transforms` would download, and
+  `the_driver_never_downloads` scans for them. It stores metres capped at
+  `FAR`, interpolated back to plate size in INVERSE depth (the sky is a
+  finite 0). Size is a short side in 32s (256..=2176, never above the
+  plate); the AI menu's "Depth Pro 2" entry is `DepthParams::pro2` (S at
+  1088). Measured on al's Mac: S, 100 2K frames at 1088, ~70 s, 3.3 GB GPU.
 - `--test-depth` runs against `--depth-fake` (`FAKE_RAW` + `FAKE_TOP`: a
   distinct number per output). The real check is the driver on its own:
   `uv run --project ~/.wobble/VideoDepthAnything python wobble_depth.py
