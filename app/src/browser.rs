@@ -1,7 +1,7 @@
 //! The clip browser for Load nodes: seq_manip's browser (`seq_manip_imfram`)
 //! on imfram's pieces, over wobble's own decoders. Along the top, the path
 //! bar (back / forward / up, rescan, favourite, the path with Tab
-//! completion) and the view's controls. Down the left, home, favourites, recent
+//! completion) and the view's controls. Down the left, home, the comp's folder, favourites, recent
 //! folders, the folder tree and the bin. In the middle, imfram's gallery
 //! (tiles) or list (rows, sortable columns) over the folder: numbered
 //! frames collapse into one sequence item, versions of a shot into one
@@ -1077,6 +1077,9 @@ pub struct SeqBrowser {
     /// Picking a FOLDER for `target_node` (a Render's location), not a
     /// sequence: the action bar offers the directory on show.
     pub pick_folder: bool,
+    /// The folder of the saved comp (`.wbl`), offered under Home; None
+    /// while the comp is unsaved. The shell refreshes it every show.
+    pub comp_dir: Option<PathBuf>,
     dir: PathBuf,
     filter: String,
     listing: Option<Result<Listing, String>>,
@@ -1212,6 +1215,7 @@ impl SeqBrowser {
             hovered: None,
             path_bar: PathBar::new(),
             tree: FolderTree::new(),
+            comp_dir: None,
             typeahead: TypeAhead::new(),
             menu: None,
             quicklook: None,
@@ -1619,6 +1623,13 @@ impl SeqBrowser {
                 egui::ScrollArea::vertical().id_salt("seq-side-scroll").auto_shrink([false, false]).show(ui, |ui| {
                     if let Some(h) = nav::home_place(ui, &self.dir) {
                         nav = Some(h);
+                    }
+                    if let Some(c) = &self.comp_dir {
+                        ui.add_space(-6.0);
+                        if ui.selectable_label(*c == self.dir, "Comp folder").on_hover_text(format!("where the saved comp lives\n{}", c.display())).clicked() {
+                            nav = Some(c.clone());
+                        }
+                        ui.add_space(6.0);
                     }
                     let ev = nav::places(ui, "Favourites", pinned, &self.dir, true, Some("☆ in the path bar adds the folder shown"));
                     if let Some(p) = ev.go {
