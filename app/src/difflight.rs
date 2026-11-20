@@ -29,10 +29,18 @@
 //! `$WOBBLE_DIFFLIGHT_DIR`), writes `PYPROJECT` into it and runs `uv sync`.
 //! `fetch weights…` runs the driver's `--fetch`: five public repositories
 //! at pinned revisions into `<checkout>/models`. A run is offline.
+//!
+//! **Two models, one runner.** Everything that differs between
+//! DiffusionLight-Turbo and LuxDiT (repository, commit, environment,
+//! driver, weights, wording) is a [`Tool`]; `tool(model)` picks it, and the
+//! install and fetch jobs are kept per model. LuxDiT runs only on CUDA:
+//! `nvidia()` (the adapter's PCI vendor) decides whether the app offers it
+//! at all — the menu entry and the model picker leave it out elsewhere,
+//! and a scene that already has one still opens and shows it.
 
 use crate::corridorkey::{push_log, spawn, uv, Msg, UV_MISSING};
 use crate::Gfx;
-use engine::graph::{DiffLightParams, NodeKind};
+use engine::graph::{DiffLightModel, DiffLightParams, NodeKind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender};
@@ -40,6 +48,7 @@ use std::sync::Arc;
 
 pub const DRIVER: &str = include_str!("../../tools/wobble_difflight.py");
 const DRIVER_NAME: &str = "wobble_difflight.py";
+pub const LUX_DRIVER: &str = include_str!("../../tools/wobble_luxdit.py");
 pub const REPO: &str = "https://github.com/DiffusionLight/DiffusionLight-Turbo.git";
 /// The commit the driver is written against: it imports the projection
 /// from the checkout's `ball2envmap.py`. Bump it and re-test, never float it.
@@ -103,35 +112,154 @@ explicit = true
 /// Where it runs and what it costs, for the panel.
 pub const WHERE: &str = "CUDA (about 11 GB of VRAM, about 35 s a frame on an RTX 5080: three SDXL inpaints of 30 steps each), or Apple Silicon (untested). Every frame is its own estimate; the smoothing pass is what steadies them";
 
-pub fn install_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("WOBBLE_DIFFLIGHT_DIR") {
-        return PathBuf::from(d);
+/// LuxDiT (NVIDIA): the clip in windows through a video diffusion
+/// transformer. The commit `tools/wobble_luxdit.py` imports the pipeline,
+/// the VAE, the transformer and the HDR merger from.
+pub const LUX_REPO: &str = "https://github.com/nv-tlabs/LuxDiT.git";
+pub const LUX_COMMIT: &str = "a191884afbd757bab546bb01f2eaa967fb80b375";
+pub const LUX_LICENCE_URL: &str = "https://github.com/nv-tlabs/LuxDiT/blob/main/LICENSE.md";
+/// The driver's `PINS`, in its order: only CogVideoX's VAE and scheduler
+/// are fetched from the base model, never its text encoder.
+pub const LUX_PINS: [(&str, &str); 2] = [
+    ("zai-org/CogVideoX-5b-I2V", "a6f0f4858a8395e7429d82493864ce92bf73af11"),
+    ("nvidia/LuxDiT", "6c10bcbbe11439660d4bad514250e6d30a32999d"),
+];
+pub const LUX_WEIGHTS_BYTES: u64 = 23_500_000_000;
+/// Upstream pins diffusers 0.32 / transformers 4.47 / peft 0.7 and leaves
+/// torch to the user ("tested with 2.4"); a current torch is what an RTX 50
+/// needs, and the rest is upstream's own pins (measured on a 5080).
+pub const LUX_PYPROJECT: &str = r#"[project]
+name = "wobble-luxdit"
+version = "0.0.0"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "torch>=2.8",
+    "torchvision",
+    "diffusers==0.32.0",
+    "transformers==4.47.1",
+    "accelerate==1.3.0",
+    "peft==0.7.0",
+    "omegaconf",
+    "safetensors",
+    "huggingface_hub<1",
+    "numpy<2.3",
+    "Pillow",
+    "OpenEXR>=3.3",
+    "opencv-python-headless",
+    "imageio",
+    "imageio-ffmpeg",
+    "einops",
+    "braceexpand",
+    "matplotlib",
+    "tqdm",
+    "sentencepiece",
+]
+
+[tool.uv]
+package = false
+"#;
+pub const LUX_WHERE: &str = "an NVIDIA GPU only (CUDA, Linux tested). On an RTX 5080: 12 GB of VRAM and about 40 s for a 5-frame window at 40 steps. The clip is seen in windows of 'window' frames, each a video to the model, cross-faded into the last";
+
+/// Everything that differs between the two models' tools.
+pub struct Tool {
+    pub name: &'static str,
+    /// `~/.wobble/<dir_name>`, or `$<env_dir>`.
+    dir_name: &'static str,
+    env_dir: &'static str,
+    pub repo: &'static str,
+    pub commit: &'static str,
+    pub pins: &'static [(&'static str, &'static str)],
+    pub weights_bytes: u64,
+    pub pyproject: &'static str,
+    /// The driver the app writes into the checkout, and its file name.
+    driver: &'static str,
+    driver_name: &'static str,
+    /// A file only an install of this checkout has.
+    marker: &'static str,
+    pub where_: &'static str,
+}
+
+pub const TURBO: Tool = Tool {
+    name: "DiffusionLight-Turbo",
+    dir_name: "DiffusionLight-Turbo",
+    env_dir: "WOBBLE_DIFFLIGHT_DIR",
+    repo: REPO,
+    commit: COMMIT,
+    pins: &PINS,
+    weights_bytes: WEIGHTS_BYTES,
+    pyproject: PYPROJECT,
+    driver: DRIVER,
+    driver_name: DRIVER_NAME,
+    marker: "ball2envmap.py",
+    where_: WHERE,
+};
+
+pub const LUXDIT: Tool = Tool {
+    name: "LuxDiT",
+    dir_name: "LuxDiT",
+    env_dir: "WOBBLE_LUXDIT_DIR",
+    repo: LUX_REPO,
+    commit: LUX_COMMIT,
+    pins: &LUX_PINS,
+    weights_bytes: LUX_WEIGHTS_BYTES,
+    pyproject: LUX_PYPROJECT,
+    driver: LUX_DRIVER,
+    driver_name: "wobble_luxdit.py",
+    marker: "inference_luxdit.py",
+    where_: LUX_WHERE,
+};
+
+pub fn tool(m: DiffLightModel) -> &'static Tool {
+    match m {
+        DiffLightModel::Turbo => &TURBO,
+        DiffLightModel::LuxDit => &LUXDIT,
     }
-    let home = engine::paths::home().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".wobble").join("DiffusionLight-Turbo")
 }
 
-/// Where the weights land: a Hugging Face cache of the tool's own beside
-/// the checkout, never ~/.cache and never the catalog's.
-pub fn models_dir() -> PathBuf {
-    install_dir().join("models")
+static NVIDIA: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Called once with the adapter the app renders on.
+pub fn set_adapter(info: &wgpu::AdapterInfo) {
+    let _ = NVIDIA.set(info.vendor == 0x10de);
 }
 
-/// Installed, AND synced against the environment this build needs.
-pub fn installed(dir: &Path) -> bool {
-    dir.join("ball2envmap.py").is_file()
-        && dir.join(".venv").is_dir()
-        && std::fs::read_to_string(dir.join("pyproject.toml")).is_ok_and(|t| t == PYPROJECT)
+/// Is LuxDiT offered here? Only on an NVIDIA GPU (`$WOBBLE_LUXDIT=1`
+/// forces it, for a suite or a remote CUDA box).
+pub fn nvidia() -> bool {
+    std::env::var_os("WOBBLE_LUXDIT").is_some_and(|v| v == "1") || NVIDIA.get().copied().unwrap_or(false)
 }
 
-/// What the driver's `--fetch` writes once everything is there.
-pub fn ready_text() -> String {
-    PINS.iter().map(|(repo, rev)| format!("{repo} {rev}\n")).collect()
-}
+impl Tool {
+    pub fn install_dir(&self) -> PathBuf {
+        if let Some(d) = std::env::var_os(self.env_dir) {
+            return PathBuf::from(d);
+        }
+        let home = engine::paths::home().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".wobble").join(self.dir_name)
+    }
 
-/// Fetched, at the revisions this build pins.
-pub fn weights_ready(models: &Path) -> bool {
-    std::fs::read_to_string(models.join("READY")).is_ok_and(|t| t == ready_text())
+    /// Where the weights land: beside the checkout, never ~/.cache and
+    /// never the catalog's.
+    pub fn models_dir(&self) -> PathBuf {
+        self.install_dir().join("models")
+    }
+
+    /// Installed, AND synced against the environment this build needs.
+    pub fn installed(&self, dir: &Path) -> bool {
+        dir.join(self.marker).is_file()
+            && dir.join(".venv").is_dir()
+            && std::fs::read_to_string(dir.join("pyproject.toml")).is_ok_and(|t| t == self.pyproject)
+    }
+
+    /// What the driver's `--fetch` writes once everything is there.
+    pub fn ready_text(&self) -> String {
+        self.pins.iter().map(|(repo, rev)| format!("{repo} {rev}\n")).collect()
+    }
+
+    /// Fetched, at the revisions this build pins.
+    pub fn weights_ready(&self, models: &Path) -> bool {
+        std::fs::read_to_string(models.join("READY")).is_ok_and(|t| t == self.ready_text())
+    }
 }
 
 /// A suite's stand-in command replaces the tool (and its weights).
@@ -170,15 +298,31 @@ pub struct Job {
     pub result: Option<Result<(), String>>,
 }
 
+/// One run at a time (one GPU); an install and a fetch per model.
 #[derive(Default)]
 pub struct Jobs {
     pub run: Option<Run>,
-    pub install: Option<Job>,
-    pub fetch: Option<Job>,
+    pub install: [Option<Job>; 2],
+    pub fetch: [Option<Job>; 2],
+}
+
+fn slot(m: DiffLightModel) -> usize {
+    match m {
+        DiffLightModel::Turbo => 0,
+        DiffLightModel::LuxDit => 1,
+    }
+}
+
+impl Jobs {
+    pub fn any(&self) -> bool {
+        self.run.is_some() || self.install.iter().chain(&self.fetch).any(Option::is_some)
+    }
 }
 
 /// What the panel is told, built by `Gfx::difflight_view`.
 pub struct View {
+    /// LuxDiT may be picked here (an NVIDIA GPU).
+    pub nvidia: bool,
     pub dir: String,
     pub installed: bool,
     pub uv: bool,
@@ -222,7 +366,7 @@ pub fn params(kind: &NodeKind) -> Option<&DiffLightParams> {
 
 /// The command that runs the driver: `$WOBBLE_DIFFLIGHT_CMD` (a suite's
 /// stand-in, whitespace-split) or `uv run --project <dir> python <driver>`.
-fn command(dir: &Path) -> Result<std::process::Command, String> {
+fn command(t: &Tool, dir: &Path) -> Result<std::process::Command, String> {
     if let Ok(s) = std::env::var("WOBBLE_DIFFLIGHT_CMD") {
         let mut parts = s.split_whitespace();
         let exe = parts.next().ok_or("WOBBLE_DIFFLIGHT_CMD is empty")?;
@@ -231,8 +375,13 @@ fn command(dir: &Path) -> Result<std::process::Command, String> {
         return Ok(c);
     }
     let uv = uv().ok_or(UV_MISSING)?;
-    let driver = dir.join(DRIVER_NAME);
-    std::fs::write(&driver, DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
+    let driver = dir.join(t.driver_name);
+    std::fs::write(&driver, t.driver).map_err(|e| format!("writing the driver: {e}"))?;
+    // LuxDiT's driver imports the smoothing pass and the EXR helpers from
+    // DiffusionLight's: one spec for both.
+    if t.driver_name != DRIVER_NAME {
+        std::fs::write(dir.join(DRIVER_NAME), DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
+    }
     let mut c = std::process::Command::new(uv);
     c.arg("run").arg("--project").arg(dir).arg("python").arg(&driver);
     c.current_dir(dir);
@@ -279,7 +428,10 @@ impl Gfx {
     }
 
     pub(crate) fn difflight_view(&self, node: u64) -> View {
-        let dir = install_dir();
+        let model = self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.model).unwrap_or_default();
+        let t = tool(model);
+        let k = slot(model);
+        let dir = t.install_dir();
         let mine = self.jobs.difflight.run.as_ref().filter(|r| r.node == node);
         let state = match mine.map(|r| &r.phase) {
             None => ViewState::Idle,
@@ -298,19 +450,18 @@ impl Gfx {
             let current = want.as_ref().is_some_and(|d| l.path == d.to_string_lossy());
             (l.seq.frames.len(), current)
         });
-        let fetch = self.jobs.difflight.fetch.as_ref();
+        let fetch = self.jobs.difflight.fetch[k].as_ref();
         View {
+            nvidia: nvidia(),
             dir: dir.to_string_lossy().into_owned(),
-            installed: installed(&dir) || stand_in(),
+            installed: t.installed(&dir) || stand_in(),
             uv: uv().is_some(),
-            installing: self
-                .jobs.difflight
-                .install
+            installing: self.jobs.difflight.install[k]
                 .as_ref()
                 .filter(|i| i.result.is_none())
                 .map(|i| i.log.last().cloned().unwrap_or_default()),
-            install_result: self.jobs.difflight.install.as_ref().and_then(|i| i.result.clone()),
-            weights: weights_ready(&models_dir()) || stand_in(),
+            install_result: self.jobs.difflight.install[k].as_ref().and_then(|i| i.result.clone()),
+            weights: t.weights_ready(&t.models_dir()) || stand_in(),
             fetching: fetch
                 .filter(|f| f.result.is_none())
                 .map(|f| (f.log.last().cloned().unwrap_or_default(), f.progress.0, f.progress.1)),
@@ -340,20 +491,23 @@ impl Gfx {
                     }
                 }
             }
-            Action::Install => self.difflight_install(),
-            Action::Fetch => self.difflight_fetch(),
+            Action::Install => self.difflight_install(self.difflight_model(node)),
+            Action::Fetch => self.difflight_fetch(self.difflight_model(node)),
             Action::Dismiss => {
                 if self.jobs.difflight.run.as_ref().is_some_and(|r| r.node == node && !r.active()) {
                     self.jobs.difflight.run = None;
                 }
-                if self.jobs.difflight.install.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.jobs.difflight.install = None;
-                }
-                if self.jobs.difflight.fetch.as_ref().is_some_and(|i| i.result.is_some()) {
-                    self.jobs.difflight.fetch = None;
+                for j in self.jobs.difflight.install.iter_mut().chain(self.jobs.difflight.fetch.iter_mut()) {
+                    if j.as_ref().is_some_and(|i| i.result.is_some()) {
+                        *j = None;
+                    }
                 }
             }
         }
+    }
+
+    fn difflight_model(&self, node: u64) -> DiffLightModel {
+        self.egraph.node(node).and_then(|n| params(&n.kind)).map(|p| p.model).unwrap_or_default()
     }
 
     fn difflight_fail(&mut self, node: u64, e: &str) {
@@ -367,62 +521,64 @@ impl Gfx {
 
     /// `install…`: fetch the pinned checkout and build its environment, on
     /// a thread, its output streamed to the panel.
-    fn difflight_install(&mut self) {
-        if self.jobs.difflight.install.as_ref().is_some_and(|i| i.result.is_none()) {
+    fn difflight_install(&mut self, model: DiffLightModel) {
+        let (t, k) = (tool(model), slot(model));
+        if self.jobs.difflight.install[k].as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
-        let dir = install_dir();
+        let dir = t.install_dir();
         let (tx, rx) = std::sync::mpsc::channel();
         let job = |rx, result| Job { rx, log: vec![], progress: (0, 0), result };
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (&dir, &tx);
-            self.jobs.difflight.install = Some(job(rx, Some(Err("the tool runs as a process: not in the web build".into()))));
+            self.jobs.difflight.install[k] = Some(job(rx, Some(Err("the tool runs as a process: not in the web build".into()))));
             return;
         }
         #[cfg_attr(target_arch = "wasm32", allow(unreachable_code))]
         let Some(uv) = uv() else {
-            self.jobs.difflight.install = Some(job(rx, Some(Err(UV_MISSING.into()))));
+            self.jobs.difflight.install[k] = Some(job(rx, Some(Err(UV_MISSING.into()))));
             return;
         };
         let spawned = std::thread::Builder::new()
             .name("difflight-install".into())
             .spawn(move || {
-                let result = install_into(&dir, &uv, &tx);
+                let result = install_into(t, &dir, &uv, &tx);
                 let _ = tx.send(match result {
                     Ok(()) => Msg::Done,
                     Err(e) => Msg::Failed(e),
                 });
             })
             .is_ok();
-        self.jobs.difflight.install = Some(job(rx, (!spawned).then_some(Err("could not start a thread".into()))));
+        self.jobs.difflight.install[k] = Some(job(rx, (!spawned).then_some(Err("could not start a thread".into()))));
     }
 
     /// `fetch weights…`: the driver's `--fetch`, as a process.
-    fn difflight_fetch(&mut self) {
-        if self.jobs.difflight.fetch.as_ref().is_some_and(|f| f.result.is_none()) {
+    fn difflight_fetch(&mut self, model: DiffLightModel) {
+        let (t, k) = (tool(model), slot(model));
+        if self.jobs.difflight.fetch[k].as_ref().is_some_and(|f| f.result.is_none()) {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let mut job = Job { rx, log: vec![], progress: (0, 0), result: None };
-        if !installed(&install_dir()) {
-            job.result = Some(Err("install DiffusionLight-Turbo first: the fetch runs in its environment".into()));
-            self.jobs.difflight.fetch = Some(job);
+        if !t.installed(&t.install_dir()) {
+            job.result = Some(Err(format!("install {} first: the fetch runs in its environment", t.name)));
+            self.jobs.difflight.fetch[k] = Some(job);
             return;
         }
-        let mut cmd = match command(&install_dir()) {
+        let mut cmd = match command(t, &t.install_dir()) {
             Ok(c) => c,
             Err(e) => {
                 job.result = Some(Err(e));
-                self.jobs.difflight.fetch = Some(job);
+                self.jobs.difflight.fetch[k] = Some(job);
                 return;
             }
         };
-        cmd.arg("--fetch").arg(models_dir());
+        cmd.arg("--fetch").arg(t.models_dir());
         if let Err(e) = spawn(cmd, tx, Arc::new(AtomicBool::new(false)), "difflight-fetch") {
             job.result = Some(Err(e));
         }
-        self.jobs.difflight.fetch = Some(job);
+        self.jobs.difflight.fetch[k] = Some(job);
     }
 
     /// The `run` click: adopt a result on disk, else render the input.
@@ -449,10 +605,11 @@ impl Gfx {
             return;
         }
         if !stand_in() {
-            if !installed(&install_dir()) {
-                return self.difflight_fail(node, "DiffusionLight-Turbo is not installed: press install…");
+            let t = tool(self.difflight_model(node));
+            if !t.installed(&t.install_dir()) {
+                return self.difflight_fail(node, &format!("{} is not installed: press install…", t.name));
             }
-            if !weights_ready(&models_dir()) {
+            if !t.weights_ready(&t.models_dir()) {
                 return self.difflight_fail(node, "the weights are not fetched: press fetch weights…");
             }
         }
@@ -470,7 +627,8 @@ impl Gfx {
         let Some(p) = self.egraph.node(node).and_then(|n| params(&n.kind)).cloned() else {
             return self.difflight_fail(node, "the node is gone");
         };
-        let mut cmd = match command(&install_dir()) {
+        let t = tool(p.model);
+        let mut cmd = match command(t, &t.install_dir()) {
             Ok(c) => c,
             Err(e) => return self.difflight_fail(node, &e),
         };
@@ -480,7 +638,7 @@ impl Gfx {
         cmd.arg("--shot")
             .arg(&dir)
             .arg("--models")
-            .arg(models_dir())
+            .arg(t.models_dir())
             .arg("--out")
             .arg(p.out_name())
             .arg("--seed")
@@ -498,6 +656,9 @@ impl Gfx {
         if !p.follow {
             cmd.arg("--no-follow");
         }
+        if p.model == DiffLightModel::LuxDit {
+            cmd.arg("--window").arg(p.window_arg().to_string());
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         if let Err(e) = spawn(cmd, tx, cancel.clone(), "difflight") {
@@ -512,11 +673,8 @@ impl Gfx {
     /// Every redraw: drain the jobs' messages, catch a render that died,
     /// adopt a finished result.
     pub(crate) fn difflight_poll(&mut self) {
-        if let Some(i) = self.jobs.difflight.install.as_mut() {
-            drain(i);
-        }
-        if let Some(f) = self.jobs.difflight.fetch.as_mut() {
-            drain(f);
+        for j in self.jobs.difflight.install.iter_mut().chain(self.jobs.difflight.fetch.iter_mut()).flatten() {
+            drain(j);
         }
         let Some(r) = self.jobs.difflight.run.as_mut() else { return };
         let node = r.node;
@@ -579,7 +737,7 @@ impl Gfx {
 
 /// Fetch the pinned commit into `dir` (fresh, or an earlier install at
 /// another commit), write our pyproject into it and `uv sync`.
-fn install_into(dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
+fn install_into(t: &Tool, dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
     let run = |mut c: std::process::Command| -> Result<(), String> {
         use std::io::BufRead;
         use std::process::Stdio;
@@ -613,10 +771,10 @@ fn install_into(dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
         let _ = tx.send(Msg::Line(format!("git init {}", dir.display())));
         run(git(&["init", "-q"])).map_err(|e| format!("git init: {e}"))?;
     }
-    let _ = tx.send(Msg::Line(format!("git fetch {REPO} {}", &COMMIT[..12])));
-    run(git(&["fetch", "-q", "--depth", "1", REPO, COMMIT])).map_err(|e| format!("git fetch: {e}"))?;
+    let _ = tx.send(Msg::Line(format!("git fetch {} {}", t.repo, &t.commit[..12])));
+    run(git(&["fetch", "-q", "--depth", "1", t.repo, t.commit])).map_err(|e| format!("git fetch: {e}"))?;
     run(git(&["checkout", "-q", "--force", "FETCH_HEAD"])).map_err(|e| format!("git checkout: {e}"))?;
-    std::fs::write(dir.join("pyproject.toml"), PYPROJECT).map_err(|e| format!("writing pyproject.toml: {e}"))?;
+    std::fs::write(dir.join("pyproject.toml"), t.pyproject).map_err(|e| format!("writing pyproject.toml: {e}"))?;
     let _ = tx.send(Msg::Line("uv sync (torch and friends: a few GB, a while)".into()));
     let mut c = std::process::Command::new(uv);
     c.arg("sync").arg("--python").arg("3.12").current_dir(dir);
@@ -655,59 +813,88 @@ mod tests {
     }
 
     #[test]
-    fn the_driver_and_the_app_agree_on_the_pins() {
-        assert_eq!(COMMIT.len(), 40);
-        assert!(COMMIT.chars().all(|c| c.is_ascii_hexdigit()));
-        // The same repositories at the same revisions, in the same order:
-        // `ready_text()` here must be the driver's, byte for byte.
-        let mut last = 0;
-        for (repo, rev) in PINS {
-            assert_eq!(rev.len(), 40);
-            assert!(DRIVER.contains(&format!("\"{repo}\"")), "{repo}");
-            let at = DRIVER.find(&format!("\"{rev}\"")).unwrap_or_else(|| panic!("{repo} @ {rev}"));
-            assert!(at > last, "{repo} is out of order");
-            last = at;
+    fn the_luxdit_driver_speaks_the_same_protocol() {
+        for w in [
+            "WOBBLE\"", "\"frame\"", "\"done\"", "\"error\"", "--shot", "--models", "--out", "--seed", "--steps",
+            "--exposure", "--height", "--window", "--stride", "--smooth", "--no-follow", "--fetch", "\"Raw\"",
+            "\"Input\"", "from wobble_difflight import", "READY = \"READY\"",
+        ] {
+            assert!(LUX_DRIVER.contains(w), "{w}");
         }
-        assert!(DRIVER.contains("f\"{repo} {rev}\\n\""));
-        assert_eq!(ready_text().lines().count(), PINS.len());
+        // What it imports from DiffusionLight's driver is there.
+        for f in ["def read_rgb(", "def write_rgb(", "def srgb_encode(", "def sampled(", "def smooth("] {
+            assert!(DRIVER.contains(f), "{f}");
+        }
+    }
+
+    #[test]
+    fn the_drivers_and_the_app_agree_on_the_pins() {
+        for (t, driver) in [(&TURBO, DRIVER), (&LUXDIT, LUX_DRIVER)] {
+            assert_eq!(t.commit.len(), 40);
+            assert!(t.commit.chars().all(|c| c.is_ascii_hexdigit()));
+            // The same repositories at the same revisions, in the same
+            // order: `ready_text()` here must be the driver's, byte for byte.
+            let mut last = 0;
+            for (repo, rev) in t.pins {
+                assert_eq!(rev.len(), 40);
+                assert!(driver.contains(&format!("\"{repo}\"")), "{repo}");
+                let at = driver.find(&format!("\"{rev}\"")).unwrap_or_else(|| panic!("{repo} @ {rev}"));
+                assert!(at > last, "{repo} is out of order");
+                last = at;
+            }
+            assert!(driver.contains("f\"{repo} {rev}\\n\""));
+            assert_eq!(t.ready_text().lines().count(), t.pins.len());
+        }
+        assert_eq!(tool(DiffLightModel::LuxDit).name, "LuxDiT");
+        assert_ne!(TURBO.install_dir(), LUXDIT.install_dir());
     }
 
     #[test]
     fn only_the_fetch_mode_touches_the_network() {
         // Everything that downloads sits inside `def fetch`, and a run
         // forces the hub offline.
-        let code = DRIVER;
-        let fetch_at = code.find("def fetch(").unwrap();
-        let next_def = code[fetch_at + 1..].find("\ndef ").map(|i| i + fetch_at + 1).unwrap();
-        let mut at = 0;
-        for (i, l) in code.lines().enumerate() {
-            let inside = (fetch_at..next_def).contains(&at);
-            for w in ["hf_hub_download", "snapshot_download", "urllib", "requests"] {
-                if l.contains(w) && !l.trim_start().starts_with('#') {
-                    assert!(inside, "line {}: {w} outside the fetch mode", i + 1);
+        for code in [DRIVER, LUX_DRIVER] {
+            let fetch_at = code.find("def fetch(").unwrap();
+            let next_def = code[fetch_at + 1..].find("\ndef ").map(|i| i + fetch_at + 1).unwrap();
+            let mut at = 0;
+            for (i, l) in code.lines().enumerate() {
+                let inside = (fetch_at..next_def).contains(&at);
+                for w in ["hf_hub_download", "snapshot_download", "urllib", "requests"] {
+                    if l.contains(w) && !l.trim_start().starts_with('#') {
+                        assert!(inside, "line {}: {w} outside the fetch mode", i + 1);
+                    }
                 }
+                at += l.len() + 1;
             }
-            at += l.len() + 1;
+            assert!(code.contains("os.environ[\"HF_HUB_OFFLINE\"] = \"1\""));
         }
-        assert!(code.contains("os.environ[\"HF_HUB_OFFLINE\"] = \"1\""));
     }
 
     #[test]
     fn an_install_is_ours_only_with_our_environment() {
-        let d = std::env::temp_dir().join(format!("wobble-difflight-installed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
+        for t in [&TURBO, &LUXDIT] {
+            let d = std::env::temp_dir().join(format!("wobble-difflight-installed-{}-{}", t.dir_name, std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(d.join(".venv")).unwrap();
+            std::fs::write(d.join(t.marker), "").unwrap();
+            assert!(!t.installed(&d));
+            std::fs::write(d.join("pyproject.toml"), "[project]").unwrap();
+            assert!(!t.installed(&d), "upstream's or an older environment is not installed");
+            std::fs::write(d.join("pyproject.toml"), t.pyproject).unwrap();
+            assert!(t.installed(&d));
+            assert!(!t.weights_ready(&d));
+            std::fs::write(d.join("READY"), t.ready_text()).unwrap();
+            assert!(t.weights_ready(&d));
+            std::fs::write(d.join("READY"), format!("{} 0000\n", t.pins[0].0)).unwrap();
+            assert!(!t.weights_ready(&d), "weights at other revisions are not these weights");
+            let _ = std::fs::remove_dir_all(&d);
+        }
+        // The other model's checkout is not this one's install.
+        let d = std::env::temp_dir().join(format!("wobble-difflight-cross-{}", std::process::id()));
         std::fs::create_dir_all(d.join(".venv")).unwrap();
-        std::fs::write(d.join("ball2envmap.py"), "").unwrap();
-        assert!(!installed(&d));
-        std::fs::write(d.join("pyproject.toml"), "[project]").unwrap();
-        assert!(!installed(&d), "upstream's or an older environment is not installed");
-        std::fs::write(d.join("pyproject.toml"), PYPROJECT).unwrap();
-        assert!(installed(&d));
-        assert!(!weights_ready(&d));
-        std::fs::write(d.join("READY"), ready_text()).unwrap();
-        assert!(weights_ready(&d));
-        std::fs::write(d.join("READY"), "stabilityai/stable-diffusion-xl-base-1.0 0000\n").unwrap();
-        assert!(!weights_ready(&d), "weights at other revisions are not these weights");
+        std::fs::write(d.join(TURBO.marker), "").unwrap();
+        std::fs::write(d.join("pyproject.toml"), LUXDIT.pyproject).unwrap();
+        assert!(!LUXDIT.installed(&d) && !TURBO.installed(&d));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
@@ -924,10 +1111,21 @@ impl Gfx {
                     if self.difflight_dir(t.node) == old {
                         fail("a new seed did not change the estimate's directory".into());
                     }
+                    // LuxDiT is the same node with the other model: a new
+                    // estimate, and research-only, so tagged.
+                    let old = self.difflight_dir(t.node);
+                    edit(self, t.node, &|p| p.model = engine::graph::DiffLightModel::LuxDit);
+                    if self.difflight_dir(t.node) == old {
+                        fail("picking LuxDiT did not change the estimate's directory".into());
+                    }
+                    if engine::cost::licence_of(&self.egraph.nodes[&t.node].kind) != engine::cost::Licence::NonCommercial {
+                        fail("a LuxDiT node is not tagged non-commercial".into());
+                    }
                     println!(
                         "DIFFLIGHT TEST PASS: unrun the node is black; run rendered the plate, ran the tool and \
                          adopted the latlong at its own size, untagged; a smoothing change is STALE under the \
-                         same estimates and its re-run estimates nothing again; a new seed is a new estimate"
+                         same estimates and its re-run estimates nothing again; a new seed is a new estimate; \
+                         LuxDiT is a new estimate and tagged non-commercial"
                     );
                     std::process::exit(0);
                 }

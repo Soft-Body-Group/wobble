@@ -196,6 +196,14 @@ pub fn licence_of(kind: &NodeKind) -> Licence {
     if let NodeKind::Normals(_) = kind {
         return Licence::Restricted;
     }
+    // LuxDiT's code and weights are fetched by its tool, under the NVIDIA
+    // OneWay Noncommercial License (research and evaluation only). The
+    // node runs them, so it is tagged loaded or not; a bake does not clear it.
+    if let NodeKind::DiffLight(p) = kind {
+        if p.model == crate::graph::DiffLightModel::LuxDit {
+            return Licence::NonCommercial;
+        }
+    }
     if crate::models::all_commercial(kind.models()) {
         Licence::Permissive
     } else {
@@ -619,6 +627,9 @@ mod tests {
             assert_eq!(licence_of(&k), Licence::Permissive);
             assert_eq!(speed_of(&k), Speed::Fast);
             assert_eq!(clears_slow(&k, loaded), loaded);
+            let lux = NodeKind::DiffLight(DiffLightParams { loaded, model: crate::graph::DiffLightModel::LuxDit, ..Default::default() });
+            assert_eq!(licence_of(&lux), Licence::NonCommercial, "LuxDiT is research-only, loaded or not");
+            assert_eq!(clears_slow(&lux, loaded), loaded);
         }
     }
 

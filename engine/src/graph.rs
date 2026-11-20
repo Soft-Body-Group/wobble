@@ -44,7 +44,7 @@ pub use crate::nodes::upscale::{UpscaleModel, UpscaleParams, UpscaleScale};
 pub use crate::nodes::seedvr::{SeedColour, SeedModel, SeedVrParams};
 pub use crate::nodes::depth::{DepthModel, DepthOut, DepthParams};
 pub use crate::nodes::ltxhdr::{LtxHdrParams, LtxOffload, LtxScale};
-pub use crate::nodes::difflight::{DiffLightParams, DiffLightSize};
+pub use crate::nodes::difflight::{DiffLightModel, DiffLightParams, DiffLightSize};
 pub use crate::nodes::hdrcnn::{HdrCnnModel, HdrCnnParams};
 pub use crate::nodes::stabilize::{StabMode, StabModel, StabPath, StabPathRef, StabilizeParams};
 pub use crate::nodes::camtrack::{CamSolve, CamSolveRef, CamTrackParams};

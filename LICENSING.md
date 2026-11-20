@@ -85,6 +85,11 @@ its own licence, which Wobble shows before anything is downloaded:
   DiffusionLight node, with the weights it runs on: Stable Diffusion XL and
   its depth ControlNet (CreativeML Open RAIL++-M), the DiffusionLight LoRAs
   (MIT) and DPT-Large (Apache-2.0).
+- **LuxDiT** (NVIDIA OneWay Noncommercial License: research and evaluation
+  only), installed from its own repository by the DiffusionLight node with
+  the LuxDiT model picked, offered only on an NVIDIA GPU. Its weights are
+  under the same licence; it also fetches the VAE and scheduler of
+  CogVideoX-5B-I2V (CogVideoX License). The node is tagged non-commercial.
 - **NormalCrafter** (MIT), installed from its own repository by the
   Normals node. Its weights, fetched by the tool on its first run, are a
   fine-tune of Stable Video Diffusion and come under the Stability AI

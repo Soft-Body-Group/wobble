@@ -2239,6 +2239,28 @@ camera is invented, plausibly.
   **CreativeML Open RAIL++-M** (commercial use allowed, with restrictions on
   what the model is used for), DPT-Large **Apache-2.0**. Not tagged.
 
+### LuxDiT
+
+On a machine with an NVIDIA GPU, AI / ML ▸ **LuxDiT** is the same node
+with NVIDIA's [LuxDiT](https://research.nvidia.com/labs/toronto-ai/LuxDiT/)
+picked (also in the node's model menu). It is a VIDEO model: it sees the
+clip in windows of **window** frames (25 by default; smaller needs less GPU
+memory), so the environment holds together within a window, and windows
+overlap and cross-fade. It is steadier than DiffusionLight before any
+smoothing (about a quarter of the frame-to-frame change on a test clip)
+and its environments are more plausible; the smoothing, **every** and
+**follow the plate** work the same. It sees a 480x720 centre crop of the
+plate, so a wide plate loses its sides. Its latlong is brought to the
+plate's level (the part the camera sees reads as bright as the frames).
+
+- Its own **install…** puts the tool in `~/.wobble/LuxDiT`; **fetch
+  weights…** downloads ~24 GB (LuxDiT's video and image models and HDR
+  merger, and CogVideoX-5B-I2V's VAE). CUDA only. Measured on an RTX 5080:
+  25 frames in under three minutes, 13 GB of VRAM.
+- **Research use only**: LuxDiT's code and weights are under the NVIDIA
+  OneWay Noncommercial License, so the node is tagged (and a Bake does not
+  clear it). It is not offered on a machine without an NVIDIA GPU.
+
 ## Sammie — click-to-roto with SAM 2
 
 **Sammie** (AI) rotos by clicking. It runs the models

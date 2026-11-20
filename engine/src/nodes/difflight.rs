@@ -27,11 +27,46 @@
 //! `stride` are a second pass over estimates kept on disk: changing them
 //! re-runs no diffusion.
 //!
+//! Two models estimate it (`model`):
+//!
+//! - **DiffusionLight-Turbo** — every frame its own estimate; anywhere.
+//! - **LuxDiT** (NVIDIA) — a video diffusion transformer that sees the clip
+//!   in windows of `window` frames, so the environment is consistent within
+//!   a window. CUDA only; the app offers it only where an NVIDIA GPU is.
+//!
 //! Licence (manifesto rule 10): DiffusionLight's code and both LoRAs are
 //! MIT, SDXL and its depth ControlNet are CreativeML Open RAIL++-M
 //! (commercial use allowed, with use restrictions on the model that do not
-//! reach a lighting estimate), DPT-Large is Apache-2.0. Free to deliver,
-//! not tagged.
+//! reach a lighting estimate), DPT-Large is Apache-2.0: free to deliver,
+//! not tagged. LuxDiT's code and weights are under the NVIDIA OneWay
+//! Noncommercial License (research and evaluation only): a LuxDiT node is
+//! tagged Restricted (`cost::licence_of`), and a Bake does not clear it.
+
+/// Which model estimates the environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DiffLightModel {
+    #[default]
+    Turbo,
+    LuxDit,
+}
+
+impl DiffLightModel {
+    pub fn label(self) -> &'static str {
+        match self {
+            DiffLightModel::Turbo => "DiffusionLight-Turbo",
+            DiffLightModel::LuxDit => "LuxDiT",
+        }
+    }
+
+    /// The authors' defaults: (seed, steps).
+    pub fn defaults(self) -> (u32, u32) {
+        match self {
+            DiffLightModel::Turbo => (200, 30),
+            DiffLightModel::LuxDit => (33, 40),
+        }
+    }
+}
 
 /// The latlong's rows (it is twice as wide). The ball it is unwrapped from
 /// is 256 px across, so more rows are a smoother picture, not more detail.
@@ -74,6 +109,9 @@ impl DiffLightSize {
 pub struct DiffLightParams {
     /// Reader slot the result plays through.
     pub source: usize,
+    pub model: DiffLightModel,
+    /// LuxDiT: frames the model sees at once (4k+1, the authors' 25).
+    pub window: u32,
     /// Stops applied to the plate before the model sees it (it is shown an
     /// sRGB picture clipped at 1), and divided back out of the result.
     pub exposure: f32,
@@ -102,6 +140,8 @@ impl Default for DiffLightParams {
     fn default() -> Self {
         Self {
             source: 0,
+            model: DiffLightModel::Turbo,
+            window: 25,
             exposure: 0.0,
             seed: 200,
             steps: 30,
@@ -124,6 +164,12 @@ impl DiffLightParams {
         Self { source, ..Default::default() }
     }
 
+    /// A node of `model` with that model's own seed and steps.
+    pub fn with_model(source: usize, model: DiffLightModel) -> Self {
+        let (seed, steps) = model.defaults();
+        Self { source, model, seed, steps, ..Default::default() }
+    }
+
     /// Loaded or not is the whole of the topology.
     pub fn topo_tag(&self) -> u64 {
         self.loaded as u64
@@ -137,6 +183,12 @@ impl DiffLightParams {
         self.stride.clamp(1, 64)
     }
 
+    /// The window the tool is given: 4k+1, 5..=49.
+    pub fn window_arg(&self) -> u32 {
+        let w = self.window.clamp(5, 49);
+        w - (w - 1) % 4
+    }
+
     pub fn smooth_arg(&self) -> f32 {
         if self.smooth.is_finite() {
             self.smooth.clamp(0.0, 50.0)
@@ -147,8 +199,11 @@ impl DiffLightParams {
 
     /// Everything that shapes an ESTIMATE, for the app's result key: what
     /// the model is shown and how it is run. Not the smoothing pass.
-    pub fn recipe(&self) -> (u32, u32, u32, u32) {
-        (self.exposure.to_bits(), self.seed, self.steps_arg(), self.size.rows())
+    /// The model is in it, and LuxDiT's window (Turbo has none: 0, so a
+    /// Turbo key is what it was before LuxDiT existed in shape).
+    pub fn recipe(&self) -> (u32, u32, u32, u32, DiffLightModel, u32) {
+        let window = if self.model == DiffLightModel::LuxDit { self.window_arg() } else { 0 };
+        (self.exposure.to_bits(), self.seed, self.steps_arg(), self.size.rows(), self.model, window)
     }
 
     /// The smoothing pass's own directory under the estimate's: a new
@@ -198,6 +253,7 @@ mod tests {
             DiffLightParams { seed: 1, ..a.clone() },
             DiffLightParams { steps: 20, ..a.clone() },
             DiffLightParams { size: DiffLightSize::R512, ..a.clone() },
+            DiffLightParams { model: DiffLightModel::LuxDit, ..a.clone() },
         ] {
             assert_ne!(a.recipe(), other.recipe());
             assert_eq!(a.out_name(), other.out_name());
@@ -212,6 +268,18 @@ mod tests {
         let p = DiffLightParams { steps: 0, stride: 0, smooth: f32::NAN, ..Default::default() };
         assert_eq!((p.steps_arg(), p.stride_arg(), p.smooth_arg()), (4, 1, 0.0));
         assert_eq!(DiffLightSize::R1024.rows(), 1024);
+        for (w, want) in [(0, 5), (25, 25), (24, 21), (26, 25), (100, 49)] {
+            assert_eq!(DiffLightParams { window: w, ..Default::default() }.window_arg(), want, "{w}");
+        }
+    }
+
+    #[test]
+    fn the_window_is_luxdits_alone() {
+        let a = DiffLightParams::default();
+        assert_eq!(a.recipe(), DiffLightParams { window: 9, ..a.clone() }.recipe(), "Turbo has no window");
+        let l = DiffLightParams::with_model(0, DiffLightModel::LuxDit);
+        assert_eq!((l.seed, l.steps), (33, 40));
+        assert_ne!(l.recipe(), DiffLightParams { window: 9, ..l.clone() }.recipe());
     }
 
     #[cfg(feature = "serde")]
@@ -221,6 +289,6 @@ mod tests {
         let j = serde_json::to_string(&p).unwrap();
         assert!(!j.contains("loaded") && !j.contains("start"), "{j}");
         let old: DiffLightParams = serde_json::from_str(r#"{"source":1}"#).unwrap();
-        assert!(old.follow && old.steps == 30);
+        assert!(old.follow && old.steps == 30 && old.model == DiffLightModel::Turbo);
     }
 }

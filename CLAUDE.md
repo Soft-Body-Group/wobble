@@ -310,7 +310,7 @@ In [docs/claude/subsystems.md](docs/claude/subsystems.md), one section each:
 - Depth node (`engine/src/nodes/depth.rs`, `app/src/depth.rs`, `tools/wobble_depth.py`)
 - HDRCNN node (`engine/src/hdrcnn.rs`, `engine/src/nodes/hdrcnn.rs`, `app/src/hdrcnnui.rs`)
 - LTX HDR node (`engine/src/nodes/ltxhdr.rs`, `app/src/ltxhdr.rs`, `tools/wobble_ltxhdr.py`)
-- DiffusionLight node (`engine/src/nodes/difflight.rs`, `app/src/difflight.rs`, `tools/wobble_difflight.py`)
+- DiffusionLight node, + LuxDiT (`engine/src/nodes/difflight.rs`, `app/src/difflight.rs`, `tools/wobble_difflight.py`, `tools/wobble_luxdit.py`)
 - Planar tracker (`engine/src/planar.rs`, `app/src/planarui.rs`)
 - Morph Dissolve (`engine/src/nodes/morphdissolve.rs`, `app/src/nodes/morphdissolve.rs`, `flowsolve::run_pair`)
 - Flow + motion vectors (`engine/src/searaft*`, `engine/src/rife*`, `engine/src/flowsolve.rs`, `engine/src/nodes/flow.rs`, `app/src/flowui.rs`)

@@ -411,6 +411,37 @@ stay true:
 - **Licence: Permissive.** MIT code and LoRAs, OpenRAIL++-M SDXL +
   ControlNet, Apache-2.0 DPT. If a restricted base model is ever offered,
   tag it per instance in `cost::licence_of`.
+- **LuxDiT is a MODEL of this node, not a node** (`DiffLightModel`), and
+  everything that differs is a `difflight::Tool` (`tool(model)`): repo,
+  commit, pyproject, driver, pins, wording; install and fetch jobs are kept
+  per model, the run is one (one GPU). `tools/wobble_luxdit.py` imports
+  `smooth`, `sampled` and the EXR helpers from `wobble_difflight.py` (the
+  app writes both into the LuxDiT checkout): ONE smoothing spec. It loads
+  the pipeline itself (not `inference_luxdit.main`): the HF layout has the
+  transformer at the checkpoint root, the LoRA needs `weight_name` offline,
+  and only CogVideoX's VAE + scheduler are fetched, never its T5 (the
+  model conditions on no prompt).
+- **LuxDiT shows only on NVIDIA.** `difflight::nvidia()` is the adapter's
+  PCI vendor (0x10de, set once by `set_adapter`; `WOBBLE_LUXDIT=1` forces
+  it): the AI menu entry and the model picker leave it out elsewhere. A
+  scene that already has one still opens and shows it (and its run fails
+  with a plain "needs an NVIDIA GPU" from the driver).
+- **LuxDiT's windows and level.** Picked frames go through in windows of
+  `window` (4k+1, the VAE packs four frames a latent; default 25, the
+  authors' longest), overlapping by a quarter and cross-faded linearly, one
+  seed for all. A one-frame range runs the IMAGE checkpoint. The merger's
+  HDR comes out ~2x the plate's level; each window is scaled by ONE factor
+  so the latlong's view region (HFOV 60 deg, `view_level`) matches the
+  mean of what the model was shown (`plate_level`) — measured, after it the
+  latlong's mean matches DiffusionLight's within a few percent on the same
+  clip. Measured on the 5080: 25 frames in 164 s at 13.1 GB, a 9-frame
+  window 59 s at 12.7 GB; frame-to-frame log change 0.017 (window 25)
+  against DiffusionLight's 0.069 raw. Known: inside a 13-frame window the
+  first four frames came out identical (VAE temporal packing); smoothing
+  covers it.
+- **LuxDiT's licence: NonCommercial** in `cost::licence_of` (NVIDIA OneWay
+  Noncommercial: research and evaluation only), loaded or not; a Bake does
+  not clear it.
 - `--test-difflight` runs against `--difflight-fake` (a flat 512x256
   latlong, halved by `--no-follow`, markers in `Raw/`): black unrun, the
   latlong's format, untagged, a smoothing change STALE under the same

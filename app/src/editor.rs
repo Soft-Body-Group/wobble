@@ -1121,6 +1121,10 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // a click, composited back where the plate clipped. Restricted
         // licence, tagged.
         e(Ai, "LTX HDR", true, |s| NodeKind::LtxHdr(engine::graph::LtxHdrParams::new(s))),
+        // DiffusionLight-Turbo: an HDR latlong of the lighting around the
+        // camera, estimated from the plate on a click (a process), played
+        // back like a bake. (LuxDiT, the same node, is pushed below: on an
+        // NVIDIA GPU only.)
         e(Ai, "DiffusionLight", true, |s| NodeKind::DiffLight(engine::graph::DiffLightParams::new(s))),
         // Motion vectors: RIFE on a click, played back like a bake, read by
         // VectorBlur / VectorWarp (or anything else that reads a picture).
@@ -1186,6 +1190,18 @@ pub fn node_catalog() -> Vec<NodeEntry> {
         // sees a graph, so it is tidiness with no frame-rate attached.
         e(Utility, "Dot", false, |_| NodeKind::dot(PortKind::Image)),
     ];
+    // LuxDiT (NVIDIA): the DiffusionLight node with the video model
+    // picked — the clip in windows, consistent within each. CUDA only, so
+    // offered only where an NVIDIA GPU is; research-only licence, tagged.
+    if crate::difflight::nvidia() {
+        let at = v.iter().position(|n| n.label == "DiffusionLight").map_or(v.len(), |i| i + 1);
+        v.insert(
+            at,
+            e(Ai, "LuxDiT", true, |s| {
+                NodeKind::DiffLight(engine::graph::DiffLightParams::with_model(s, engine::graph::DiffLightModel::LuxDit))
+            }),
+        );
+    }
     // One node per remote model, named for it: the model is the node, not
     // a dropdown inside one. Chain them in the comp, collapse a chain into
     // a subwob. Video models only where a video take can play.

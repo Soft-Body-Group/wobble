@@ -6223,6 +6223,7 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         std::env::var("WOBBLE_PAR_DECODE").is_err(),
     ));
     report::set_gpu(&ctx.adapter.get_info());
+    difflight::set_adapter(&ctx.adapter.get_info());
     let surface = ctx.instance.create_surface(window.clone())?;
     let size = window.inner_size();
     let mut config = surface
@@ -11693,7 +11694,7 @@ impl Gfx {
         if self.jobs.ltxhdr.run.is_some() || self.jobs.ltxhdr.install.is_some() || self.jobs.ltxhdr.fetch.is_some() {
             self.ltxhdr_poll();
         }
-        if self.jobs.difflight.run.is_some() || self.jobs.difflight.install.is_some() || self.jobs.difflight.fetch.is_some() {
+        if self.jobs.difflight.any() {
             self.difflight_poll();
         }
         if self.planar_job.is_some() {

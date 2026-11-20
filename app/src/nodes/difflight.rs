@@ -2,10 +2,10 @@
 //! `engine::nodes::difflight`; the runner (install, fetch, render, process,
 //! adopt) in `crate::difflight`.
 
-use crate::difflight::{Action, View, ViewState, LICENCE_URL, REPO, SDXL_LICENCE_URL, WEIGHTS_BYTES, WHERE};
+use crate::difflight::{tool, Action, View, ViewState, LICENCE_URL, LUX_LICENCE_URL, SDXL_LICENCE_URL};
 use crate::theme;
 use egui::{Color32, Painter, Pos2, Stroke, Ui, Vec2};
-use engine::graph::{DiffLightParams, DiffLightSize};
+use engine::graph::{DiffLightModel, DiffLightParams, DiffLightSize};
 
 pub const TILES: usize = 2;
 pub const TILE_ROWS: usize = 2;
@@ -14,17 +14,42 @@ pub const TILE_ROWS: usize = 2;
 /// node borrow ends.
 pub fn panel(ui: &mut Ui, node: u64, p: &mut DiffLightParams, v: &View) -> Option<Action> {
     let mut act = None;
+    let t = tool(p.model);
+    let lux = p.model == DiffLightModel::LuxDit;
     ui.horizontal_wrapped(|ui| {
-        ui.weak("DiffusionLight-Turbo ·");
-        ui.hyperlink_to("MIT", LICENCE_URL).on_hover_text("the method's code and both of its LoRAs are MIT");
-        ui.weak("· on SDXL ·");
-        ui.hyperlink_to("Open RAIL++-M", SDXL_LICENCE_URL).on_hover_text(
-            "Stable Diffusion XL and its depth ControlNet: commercial use is allowed, with restrictions on what the model may be used for. The depth estimator (DPT-Large) is Apache-2.0. Nothing here is non-commercial, so the node is not tagged",
-        );
+        // The picker offers LuxDiT only where it can run (an NVIDIA GPU);
+        // a node that already is one keeps showing it.
+        if v.nvidia || lux {
+            let before = p.model;
+            egui::ComboBox::from_id_salt(("difflight-model", node)).width(150.0).selected_text(p.model.label()).show_ui(ui, |ui| {
+                ui.selectable_value(&mut p.model, DiffLightModel::Turbo, DiffLightModel::Turbo.label());
+                if v.nvidia {
+                    ui.selectable_value(&mut p.model, DiffLightModel::LuxDit, DiffLightModel::LuxDit.label());
+                }
+            });
+            if p.model != before {
+                (p.seed, p.steps) = p.model.defaults();
+            }
+        } else {
+            ui.weak("DiffusionLight-Turbo");
+        }
+        if lux {
+            ui.weak("·");
+            ui.hyperlink_to(egui::RichText::new("non-commercial").color(theme::error()), LUX_LICENCE_URL).on_hover_text(
+                "LuxDiT's code and weights are under the NVIDIA OneWay Noncommercial License: research and evaluation only. The node is tagged, everything downstream is flagged, a Write warns, and a Bake does not clear it",
+            );
+        } else {
+            ui.weak("·");
+            ui.hyperlink_to("MIT", LICENCE_URL).on_hover_text("the method's code and both of its LoRAs are MIT");
+            ui.weak("· on SDXL ·");
+            ui.hyperlink_to("Open RAIL++-M", SDXL_LICENCE_URL).on_hover_text(
+                "Stable Diffusion XL and its depth ControlNet: commercial use is allowed, with restrictions on what the model may be used for. The depth estimator (DPT-Large) is Apache-2.0. Nothing here is non-commercial, so the node is not tagged",
+            );
+        }
     });
     // --- install --------------------------------------------------------
     if v.installed {
-        ui.weak(format!("installed at {}", v.dir)).on_hover_text(WHERE);
+        ui.weak(format!("installed at {}", v.dir)).on_hover_text(t.where_);
     } else if let Some(line) = &v.installing {
         ui.horizontal(|ui| {
             ui.add(egui::Spinner::new().size(12.0));
@@ -34,8 +59,8 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DiffLightParams, v: &View) -> Optio
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(theme::error(), "not installed");
             let b = ui.add_enabled(v.uv, egui::Button::new("install…")).on_hover_text(format!(
-                "fetch {REPO} (pinned) into {} and uv sync there (torch: a few GB). Nothing is fetched until you press this. {WHERE}",
-                v.dir
+                "fetch {} (pinned) into {} and uv sync there (torch: a few GB). Nothing is fetched until you press this. {}",
+                t.repo, v.dir, t.where_
             ));
             if b.clicked() {
                 act = Some(Action::Install);
@@ -58,9 +83,14 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DiffLightParams, v: &View) -> Optio
         });
     } else {
         let b = ui
-            .add_enabled(v.installed, egui::Button::new(format!("fetch weights… ({:.1} GB)", WEIGHTS_BYTES as f64 / 1e9)))
+            .add_enabled(v.installed, egui::Button::new(format!("fetch weights… ({:.1} GB)", t.weights_bytes as f64 / 1e9)))
             .on_hover_text(format!(
-                "SDXL base, its depth ControlNet, the Turbo and Exposure LoRAs and DPT-Large from Hugging Face, at pinned revisions, into {}/models. Public: no login. Nothing is downloaded until you press this, and a run is offline",
+                "{} from Hugging Face, at pinned revisions, into {}/models. Public: no login. Nothing is downloaded until you press this, and a run is offline",
+                if lux {
+                    "LuxDiT's video and image transformers, their LoRAs and HDR merger (NVIDIA OneWay Noncommercial License: research and evaluation only), and CogVideoX-5B-I2V's VAE and scheduler (CogVideoX License)"
+                } else {
+                    "SDXL base, its depth ControlNet, the Turbo and Exposure LoRAs and DPT-Large"
+                },
                 v.dir
             ));
         if b.clicked() {
@@ -89,7 +119,15 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DiffLightParams, v: &View) -> Optio
             }
         }).response.on_hover_text("the latlong's size. It is unwrapped from a 256 px ball, so a bigger one is smoother, not more detailed");
         ui.label("steps");
-        ui.add(egui::DragValue::new(&mut p.steps).speed(0.2).range(4..=100)).on_hover_text("denoising steps: 30 is the authors'. Time is proportional");
+        let authors = p.model.defaults().1;
+        ui.add(egui::DragValue::new(&mut p.steps).speed(0.2).range(4..=100))
+            .on_hover_text(format!("denoising steps: {authors} is the authors'. Time is proportional"));
+        if lux {
+            ui.label("window");
+            ui.add(egui::DragValue::new(&mut p.window).speed(0.2).range(5..=49).suffix(" fr")).on_hover_text(
+                "frames the model sees at once, as one video: the environment is consistent within a window, and windows overlap and cross-fade. Rounded to 4k+1. The authors trained on up to 25; a smaller window needs less GPU memory",
+            );
+        }
     });
     // --- over time (a second pass: no estimate is made again) -------------
     ui.horizontal(|ui| {
@@ -156,7 +194,7 @@ pub fn panel(ui: &mut Ui, node: u64, p: &mut DiffLightParams, v: &View) -> Optio
                 act = Some(Action::Run);
             }
             if v.busy_elsewhere {
-                ui.weak("another DiffusionLight is running");
+                ui.weak("another light estimate is running");
             }
             if matches!(v.state, ViewState::Failed(_) | ViewState::Done(_)) && ui.small_button("dismiss").clicked() {
                 act = Some(Action::Dismiss);
@@ -199,11 +237,13 @@ mod tests {
     fn the_panel_fits_the_tiles_it_asks_for() {
         let span = |n: usize| crate::widgets::TILE * n as f32 + crate::widgets::TILE_GAP * (n as f32 - 1.0);
         let (w, hgt) = (span(TILES) - 14.0, span(TILE_ROWS) - 14.0 - 22.0);
-        for (name, state, installed) in [
-            ("difflight-panel-install", ViewState::Failed("DiffusionLight-Turbo is not installed: press install…".into()), false),
-            ("difflight-panel-running", ViewState::Running(22, 96), true),
+        for (name, state, installed, model) in [
+            ("difflight-panel-install", ViewState::Failed("DiffusionLight-Turbo is not installed: press install…".into()), false, DiffLightModel::Turbo),
+            ("difflight-panel-running", ViewState::Running(22, 96), true, DiffLightModel::Turbo),
+            ("difflight-panel-luxdit", ViewState::Running(22, 96), true, DiffLightModel::LuxDit),
         ] {
             let v = View {
+                nvidia: true,
                 dir: "/Users/someone/.wobble/DiffusionLight-Turbo".into(),
                 installed,
                 uv: true,
@@ -219,7 +259,7 @@ mod tests {
                 on_disk: false,
                 busy_elsewhere: false,
             };
-            let mut p = DiffLightParams::new(0);
+            let mut p = DiffLightParams::with_model(0, model);
             let over = std::cell::Cell::new(0.0f32);
             let wide = std::cell::Cell::new(0.0f32);
             let shot = crate::snapshot::shoot(w, hgt, |ui| {
