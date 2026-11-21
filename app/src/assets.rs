@@ -253,6 +253,15 @@ fn choose(
     }
 }
 
+/// organisicator's asset id for a file or `####` sequence written in place
+/// inside one of its projects (it indexes the folder where it is: POST
+/// `/v1/register`). Errors when organisicator isn't running or the path is
+/// outside every project it knows.
+pub fn register_id(path: &str) -> Result<i64, String> {
+    let v = Client::discover()?.post("/v1/register", &serde_json::json!({ "path": path }))?;
+    v.get("id").and_then(|i| i.as_i64()).ok_or_else(|| format!("organisicator has no asset for {path}"))
+}
+
 /// organisicator's id for `project`'s project (matched by where it is on
 /// this machine) and for the level at `inst_rel` in it.
 pub fn api_ids(client: &Client, root: &std::path::Path, inst_rel: Option<&str>) -> Option<(i64, Option<i64>)> {

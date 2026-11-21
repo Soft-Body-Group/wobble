@@ -1387,10 +1387,9 @@ const TRACK_H: f32 = 25.3; // 22 + 15%
 /// Returns what loaded; errors are logged, never fatal — one broken plugin
 /// must not take the app down.
 fn load_plugins() -> Vec<String> {
-    let mut dirs = vec![std::path::PathBuf::from("plugins")];
-    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        dirs.push(std::path::Path::new(&home).join(".wobble/plugins"));
-    }
+    // The same folders addons come from (`addons::dirs`): also the repo's
+    // `plugins/` when a build is started from outside the repo.
+    let dirs = crate::addons::dirs();
     let mut all = Vec::new();
     // The input proxies a tool body wires its ports to. Registered before
     // any manifest loads, so a body referring to them always resolves.
@@ -5418,7 +5417,8 @@ enum AssetAct {
     /// An addon's picker button (addon id, picker id): the addon fills the
     /// Load through the API (`load_set`).
     AddonPick(String, String),
-    /// A Project Load's footage, from the project browser.
+    /// Footage from a project: wobble's Load browser opened on it, picks
+    /// by organisicator id (`Gfx::open_project_seq_browser`).
     PickProject,
     Reload,
     Forget,
@@ -9299,6 +9299,82 @@ impl Gfx {
 
     /// The project browser, opened onto where the open comp (or the
     /// Load's footage) is.
+    /// The Load browser on a project: opened where the Load's footage is,
+    /// else the comp's folder, else the managed projects root. Whatever is
+    /// picked inside an organisicator project loads BY ID (see
+    /// `pick_by_id`), so it follows moves and renames.
+    fn open_project_seq_browser(&mut self, node: Option<u64>) {
+        let footage = node.and_then(|n| self.egraph.node(n)).and_then(|n| match &n.kind {
+            NodeKind::Read { path, .. } if n.asset.is_some() => Path::new(path).parent().map(Path::to_path_buf),
+            _ => None,
+        });
+        let comp = self.current_setup.as_deref().and_then(Path::parent).map(Path::to_path_buf);
+        let start = footage
+            .filter(|d| d.is_dir())
+            .or(comp.filter(|d| d.is_dir()))
+            .or_else(|| projects::managed_root().filter(|d| d.is_dir()))
+            .or_else(|| std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(std::path::PathBuf::from))
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let mut b = browser::SeqBrowser::new(node, start, self.decoder.clone());
+        b.by_id = true;
+        self.browser = Some(b);
+    }
+
+    /// A project browser's pick, as Loads by organisicator id: each pick is
+    /// registered with organisicator (indexed where it is) and the Load
+    /// takes the id. A pick it can't name (outside every project, or
+    /// organisicator closed) stays a plain path Load — or, on a Project
+    /// Load, which never holds a path, an error on the node.
+    fn pick_by_id(&mut self, target: Option<u64>, act: browser::BrowserAction) -> browser::BrowserAction {
+        let take_id = |g: &mut Self, node: u64, display: &str| -> bool {
+            match assets::register_id(display) {
+                Ok(id) => {
+                    if let Some(n) = g.egraph.node_mut(node) {
+                        n.asset = Some(assets::AssetRef { id, ..Default::default() });
+                    }
+                    g.load_asset(node);
+                    true
+                }
+                Err(e) => {
+                    log::warn!("project browser: {display} loads by path ({e})");
+                    if g.egraph.node(node).is_some_and(|n| n.project_only) {
+                        g.load_errors.insert(node, format!("not loaded by id: {e}"));
+                        g.playback_dirty = true;
+                    }
+                    false
+                }
+            }
+        };
+        match (target, act) {
+            (Some(node), browser::BrowserAction::Pick { display, frames, missing }) => {
+                if let Some(dir) = Path::new(&display).parent() {
+                    self.push_recent(dir.to_path_buf());
+                }
+                if !take_id(self, node, &display) && !self.egraph.node(node).is_some_and(|n| n.project_only) {
+                    return browser::BrowserAction::Pick { display, frames, missing };
+                }
+                browser::BrowserAction::Close
+            }
+            (None, browser::BrowserAction::Pick { display, frames, missing }) => {
+                self.pick_many_by_id(vec![browser::Picked { display, frames, missing }], take_id);
+                browser::BrowserAction::Close
+            }
+            (_, browser::BrowserAction::PickMany(picks)) => {
+                self.pick_many_by_id(picks, take_id);
+                browser::BrowserAction::Close
+            }
+            (_, act) => act,
+        }
+    }
+
+    fn pick_many_by_id(&mut self, picks: Vec<browser::Picked>, take_id: impl Fn(&mut Self, u64, &str) -> bool) {
+        let names: Vec<String> = picks.iter().map(|p| p.display.clone()).collect();
+        self.spawn_reads(picks);
+        for (node, display) in self.selected.clone().into_iter().zip(names) {
+            take_id(self, node, &display);
+        }
+    }
+
     fn open_project_browser(&mut self, mode: projectui::Mode) {
         let here = match mode {
             projectui::Mode::Media(node) => self.egraph.node(node).and_then(|n| n.asset.clone()),
@@ -15888,6 +15964,7 @@ impl Gfx {
                 }
                 act => act,
             };
+            let act = if b.by_id && !b.pick_folder { self.pick_by_id(b.target_node, act) } else { act };
             match act {
                 browser::BrowserAction::PickDir(dir) => {
                     if let Some(NodeKind::Write(wp)) =
@@ -24913,10 +24990,9 @@ impl Gfx {
                     // An addon's database browser (organisicator's) when one
                     // is on: it knows what the project holds, renders
                     // included. wobble's own by-name browser otherwise.
-                    Some(AssetAct::PickProject) => match load_pickers.first() {
-                        Some((addon, k)) => self.addons.pick(addon, &k.id, key),
-                        None => self.open_project_browser(projectui::Mode::Media(key)),
-                    },
+                    // wobble's own Load browser (thumbnails, scrubbing, the
+                    // bin) on the project; picks become Loads by id.
+                    Some(AssetAct::PickProject) => self.open_project_seq_browser(Some(key)),
                     Some(AssetAct::Reload) => self.load_asset(key),
                     Some(AssetAct::Ingest) => self.open_project_browser(projectui::Mode::Ingest(key)),
                     Some(AssetAct::Forget) => {

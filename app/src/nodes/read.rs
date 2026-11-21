@@ -665,6 +665,15 @@ pub(crate) fn panel(
 /// One button per enabled addon picker for a Load; a click asks the addon
 /// (`addons::Addons::pick`), which fills the Load through `load_set`.
 fn picker_buttons(ui: &mut egui::Ui, pickers: &[(String, addons::PickerDef)], asset_act: &mut Option<AssetAct>) {
+    // Built in: the Load browser on the project, picks by organisicator id.
+    #[cfg(not(target_arch = "wasm32"))]
+    if ui
+        .button("project browser…")
+        .on_hover_text("footage from a managed project, with thumbnails, scrubbing and the bin; what you pick loads by organisicator id")
+        .clicked()
+    {
+        *asset_act = Some(AssetAct::PickProject);
+    }
     for (addon, k) in pickers {
         let b = ui.button(&k.label);
         let b = if k.tip.is_empty() { b } else { b.on_hover_text(&k.tip) };

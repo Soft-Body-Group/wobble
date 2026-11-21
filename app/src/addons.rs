@@ -780,12 +780,31 @@ pub fn menu_items(addons: &Addons) -> Vec<crate::tiltmenu::Item> {
 }
 
 /// The folders addons are found in: the same as plugins and tools.
+/// `plugins/` beside the working directory, then the repo's `plugins/` found
+/// above the executable (a build in `target/release` started from
+/// elsewhere — by organisicator, from Finder), then `~/.wobble/plugins`.
 pub fn dirs() -> Vec<PathBuf> {
     let mut d = vec![PathBuf::from("plugins")];
+    if let Some(p) = std::env::current_exe().ok().and_then(|e| repo_plugins(&e)) {
+        let same = std::fs::canonicalize("plugins").ok() == std::fs::canonicalize(&p).ok();
+        if !same {
+            d.push(p);
+        }
+    }
     if let Some(h) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         d.push(Path::new(&h).join(".wobble/plugins"));
     }
     d
+}
+
+/// The nearest `plugins/` folder holding addons or plugins, within four
+/// folders above `exe` (`<repo>/target/release/wobble` → `<repo>/plugins`).
+pub fn repo_plugins(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .skip(1)
+        .take(4)
+        .map(|a| a.join("plugins"))
+        .find(|p| p.is_dir() && std::fs::read_dir(p).is_ok_and(|mut r| r.any(|e| e.is_ok_and(|e| e.path().is_dir()))))
 }
 
 #[cfg(test)]
@@ -798,6 +817,17 @@ mod tests {
         let m = Manifest::parse(&t).unwrap();
         assert_eq!(m.id, "hello_addon");
         assert!(!m.commands.is_empty() && !m.panels.is_empty() && !m.run.is_empty());
+    }
+
+    #[test]
+    fn a_build_finds_the_repos_plugins_from_anywhere() {
+        let d = std::env::temp_dir().join(format!("wob_repo_plugins_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("target/release")).unwrap();
+        assert_eq!(repo_plugins(&d.join("target/release/wobble")), None);
+        std::fs::create_dir_all(d.join("plugins/organisicator")).unwrap();
+        assert_eq!(repo_plugins(&d.join("target/release/wobble")), Some(d.join("plugins")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

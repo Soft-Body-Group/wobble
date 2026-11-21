@@ -1080,6 +1080,9 @@ pub struct SeqBrowser {
     /// The folder of the saved comp (`.wbl`), offered under Home; None
     /// while the comp is unsaved. The shell refreshes it every show.
     pub comp_dir: Option<PathBuf>,
+    /// The project browser: what's picked inside an organisicator project
+    /// becomes a Load BY ID (`assets::register_id`), anything else a path.
+    pub by_id: bool,
     dir: PathBuf,
     filter: String,
     listing: Option<Result<Listing, String>>,
@@ -1174,6 +1177,7 @@ impl SeqBrowser {
         Self {
             target_node,
             pick_folder: false,
+            by_id: false,
             dir: start,
             filter: String::new(),
             listing: None,
@@ -1590,6 +1594,7 @@ impl SeqBrowser {
         let mut open = true;
         let title = match self.target_node {
             _ if self.pick_folder => "render location — pick a folder",
+            _ if self.by_id => "project footage — loads by organisicator id",
             Some(_) => "sequences",
             None => "sequences — collect into bin",
         };
