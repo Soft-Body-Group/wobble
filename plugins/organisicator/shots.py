@@ -247,6 +247,32 @@ def api_get(path: str) -> dict:
         raise RuntimeError("organisicator isn't running — start it to reach its projects") from e
 
 
+def api_post(path: str, body: dict, timeout: float = 30) -> dict:
+    """POST JSON to organisicator's local API (it must be running)."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with open(os.environ.get("ORGANISICATOR_API_FILE", API_FILE), "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{int(d['port'])}{path}",
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={"x-organisicator-token": d["token"], "content-type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("error") or str(e)
+        except ValueError:
+            msg = str(e)
+        raise RuntimeError(msg) from None
+    except (OSError, ValueError, KeyError) as e:
+        raise RuntimeError("organisicator isn't running — start it to reach its projects") from e
+
+
 def asset_ids(project: Project, inst: Optional[Instance], paths: list[str], projects: list, listing: dict) -> dict[str, int]:
     """Each Read path in ``paths`` → organisicator's asset id, from its
     ``/v1/projects`` and ``/v1/projects/{id}/assets`` answers. Paths the

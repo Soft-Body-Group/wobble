@@ -278,22 +278,33 @@ def m_rows():
         mstate["pick"] = None
 
 
-def m_fetch_shot():
+def m_fetch_shot(index=None):
+    """The picked shot's footage. First asks organisicator to index the
+    shot's folder where it is (POST /v1/register), so renders written since
+    its last scan — by Blender here, or on another machine and synced in by
+    Dropbox — are listed and load by id. A shot's folder is small; the whole
+    project's is indexed only on refresh (``index=True``)."""
     pid, inst = mstate["pid"], mstate["inst"]
     mstate["answer"] = None
+    if pid is not None and (index if index is not None else inst is not None):
+        body = {"project": pid} if inst is None else {"project": pid, "instance": inst}
+        try:
+            shots.api_post("/v1/register", body)
+        except RuntimeError as e:
+            addon.status(f"listing what organisicator last indexed ({e})")
     if pid is not None:
         q = f"?instance={inst}" if inst is not None else ""
         mstate["answer"] = shots.api_get(f"/v1/projects/{pid}/assets{q}")
     m_rows()
 
 
-def m_fetch_project(pid, inst=None):
+def m_fetch_project(pid, inst=None, index=None):
     mstate["pid"], mstate["inst"], mstate["pick"] = pid, inst, None
     mstate["instances"] = shots.api_get(f"/v1/projects/{pid}").get("instances", []) if pid is not None else []
     mstate["shots"] = media.shot_options(mstate["instances"])
     if inst not in [i for _, i in mstate["shots"]]:
         mstate["inst"] = None
-    m_fetch_shot()
+    m_fetch_shot(index)
 
 
 def m_show():
@@ -404,7 +415,7 @@ def m_new(w, _v=None):
 @addon.row(M, "refresh")
 def m_refresh(w, _v=None):
     mstate["projects"] = [p for p in shots.api_get("/v1/projects") if p.get("online", True)]
-    m_fetch_project(mstate["pid"], mstate["inst"])
+    m_fetch_project(mstate["pid"], mstate["inst"], index=True)
     m_show()
 
 

@@ -434,3 +434,68 @@ def blend_files(directory: Optional[str]) -> list[tuple[str, float]]:
         return []
     out.sort(key=lambda t: t[1], reverse=True)
     return out
+
+
+# ---- organisicator's local API: registering renders --------------------------
+#
+# While organisicator runs it serves an API on 127.0.0.1 (port + token in
+# ~/.organisicator/api.json). POST /v1/register indexes a file written in
+# place inside a project and answers its asset id, so a finished render is
+# in organisicator's database (and wobble's "from project…" picker) at once,
+# without a rescan. organisicator not running is fine: its next rescan finds
+# the render anyway.
+
+
+def api_file() -> str:
+    env = os.environ.get("ORGANISICATOR_API_FILE")
+    if env:
+        return env
+    return os.path.join(os.path.expanduser("~"), ".organisicator", "api.json")
+
+
+def api_discover(path: Optional[str] = None) -> Optional[tuple[str, str]]:
+    """(base url, token) from the discovery file, or None when organisicator
+    hasn't written one."""
+    try:
+        with open(path or api_file(), "r", encoding="utf-8") as f:
+            v = json.load(f)
+        return f"http://127.0.0.1:{int(v['port'])}", str(v["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def register_target(frame_path: str) -> Optional[str]:
+    """What to register for a render whose first frame Blender wrote at
+    ``frame_path`` (``RenderSettings.frame_path``): that file when it exists
+    (organisicator maps a frame to its sequence), else None — a still render
+    that was never saved, a cancelled one."""
+    return frame_path if frame_path and os.path.isfile(frame_path) else None
+
+
+def api_register(path: str, api: Optional[tuple[str, str]] = None, timeout: float = 15.0) -> dict:
+    """POST /v1/register ``{path}`` → ``{id, kind, path}``. Raises
+    ``RuntimeError`` with organisicator's message (or "not running")."""
+    import urllib.error
+    import urllib.request
+
+    api = api or api_discover()
+    if api is None:
+        raise RuntimeError("organisicator isn't running")
+    base, token = api
+    req = urllib.request.Request(
+        base + "/v1/register",
+        data=json.dumps({"path": path}).encode("utf-8"),
+        method="POST",
+        headers={"x-organisicator-token": token, "content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("error") or str(e)
+        except ValueError:
+            msg = str(e)
+        raise RuntimeError(msg) from None
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError("organisicator isn't running") from e

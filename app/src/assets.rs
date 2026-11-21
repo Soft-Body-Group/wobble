@@ -216,8 +216,38 @@ pub fn resolve_now(r: &AssetRef) -> Result<Resolved, String> {
     // answer here (not running, or its index holds the path another machine
     // indexed), the names it gave last time still find the file under this
     // machine's managed root — never a stored path.
-    match Client::discover().and_then(|c| resolve(&c, r)) {
-        Ok(x) => Ok(x),
+    choose(r, Client::discover().and_then(|c| resolve(&c, r)), by_names)
+}
+
+/// Whether organisicator's answer for `saved.id` is plausibly the asset the
+/// Load saved. Ids are each machine's own database rows, so a comp saved
+/// on the Mac asking Windows for "asset 42" may get some other file: when
+/// the project name AND the place under the shot both differ, it isn't the
+/// same asset (one rename through organisicator changes one or the other,
+/// not both). Nothing saved to compare with: trust the id.
+pub fn same_asset(saved: &AssetRef, now: &AssetRef) -> bool {
+    saved.project.is_empty() || saved.rel.is_empty() || saved.project == now.project || saved.rel == now.rel
+}
+
+/// organisicator's answer `by_id`, or the by-names lookup when it has none
+/// or its id names a different asset (see [`same_asset`]).
+fn choose(
+    r: &AssetRef,
+    by_id: Result<Resolved, String>,
+    by_names: impl FnOnce() -> Result<Resolved, String>,
+) -> Result<Resolved, String> {
+    match by_id {
+        Ok(x) if same_asset(r, &x.named) => Ok(x),
+        Ok(x) => by_names().map_err(|e| {
+            format!(
+                "organisicator's asset {} here is {} / {}, not {} / {} (the comp was saved on another computer?) — and by name: {e}",
+                r.id,
+                x.named.project_label(),
+                x.named.asset_label(),
+                r.project_label(),
+                r.asset_label()
+            )
+        }),
         Err(e) if r.rel.is_empty() || r.project.is_empty() => Err(e),
         Err(e) => by_names().map_err(|_| e),
     }
@@ -575,6 +605,34 @@ mod tests {
         println!("asset {} -> {} ({:?})", r.id, res.path, res.named);
         assert!(res.path.contains("shots/a_010/plates"), "{}", res.path);
         assert_eq!(res.named.shot, ["a_010"]);
+    }
+
+    /// Another machine's id that names some other file here is not
+    /// trusted: the saved names find the right one, or it's an error that
+    /// says why — never the wrong footage.
+    #[test]
+    fn another_machines_id_falls_back_to_names() {
+        let saved = AssetRef { id: 42, project: "spooky".into(), shot: vec!["cf_010".into()], rel: "renders/light/light_####.png".into() };
+        let at = |project: &str, rel: &str, path: &str| Resolved {
+            path: path.into(),
+            named: AssetRef { id: 42, project: project.into(), shot: vec![], rel: rel.into() },
+        };
+        let names = || Ok(at("spooky", "renders/light/light_####.png", "/d/spooky/cf_010/renders/light/light_####.png"));
+        let no_names = || Err("not on this machine".to_string());
+        // The same asset, renamed (shot or project): the id wins.
+        let renamed = at("spooky", "renders/light/light_####.png", "/m/spooky/cf_015/renders/light/light_####.png");
+        assert_eq!(choose(&saved, Ok(renamed.clone()), no_names).unwrap(), renamed);
+        let moved = at("spooky_2026", "renders/light/light_####.png", "/m/spooky_2026/x");
+        assert_eq!(choose(&saved, Ok(moved.clone()), no_names).unwrap(), moved);
+        // Some other file under the same id: the names find it...
+        let other = at("beach", "plates/bg.####.exr", "/w/beach/plates/bg.####.exr");
+        assert_eq!(choose(&saved, Ok(other.clone()), names).unwrap().path, "/d/spooky/cf_010/renders/light/light_####.png");
+        // ...or it's an error naming both, not the wrong footage.
+        let e = choose(&saved, Ok(other), no_names).unwrap_err();
+        assert!(e.contains("beach") && e.contains("another computer"), "{e}");
+        // A reference with no names trusts the id.
+        let bare = AssetRef { id: 42, ..Default::default() };
+        assert!(same_asset(&bare, &at("beach", "x.exr", "/x").named));
     }
 
     #[test]
