@@ -99,3 +99,115 @@ def locate(asset_answer: dict) -> tuple:
     pid = (asset_answer.get("project") or {}).get("id")
     shot = asset_answer.get("shot") or []
     return pid, (shot[-1].get("id") if shot else None)
+
+
+# ---- the project tree ---------------------------------------------------------
+#
+# The picker shows the project's folders the way organisicator's Work view
+# does, but only the ones holding something a Load opens (or above one).
+# Built from ONE recursive listing of the project
+# (``/v1/projects/{id}/assets?recursive=1``, ``rel`` under the project root).
+
+ROOT_LABEL = "(project)"
+
+
+def _dir(rel: str) -> str:
+    return rel.rsplit("/", 1)[0] if "/" in rel else ""
+
+
+def folder_counts(answer: dict) -> dict:
+    """``{folder rel: (own, total)}`` of loadable assets, every ancestor of
+    a folder that holds one included ("" = the project root)."""
+    own: dict = {"": 0}
+    total: dict = {"": 0}
+    for a in answer.get("assets", []):
+        rel = a.get("rel", "")
+        if not _loadable(rel):
+            continue
+        d = _dir(rel)
+        own[d] = own.get(d, 0) + 1
+        while True:
+            total[d] = total.get(d, 0) + 1
+            own.setdefault(d, 0)
+            if d == "":
+                break
+            d = _dir(d)
+    return {d: (own[d], total[d]) for d in total}
+
+
+def _children(counts: dict) -> dict:
+    kids: dict = {}
+    for d in counts:
+        if d:
+            kids.setdefault(_dir(d), []).append(d)
+    for k in kids.values():
+        k.sort(key=lambda d: d.rsplit("/", 1)[-1].lower())
+    return kids
+
+
+def tree_rows(counts: dict, expanded: set) -> list:
+    """The visible rows: ``[(label, folder rel)]``, the project first, a
+    folder's children under it while it is expanded. Labels are unique (the
+    list picks by label): same-named folders in different places get an
+    invisible difference."""
+    kids = _children(counts)
+    rows, seen = [], set()
+
+    def walk(d: str, depth: int):
+        has = bool(kids.get(d))
+        arrow = ("▾ " if d in expanded else "▸ ") if has else "   "
+        name = ROOT_LABEL if d == "" else d.rsplit("/", 1)[-1]
+        label = "\u2003" * depth + arrow + name + f"  ·  {counts[d][1]}"
+        while label in seen:
+            label += "\u200b"
+        seen.add(label)
+        rows.append((label, d))
+        if d in expanded:
+            for c in kids.get(d, []):
+                walk(c, depth + 1)
+
+    if counts:
+        walk("", 0)
+    return rows
+
+
+def expand_to(folder: str, expanded: set) -> set:
+    """``expanded`` plus ``folder`` and every ancestor of it (so it is
+    visible, and open)."""
+    out = set(expanded) | {"", folder}
+    d = folder
+    while d:
+        d = _dir(d)
+        out.add(d)
+    return out
+
+
+def under(answer: dict, folder: str, recursive: bool) -> dict:
+    """The recursive project listing cut to one folder: its own assets (or,
+    recursive, everything below it), ``rel`` made relative to the folder."""
+    pre = folder + "/" if folder else ""
+    out = []
+    for a in answer.get("assets", []):
+        rel = a.get("rel", "")
+        if not rel.startswith(pre):
+            continue
+        tail = rel[len(pre):]
+        if not recursive and "/" in tail:
+            continue
+        out.append(dict(a, rel=tail))
+    return {"indexed": answer.get("indexed", True), "assets": out, "linked": []}
+
+
+def instance_at(folder: str, instances: list):
+    """The sequence / shot whose folder this is (None = none, or the root)."""
+    return next((i["id"] for i in instances if i.get("rel") == folder), None) if folder else None
+
+
+def folder_of(path: str, root: str) -> str:
+    """Where an asset at ``path`` sits under the project ``root``: the folder
+    rel, "" when it isn't under it."""
+    norm = lambda p: p.replace("\\", "/").rstrip("/")
+    p, r = norm(path), norm(root)
+    if not p.startswith(r + "/"):
+        return ""
+    return _dir(p[len(r) + 1:])

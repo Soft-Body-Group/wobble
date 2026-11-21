@@ -403,19 +403,33 @@ def tokens_for(project: Project, inst: Optional[Instance], blend_stem: str = "",
     return t
 
 
+def flat_name(rel: str) -> str:
+    """A render template's result as a file-name prefix, never a folder:
+    renders go straight into the shot's tracked render folder, and only
+    organisicator makes folders (``{blend}/{blend}_`` → ``{blend}_``; a
+    template ending in ``/`` gets a ``_`` so Blender's frame number is
+    separated)."""
+    segs = [s for s in rel.replace("\\", "/").split("/") if s]
+    if not segs:
+        return ""
+    name = segs[-1]
+    if rel.rstrip().endswith("/") and not name.endswith(("_", ".", "-")):
+        name += "_"
+    return name
+
+
 def render_target(project: Project, inst: Optional[Instance], blend_stem: str, template: str, scene: str = "") -> Optional[str]:
     """Absolute render output for a file in ``inst`` (``None`` when the
-    project defines no render folder). A template ending in ``/`` or ``_``
-    lets Blender append the frame number and extension."""
+    project defines no render folder): a name prefix INSIDE the declared
+    render folder, never a subfolder of it (see ``flat_name``). Ending in
+    ``_`` lets Blender append the frame number and extension."""
     rdir = project.render_dir(inst)
     if not rdir:
         return None
-    rel = fill(template, tokens_for(project, inst, blend_stem, scene=scene))
-    if not rel:
+    name = flat_name(fill(template, tokens_for(project, inst, blend_stem, scene=scene)))
+    if not name:
         return rdir + os.sep
-    trailing = rel.endswith("/")
-    out = os.path.join(rdir, *rel.rstrip("/").split("/"))
-    return out + (os.sep if trailing else "")
+    return os.path.join(rdir, name)
 
 
 def blend_files(directory: Optional[str]) -> list[tuple[str, float]]:
@@ -472,9 +486,20 @@ def register_target(frame_path: str) -> Optional[str]:
     return frame_path if frame_path and os.path.isfile(frame_path) else None
 
 
+def api_mkdir(path: str, api: Optional[tuple[str, str]] = None, timeout: float = 15.0) -> dict:
+    """POST /v1/mkdir ``{path}``: organisicator makes the folder if the
+    project's template declares it (and refuses otherwise). Raises
+    ``RuntimeError`` with its message (or "not running")."""
+    return _post("/v1/mkdir", {"path": path}, api, timeout)
+
+
 def api_register(path: str, api: Optional[tuple[str, str]] = None, timeout: float = 15.0) -> dict:
     """POST /v1/register ``{path}`` → ``{id, kind, path}``. Raises
     ``RuntimeError`` with organisicator's message (or "not running")."""
+    return _post("/v1/register", {"path": path}, api, timeout)
+
+
+def _post(route: str, body: dict, api: Optional[tuple[str, str]], timeout: float) -> dict:
     import urllib.error
     import urllib.request
 
@@ -483,8 +508,8 @@ def api_register(path: str, api: Optional[tuple[str, str]] = None, timeout: floa
         raise RuntimeError("organisicator isn't running")
     base, token = api
     req = urllib.request.Request(
-        base + "/v1/register",
-        data=json.dumps({"path": path}).encode("utf-8"),
+        base + route,
+        data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers={"x-organisicator-token": token, "content-type": "application/json"},
     )

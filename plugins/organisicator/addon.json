@@ -14,7 +14,7 @@
     { "id": "plates", "label": "add plates", "tip": "a Load for each sequence in the shot's plates folder" }
   ],
   "pickers": [
-    { "id": "media", "label": "from project…", "tip": "pick footage from organisicator's database: the shot's own and the footage linked to it", "for": "load", "panel": "media" }
+    { "id": "media", "label": "from project…", "tip": "pick footage from organisicator's database: the project's folders (only those with footage), a shot's own and its linked footage", "for": "load", "panel": "media" }
   ],
   "panels": [
     {
@@ -42,7 +42,8 @@
       "rows": [
         { "kind": "text", "id": "target", "text": "" },
         { "kind": "choice", "id": "project", "label": "project" },
-        { "kind": "choice", "id": "shot", "label": "shot" },
+        { "kind": "list", "id": "tree", "label": "folders with footage (pick to open, again to fold)", "rows": 10 },
+        { "kind": "toggle", "id": "recursive", "label": "recursive: everything below the folder" },
         { "kind": "field", "id": "filter", "label": "filter" },
         { "kind": "list", "id": "footage", "rows": 12 },
         { "kind": "text", "id": "info", "text": "" },

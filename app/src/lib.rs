@@ -24910,7 +24910,13 @@ impl Gfx {
                         // The API's node id is the graph key.
                         self.addons.pick(&addon, &picker, key);
                     }
-                    Some(AssetAct::PickProject) => self.open_project_browser(projectui::Mode::Media(key)),
+                    // An addon's database browser (organisicator's) when one
+                    // is on: it knows what the project holds, renders
+                    // included. wobble's own by-name browser otherwise.
+                    Some(AssetAct::PickProject) => match load_pickers.first() {
+                        Some((addon, k)) => self.addons.pick(addon, &k.id, key),
+                        None => self.open_project_browser(projectui::Mode::Media(key)),
+                    },
                     Some(AssetAct::Reload) => self.load_asset(key),
                     Some(AssetAct::Ingest) => self.open_project_browser(projectui::Mode::Ingest(key)),
                     Some(AssetAct::Forget) => {

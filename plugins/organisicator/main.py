@@ -262,10 +262,15 @@ mstate = {
     "node": None,  # the Load being filled, or None = make a new one
     "projects": [],  # /v1/projects
     "pid": None,
+    "root": "",  # the project's root on this machine
     "instances": [],  # /v1/projects/{pid} instances
-    "shots": [],  # [(label, instance id or None)]
-    "inst": None,
-    "answer": None,  # /v1/projects/{pid}/assets?instance=
+    "all": None,  # /v1/projects/{pid}/assets?recursive=1
+    "counts": {},  # media.folder_counts(all)
+    "expanded": {""},
+    "tree": [],  # [(label, folder rel)]
+    "folder": "",  # the picked folder ("" = the project)
+    "recursive": False,
+    "answer": None,  # what the footage list is built from
     "rows": [],
     "pick": None,  # the picked row
     "filter": "",
@@ -278,45 +283,76 @@ def m_rows():
         mstate["pick"] = None
 
 
-def m_fetch_shot(index=None):
-    """The picked shot's footage. First asks organisicator to index the
-    shot's folder where it is (POST /v1/register), so renders written since
-    its last scan — by Blender here, or on another machine and synced in by
-    Dropbox — are listed and load by id. A shot's folder is small; the whole
-    project's is indexed only on refresh (``index=True``)."""
-    pid, inst = mstate["pid"], mstate["inst"]
-    mstate["answer"] = None
-    if pid is not None and (index if index is not None else inst is not None):
-        body = {"project": pid} if inst is None else {"project": pid, "instance": inst}
-        try:
-            shots.api_post("/v1/register", body)
-        except RuntimeError as e:
-            addon.status(f"listing what organisicator last indexed ({e})")
-    if pid is not None:
+def m_register(folder):
+    """Ask organisicator to index ``folder`` (rel; None = the whole project)
+    where it is, so renders written since its last scan — by Blender here,
+    or on another machine and synced in by Dropbox — are listed."""
+    pid = mstate["pid"]
+    if pid is None:
+        return
+    body = {"project": pid} if folder is None else {"path": os.path.join(mstate["root"], *folder.split("/"))}
+    try:
+        shots.api_post("/v1/register", body)
+    except RuntimeError as e:
+        addon.status(f"listing what organisicator last indexed ({e})")
+
+
+def m_fetch_all():
+    pid = mstate["pid"]
+    mstate["all"] = shots.api_get(f"/v1/projects/{pid}/assets?recursive=1") if pid is not None else None
+    mstate["counts"] = media.folder_counts(mstate["all"] or {})
+    if mstate["folder"] not in mstate["counts"]:
+        mstate["folder"] = ""
+    m_tree()
+
+
+def m_tree():
+    mstate["expanded"] = media.expand_to(mstate["folder"], mstate["expanded"])
+    mstate["tree"] = media.tree_rows(mstate["counts"], mstate["expanded"])
+
+
+def m_list():
+    """The footage list for the picked folder: its own assets (recursive:
+    everything below), and when the folder is a shot / sequence (or the
+    project), the footage linked to it from elsewhere."""
+    folder, pid = mstate["folder"], mstate["pid"]
+    ans = media.under(mstate["all"] or {}, folder, mstate["recursive"])
+    inst = media.instance_at(folder, mstate["instances"])
+    if pid is not None and (inst is not None or folder == ""):
         q = f"?instance={inst}" if inst is not None else ""
-        mstate["answer"] = shots.api_get(f"/v1/projects/{pid}/assets{q}")
+        try:
+            ans["linked"] = shots.api_get(f"/v1/projects/{pid}/assets{q}").get("linked", [])
+        except RuntimeError:
+            pass
+    mstate["answer"] = ans
     m_rows()
 
 
-def m_fetch_project(pid, inst=None, index=None):
-    mstate["pid"], mstate["inst"], mstate["pick"] = pid, inst, None
-    mstate["instances"] = shots.api_get(f"/v1/projects/{pid}").get("instances", []) if pid is not None else []
-    mstate["shots"] = media.shot_options(mstate["instances"])
-    if inst not in [i for _, i in mstate["shots"]]:
-        mstate["inst"] = None
-    m_fetch_shot(index)
+def m_fetch_project(pid, folder="", index=False):
+    mstate["pid"], mstate["folder"], mstate["pick"] = pid, folder, None
+    mstate["expanded"] = {""}
+    p = shots.api_get(f"/v1/projects/{pid}") if pid is not None else {}
+    mstate["instances"] = p.get("instances", [])
+    mstate["root"] = p.get("root", "")
+    if index:
+        m_register(None)
+    elif folder:
+        m_register(folder)
+    m_fetch_all()
+    m_list()
 
 
 def m_show():
     names = [p["name"] for p in mstate["projects"]]
     cur = next((p["name"] for p in mstate["projects"] if p["id"] == mstate["pid"]), "")
-    shot = next((lbl for lbl, i in mstate["shots"] if i == mstate["inst"]), "")
+    here = next((lbl for lbl, d in mstate["tree"] if d == mstate["folder"]), "")
     node = mstate["node"]
     addon.set(
         M,
         target=f"fills Load {node}" if node is not None else "makes a new Load",
         project={"options": names, "value": cur},
-        shot={"options": [lbl for lbl, _ in mstate["shots"]], "value": shot},
+        tree={"options": [lbl for lbl, _ in mstate["tree"]], "value": here},
+        recursive=mstate["recursive"],
         footage={"options": [r["label"] for r in mstate["rows"]], "value": (mstate["pick"] or {}).get("label", "")},
         info=media.info(mstate["pick"], mstate["answer"]),
         load="load" if node is not None else "add Load",
@@ -328,20 +364,24 @@ def m_start(w, node):
     Load holds now, else on the shot the Projects panel has picked."""
     mstate["node"] = node
     mstate["projects"] = [p for p in shots.api_get("/v1/projects") if p.get("online", True)]
-    pid, inst = None, None
+    pid, folder = None, ""
     asset = (w.node_get(id=node).get("asset") or {}) if node is not None else {}
     if asset.get("id"):
         try:
-            pid, inst = media.locate(shots.api_get(f"/v1/assets/{asset['id']}"))
+            a = shots.api_get(f"/v1/assets/{asset['id']}")
+            pid = media.locate(a)[0]
+            root = next((p.get("root", "") for p in mstate["projects"] if p["id"] == pid), "")
+            folder = media.folder_of(a.get("path", ""), root)
         except RuntimeError:
             pass
     if pid is None and state["project"] is not None:
         root = os.path.realpath(state["project"].root)
         pid = next((p["id"] for p in mstate["projects"] if os.path.realpath(p.get("root", "")) == root), None)
-        inst = state["shot"].id if (pid is not None and state["shot"] is not None) else None
+        if pid is not None and state["shot"] is not None:
+            folder = state["shot"].rel.replace("\\", "/").strip("/")
     if pid is None and mstate["projects"]:
         pid = mstate["projects"][0]["id"]
-    m_fetch_project(pid, inst)
+    m_fetch_project(pid, folder)
     m_show()
     addon.set(M, open=True)
 
@@ -379,11 +419,32 @@ def m_pick_project(w, v):
     m_show()
 
 
-@addon.row(M, "shot")
-def m_pick_shot(w, v):
-    mstate["inst"] = next((i for lbl, i in mstate["shots"] if lbl == v), None)
-    mstate["pick"] = None
-    m_fetch_shot()
+@addon.row(M, "tree")
+def m_pick_folder(w, v):
+    """Picking a folder opens it (and lists it); picking the open one again
+    folds it."""
+    folder = next((d for lbl, d in mstate["tree"] if lbl == v), None)
+    if folder is None:
+        return
+    if folder == mstate["folder"] and folder in mstate["expanded"] and folder:
+        mstate["expanded"].discard(folder)
+        mstate["tree"] = media.tree_rows(mstate["counts"], mstate["expanded"])
+    else:
+        mstate["folder"], mstate["pick"] = folder, None
+        mstate["expanded"].add(folder)
+        if folder:
+            m_register(folder)
+            m_fetch_all()
+        else:
+            m_tree()
+        m_list()
+    m_show()
+
+
+@addon.row(M, "recursive")
+def m_recursive(w, v):
+    mstate["recursive"] = bool(v)
+    m_list()
     m_show()
 
 
@@ -415,7 +476,10 @@ def m_new(w, _v=None):
 @addon.row(M, "refresh")
 def m_refresh(w, _v=None):
     mstate["projects"] = [p for p in shots.api_get("/v1/projects") if p.get("online", True)]
-    m_fetch_project(mstate["pid"], mstate["inst"], index=True)
+    keep = mstate["expanded"]
+    m_fetch_project(mstate["pid"], mstate["folder"], index=True)
+    mstate["expanded"] |= {d for d in keep if d in mstate["counts"]}
+    m_tree()
     m_show()
 
 
