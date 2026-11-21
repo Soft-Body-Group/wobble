@@ -1622,6 +1622,18 @@ its two end handles — they remain the animated pair and still ctrl-drag out
 to a viewer HUD — and any point added between them shapes the response;
 coverage there IS 0..1, so that one editor does clamp y.
 
+The LumaKey's band editor (and a Grade's ranges page, which is the same
+editor) holds points in ORDER: drag one into its neighbour and it stops
+there rather than hopping past and re-sorting, because a corner that swaps
+with a slope point silently means something else. A **shift-click on a
+crossfade** adds a point that shapes that boundary's slope; the shape is
+stored on the boundary itself (`Edge::shape`, relative to the crossfade, so
+it travels when the crossfade is moved or widened) and the band on the
+other side falls through its complement, so the bands still sum to 1.
+Shift-drag carries a crossfade whole, shape included; alt-click removes a
+slope point. A single-band key from an older setup keeps its hand-shaped
+ramp this way instead of losing it to a plain ramp.
+
 Packing: interpolation and the split flag are UNIFORMS (toggling them never
 recompiles); only the point COUNTS move the slot span, exactly like Spline.
 `--test-curveedit` drives the gestures (add, marquee, group drag, remove).
@@ -2305,7 +2317,8 @@ The ranges page IS the LumaKey's band editor — the same locked partition
 (one boundary belongs to the bands on both sides of it, weights always sum
 to 1), the same linear/smooth crossfade, the same curve editor with the luma
 ramp behind it, the same shift-drag to carry a crossfade, and the same
-freedom to add a bias point in a band's plateau. Name a band there and its
+freedom to add a bias point in a band's plateau or a slope point on a
+crossfade. Name a band there and its
 tab, its chips and its curves take the name.
 
 **Preview** sits in the selected band's row under the curve, beside its

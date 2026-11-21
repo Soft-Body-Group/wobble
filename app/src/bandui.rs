@@ -203,26 +203,34 @@ pub fn luma_panel_with(
         })
         .collect();
 
-    let mut pts = k.bands.get(*sel).map(|b| b.curve()).unwrap_or_default();
-    // Corner pairs: the two ends of one crossfade move together, so a
-    // boundary drag carries its softness instead of smearing it.
-    // A plain drag moves the point you grabbed. SHIFT-drag carries its
-    // partner, so the crossfade translates as one object. That way round
-    // because the single-point move is the one you want most of the time,
-    // and having both move by default made every small correction feel like
-    // it was fighting back.
-    let mirror = corner_pairs(&pts, !ui.input(|i| i.modifiers.shift));
+    let (mut pts, roles) = layout(k, *sel);
+    // A plain drag moves the point you grabbed. SHIFT-drag carries the
+    // whole crossfade — both corners and its slope points — as one object.
+    // That way round because the single-point move is the one you want most
+    // of the time, and having both move by default made every small
+    // correction feel like it was fighting back.
+    let mirror = fade_groups(&roles, !ui.input(|i| i.modifiers.shift));
     // The band's JOINTS. A boundary corner is at full coverage or at none —
     // there is no such thing as a boundary at 0.4 — so these move in x only
     // and cannot be deleted. Dragging one off its rail was the easiest way
     // to make a near-vertical drop that then had to be repaired by hand.
-    let pinned = structural(&pts);
-    // And a new point belongs in the PLATEAU, where the band is at full
-    // strength and its shape is genuinely free. One dropped inside a
-    // crossfade is asking a boundary to be in two places at once.
-    let (pl, ph) = plateau(&pts);
-    // Room for one more, where the consumer packs a fixed number.
-    let room = opts.max_points.is_none_or(|m| pts.len() < m);
+    let pinned = structural(&roles);
+    // A new point can go on either slope (it shapes that boundary, so it
+    // lands in the neighbour's curve too) or in the plateau (the band's own
+    // bias). Where the consumer packs a fixed number of points, every band
+    // the point lands in needs room for it.
+    let room = |len: usize| opts.max_points.is_none_or(|m| len < m);
+    let len_of = |i: Option<usize>| i.and_then(|i| k.bands.get(i)).map_or(0, |b| b.curve().len());
+    let room_here = room(pts.len());
+    let room_below = room(len_of(sel.checked_sub(1)));
+    let room_above = room(len_of(Some(*sel + 1)));
+    let (rpts, rroles) = (pts.clone(), roles.clone());
+    let add_ok = move |x: f32| match region(&rpts, &rroles, x) {
+        Some(Region::Plateau) => room_here,
+        Some(Region::Slope(false)) => room_here && room_below,
+        Some(Region::Slope(true)) => room_here && room_above,
+        None => false,
+    };
 
     let cfg = curveui::CurveCfg {
         // Whatever the tile has left after the row below, floored so a
@@ -243,9 +251,11 @@ pub fn luma_panel_with(
         tint: band_tint(*sel, n),
         backdrop: Some(&|x, _y| luma_tone(x, span)),
         pin_y: &pinned,
-        add_ok: Some(&|x| room && x > pl && x < ph),
-
+        add_ok: Some(&add_ok),
         mirror: &mirror,
+        // Points stop at their neighbours: a corner swapping past a slope
+        // point (or the far corner) would silently re-mean both.
+        keep_order: true,
         ..Default::default()
     };
     let res = curveui::curve_edit(ui, ui.id().with(("luma-curve", node)), &cfg, &ghosts, &mut pts);
@@ -311,100 +321,245 @@ fn band_tint(i: usize, n: usize) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// The structural points: the two ends of the curve plus every crossfade
-/// corner. Everything else is the user's own bias shape and stays free.
-fn structural(pts: &[[f32; 2]]) -> Vec<usize> {
-    let mut v: Vec<usize> = corner_pairs(pts, false).into_iter().flatten().collect();
-    if !pts.is_empty() {
-        v.push(0);
-        v.push(pts.len() - 1);
-    }
-    v.sort_unstable();
-    v.dedup();
-    v
+/// What a point of the edited band's curve IS. The curve the editor shows
+/// is the partition's corners and slope points plus the band's own plateau
+/// bias, and reading an edit back needs to know which is which — by role,
+/// never by guessing from heights (a slope point may sit at 0 or 1 too).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Role {
+    /// An end of the axis: an end band's outer point. Structural.
+    End,
+    /// A crossfade corner, on the boundary below the band (`above: false`)
+    /// or above it; `hi` is the corner at the higher luma. Structural.
+    Corner { above: bool, hi: bool },
+    /// A point shaping that boundary's slope ([`engine::bands::Edge::shape`]).
+    Slope { above: bool },
+    /// The user's own bias point in the plateau.
+    Bias,
 }
 
-/// The x span over which the band is at full strength — the only stretch
-/// where an extra point can mean anything.
-fn plateau(pts: &[[f32; 2]]) -> (f32, f32) {
-    let hot: Vec<f32> = pts.iter().filter(|p| p[1] > 0.99).map(|p| p[0]).collect();
-    match (hot.first(), hot.last()) {
-        (Some(a), Some(b)) if b > a => (*a, *b),
-        _ => (f32::MAX, f32::MIN), // no plateau: nothing to add to
+impl Role {
+    fn structural(self) -> bool {
+        matches!(self, Role::End | Role::Corner { .. })
     }
 }
 
-/// Index pairs that are the two ends of ONE crossfade: a rise (y goes up) or
-/// a fall (y goes down) between consecutive points. Empty when `off`, which
-/// is the default — see the call site.
-fn corner_pairs(pts: &[[f32; 2]], off: bool) -> Vec<Vec<usize>> {
+/// Where on the edited band's curve a new point would land.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Region {
+    /// On the slope of the boundary below (`false`) or above (`true`).
+    Slope(bool),
+    Plateau,
+}
+
+/// The edited band's curve, and what each point is.
+fn layout(k: &engine::graph::LumaKeyParams, sel: usize) -> (Vec<[f32; 2]>, Vec<Role>) {
+    let Some(r) = k.ranges.as_ref() else { return (Vec::new(), Vec::new()) };
+    let n = r.band_count();
+    let sel = sel.min(n.saturating_sub(1));
+    let base = engine::bands::band_curve(r, sel);
+    let shape_len = |i: usize| r.edges.get(i).filter(|e| e.width > 0.0).map_or(0, |e| e.shape.len());
+    let mut roles: Vec<Role> = Vec::with_capacity(base.len());
+    let has_below = !r.edges.is_empty() && n > 1 && sel > 0;
+    let has_above = !r.edges.is_empty() && n > 1 && sel < r.edges.len();
+    if has_below {
+        roles.push(Role::Corner { above: false, hi: false });
+        roles.extend(std::iter::repeat_n(Role::Slope { above: false }, shape_len(sel - 1)));
+        roles.push(Role::Corner { above: false, hi: true });
+    } else {
+        roles.push(Role::End);
+    }
+    let split = roles.len();
+    if has_above {
+        roles.push(Role::Corner { above: true, hi: false });
+        roles.extend(std::iter::repeat_n(Role::Slope { above: true }, shape_len(sel)));
+        roles.push(Role::Corner { above: true, hi: true });
+    } else {
+        roles.push(Role::End);
+    }
+    if roles.len() != base.len() {
+        // Cannot happen while `band_curve` emits what it documents; show the
+        // curve as all structure rather than mislabel it.
+        return (base.clone(), vec![Role::End; base.len()]);
+    }
+    // The band's bias: whatever of its points sits strictly inside the
+    // plateau, which no derived point ever does.
+    let (pl, ph) = (base[split - 1][0], base[split][0]);
+    let mut bias: Vec<[f32; 2]> = k
+        .bands
+        .get(sel)
+        .map(|b| b.points.iter().copied().filter(|p| p[0] > pl && p[0] < ph).collect())
+        .unwrap_or_default();
+    bias.sort_by(|a, c| a[0].partial_cmp(&c[0]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut pts = base[..split].to_vec();
+    pts.extend(bias.iter().copied());
+    pts.extend(base[split..].iter().copied());
+    let mut out_roles = roles[..split].to_vec();
+    out_roles.extend(std::iter::repeat_n(Role::Bias, bias.len()));
+    out_roles.extend(roles[split..].iter().copied());
+    (pts, out_roles)
+}
+
+/// Indices of the structural points: the corners and the axis ends. They
+/// move in x only and cannot be deleted — a boundary corner is at full
+/// coverage or at none, there is no such thing as a corner at 0.4.
+fn structural(roles: &[Role]) -> Vec<usize> {
+    (0..roles.len()).filter(|i| roles[*i].structural()).collect()
+}
+
+/// Each crossfade as one group — both corners and every slope point
+/// between them — so a SHIFT-drag carries the boundary whole, shape and
+/// all. Empty when `off`: a plain drag moves the point you grabbed.
+fn fade_groups(roles: &[Role], off: bool) -> Vec<Vec<usize>> {
     if off {
         return Vec::new();
     }
-    let mut out = Vec::new();
-    for i in 0..pts.len().saturating_sub(1) {
-        let (a, b) = (pts[i], pts[i + 1]);
-        // A crossfade is a segment that travels the full 0..1 of coverage.
-        if (a[1] - b[1]).abs() > 0.9 {
-            out.push(vec![i, i + 1]);
+    [false, true]
+        .into_iter()
+        .map(|above| {
+            (0..roles.len())
+                .filter(|i| {
+                    matches!(roles[*i], Role::Corner { above: a, .. } | Role::Slope { above: a } if a == above)
+                })
+                .collect::<Vec<usize>>()
+        })
+        .filter(|g| g.len() >= 2)
+        .collect()
+}
+
+/// Which part of the band `x` falls in, if any: a slope (between a
+/// boundary's two corners) or the plateau (between the band's inner
+/// corners or axis ends). Outside the band there is nothing to shape.
+fn region(pts: &[[f32; 2]], roles: &[Role], x: f32) -> Option<Region> {
+    let at = |want: Role| roles.iter().position(|r| *r == want).map(|i| pts[i][0]);
+    let lo_c = at(Role::Corner { above: false, hi: false });
+    let hi_c = at(Role::Corner { above: false, hi: true });
+    let lo_a = at(Role::Corner { above: true, hi: false });
+    let hi_a = at(Role::Corner { above: true, hi: true });
+    if let (Some(a), Some(b)) = (lo_c, hi_c) {
+        if x > a && x < b {
+            return Some(Region::Slope(false));
         }
     }
-    out
+    if let (Some(a), Some(b)) = (lo_a, hi_a) {
+        if x > a && x < b {
+            return Some(Region::Slope(true));
+        }
+    }
+    let pl = hi_c.unwrap_or(pts.first().map_or(f32::MAX, |p| p[0]));
+    let ph = lo_a.unwrap_or(pts.last().map_or(f32::MIN, |p| p[0]));
+    (x > pl && x < ph).then_some(Region::Plateau)
+}
+
+/// The roles of an edited curve. A drag or a scale keeps the count (and,
+/// with `keep_order`, the order), so the roles are the ones it started
+/// with; an add or a delete moves no structural point, so those are found
+/// again by x and everything else is named by where it sits between them.
+fn roles_after(before: &[[f32; 2]], was: &[Role], pts: &[[f32; 2]]) -> Vec<Option<Role>> {
+    if pts.len() == before.len() {
+        return was.iter().copied().map(Some).collect();
+    }
+    let joints: Vec<usize> = structural(was);
+    let mut j = 0;
+    let mut last: Option<Role> = None;
+    pts.iter()
+        .map(|p| {
+            if let Some(&s) = joints.get(j) {
+                if (p[0] - before[s][0]).abs() < 1e-6 {
+                    j += 1;
+                    last = Some(was[s]);
+                    return last;
+                }
+            }
+            match last {
+                Some(Role::Corner { above, hi: false }) => Some(Role::Slope { above }),
+                Some(Role::Corner { above: false, hi: true }) => Some(Role::Bias),
+                Some(Role::End) if j == 1 => Some(Role::Bias),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Read an edited band curve back into the partition, then re-derive every
 /// band from it. This is where the lock lives: the corners become edge
-/// positions, and both bands either side of an edge are rebuilt from it.
+/// positions, slope points become the edge's shape, and both bands either
+/// side of an edge are rebuilt from it.
 ///
-/// Points strictly inside the plateau are the user's own bias points and are
-/// kept; they are the only thing the partition does not imply.
+/// Points inside the plateau are the user's own bias points and are kept;
+/// they are the only thing the partition does not imply.
 fn read_back(k: &mut engine::graph::LumaKeyParams, sel: usize, pts: &[[f32; 2]]) {
+    let (before, was) = layout(k, sel);
     let Some(r) = k.ranges.as_mut() else { return };
     let n = r.band_count();
     if pts.len() < 2 || sel >= n {
         return;
     }
-    // The crossfade segments, in order: at most one below and one above.
-    let mut fades: Vec<(f32, f32)> = Vec::new();
-    for i in 0..pts.len() - 1 {
-        if (pts[i][1] - pts[i + 1][1]).abs() > 0.9 {
-            fades.push((pts[i][0], pts[i + 1][0]));
-        }
-    }
-    let below = if sel > 0 { Some(sel - 1) } else { None };
-    let above = if sel < r.edges.len() { Some(sel) } else { None };
-    let mut it = fades.into_iter();
-    for slot in [below, above].into_iter().flatten() {
-        let Some((a, b)) = it.next() else { break };
-        if let Some(e) = r.edges.get_mut(slot) {
-            e.at = 0.5 * (a + b);
-            e.width = (b - a).abs();
+    let roles = roles_after(&before, &was, pts);
+    let find = |want: Role| roles.iter().position(|r| *r == Some(want)).map(|i| pts[i]);
+    let slope = |above: bool| -> Vec<[f32; 2]> {
+        roles
+            .iter()
+            .zip(pts)
+            .filter(|(r, _)| **r == Some(Role::Slope { above }))
+            .map(|(_, p)| *p)
+            .collect()
+    };
+    for (above, slot) in [(false, sel.checked_sub(1)), (true, (sel < r.edges.len()).then_some(sel))] {
+        let Some(slot) = slot else { continue };
+        let (Some(a), Some(b)) = (
+            find(Role::Corner { above, hi: false }),
+            find(Role::Corner { above, hi: true }),
+        ) else {
+            continue;
+        };
+        // The neighbouring boundaries are not on this curve; stop at their
+        // corners rather than run through them and let `normalize` re-sort.
+        let floor = if slot > 0 {
+            let e = &r.edges[slot - 1];
+            e.at + 0.5 * e.width
+        } else {
+            r.span.0
+        };
+        let ceil = if slot + 1 < r.edges.len() {
+            let e = &r.edges[slot + 1];
+            e.at - 0.5 * e.width
+        } else {
+            r.span.1
+        };
+        let x0 = a[0].clamp(floor, ceil);
+        let x1 = b[0].clamp(x0, ceil);
+        let w = x1 - x0;
+        let e = &mut r.edges[slot];
+        e.at = 0.5 * (x0 + x1);
+        e.width = w;
+        if w > 1e-6 {
+            e.shape = slope(above)
+                .into_iter()
+                .map(|p| {
+                    let v = p[1].clamp(0.0, 1.0);
+                    [(p[0] - x0) / w, if above { 1.0 - v } else { v }]
+                })
+                .collect();
         }
     }
     r.normalize();
-    let r = r.clone();
     k.sync_from_ranges();
-    // Put the user's bias points back: anything that was strictly inside
-    // the plateau, which the partition has no opinion about.
-    let corners = engine::bands::band_curve(&r, sel);
-    let (lo, hi) = (
-        corners.iter().find(|p| p[1] > 0.5).map(|p| p[0]).unwrap_or(f32::MIN),
-        corners.iter().rev().find(|p| p[1] > 0.5).map(|p| p[0]).unwrap_or(f32::MAX),
-    );
-    // Bias points are kept, but only where they can mean something: inside
-    // the plateau, and never at or below zero (which would punch a hole a
-    // boundary is supposed to own).
-    let extras: Vec<[f32; 2]> = pts
+    // Put the user's bias points back, where they can still mean something:
+    // inside the (possibly moved) plateau, and never at or below zero (which
+    // would punch a hole a boundary is supposed to own).
+    let (now, now_roles) = layout(k, sel);
+    let bias: Vec<[f32; 2]> = roles
         .iter()
-        .copied()
-        .filter(|p| p[0] > lo && p[0] < hi && p[1] < 0.999)
-        .map(|p| [p[0], p[1].clamp(0.02, 1.0)])
+        .zip(pts)
+        .filter(|(r, _)| **r == Some(Role::Bias))
+        .map(|(_, p)| [p[0], p[1].clamp(0.02, 1.0)])
+        .filter(|p| p[1] < 0.999 && region(&now, &now_roles, p[0]) == Some(Region::Plateau))
         .collect();
     if let Some(b) = k.bands.get_mut(sel) {
-        b.points.extend(extras);
+        b.points.extend(bias);
         b.points
             .sort_by(|a, c| a[0].partial_cmp(&c[0]).unwrap_or(std::cmp::Ordering::Equal));
-        b.points.dedup_by(|a, c| (a[0] - c[0]).abs() < 1e-4);
     }
 }
 
@@ -530,43 +685,49 @@ mod tests {
         }
     }
 
+    fn key3(soft: f32) -> engine::graph::LumaKeyParams {
+        let mut k = engine::graph::LumaKeyParams::default();
+        k.adopt_ranges((0.0, 2.0));
+        *k.ranges.as_mut().unwrap() = BandRanges::even(3, (0.0, 2.0), false, soft);
+        k.sync_from_ranges();
+        k
+    }
+
     /// The point cap: with a full band the plateau accepts nothing more.
     #[test]
     fn the_point_cap_closes_the_plateau() {
-        let r = BandRanges::even(3, (0.0, 2.0), false, 0.5);
-        let pts = engine::bands::band_curve(&r, 1);
-        let (lo, hi) = plateau(&pts);
+        let k = key3(0.5);
+        let (pts, roles) = layout(&k, 1);
+        let (lo, hi) = (pts[1][0], pts[2][0]);
         let mid = 0.5 * (lo + hi);
+        assert_eq!(region(&pts, &roles, mid), Some(Region::Plateau));
         let room = Some(pts.len()).is_none_or(|m| pts.len() < m);
         assert!(!room, "a band at the cap still offered room");
         let room = Some(pts.len() + 1).is_none_or(|m| pts.len() < m);
         assert!(room && mid > lo && mid < hi);
     }
 
-    /// A crossfade is two corners. They pair up only when asked (shift at
-    /// the call site) — a plain drag moves the one point you grabbed, which
-    /// is what a small correction needs.
+    /// A crossfade is a group: two corners and every slope point between
+    /// them. It moves as one only when asked (shift at the call site) — a
+    /// plain drag moves the one point you grabbed.
     #[test]
     fn crossfade_corners_pair_up_only_on_request() {
-        let r = BandRanges::even(3, (0.0, 2.0), false, 0.5);
-        let pts = engine::bands::band_curve(&r, 1);
-        let pairs = corner_pairs(&pts, false);
-        assert_eq!(pairs.len(), 2, "a middle band has two crossfades: {pts:?}");
-        for g in &pairs {
-            assert_eq!(g.len(), 2);
-            assert!((pts[g[0]][1] - pts[g[1]][1]).abs() > 0.9);
-        }
-        assert!(corner_pairs(&pts, true).is_empty());
+        let mut k = key3(0.5);
+        k.ranges.as_mut().unwrap().edges[0].shape = vec![[0.5, 0.3]];
+        k.sync_from_ranges();
+        let (pts, roles) = layout(&k, 1);
+        let groups = fade_groups(&roles, false);
+        assert_eq!(groups.len(), 2, "a middle band has two crossfades: {pts:?}");
+        assert_eq!(groups[0], vec![0, 1, 2], "the slope point rides with its corners");
+        assert_eq!(groups[1].len(), 2);
+        assert!(fade_groups(&roles, true).is_empty());
     }
 
     /// Editing a band's curve must land back on the PARTITION, so the band
     /// next door moves too. This is the lock, tested end to end.
     #[test]
     fn dragging_a_boundary_moves_the_band_on_the_other_side() {
-        let mut k = engine::graph::LumaKeyParams::default();
-        k.adopt_ranges((0.0, 2.0));
-        *k.ranges.as_mut().unwrap() = BandRanges::even(3, (0.0, 2.0), false, 0.4);
-        k.sync_from_ranges();
+        let mut k = key3(0.4);
         let neighbour_before = k.bands[2].curve();
         // Shove band 1's UPPER crossfade to the right.
         let mut pts = k.bands[1].curve();
@@ -589,10 +750,7 @@ mod tests {
     /// has no opinion about it, so a re-derive must not eat it.
     #[test]
     fn bias_points_survive_a_partition_edit() {
-        let mut k = engine::graph::LumaKeyParams::default();
-        k.adopt_ranges((0.0, 2.0));
-        *k.ranges.as_mut().unwrap() = BandRanges::even(3, (0.0, 2.0), false, 0.4);
-        k.sync_from_ranges();
+        let mut k = key3(0.4);
         let mut pts = k.bands[1].curve();
         // A bias point in the middle of the plateau.
         let mid = 0.5 * (pts[1][0] + pts[2][0]);
@@ -699,67 +857,126 @@ mod tests {
         }
     }
 
-    /// A band's joints are at full coverage or at none. Nothing else counts
-    /// as structural, and the ends of the curve always do.
+    /// A band's joints are its corners and the axis ends. Bias and slope
+    /// points are the user's, and stay free.
     #[test]
     fn the_structural_points_are_the_joints_and_only_the_joints() {
-        let r = BandRanges::even(3, (0.0, 2.0), false, 0.5);
-        let mut pts = engine::bands::band_curve(&r, 1);
-        // Two crossfades + both ends, and here the ends ARE corners.
-        assert_eq!(structural(&pts), vec![0, 1, 2, 3]);
-        // A bias point in the plateau is the user's, not the model's.
+        let mut k = key3(0.5);
+        let (pts, roles) = layout(&k, 1);
+        // Two crossfades, four corners.
+        assert_eq!(structural(&roles), vec![0, 1, 2, 3]);
+        // Add a bias point in the plateau and a slope point on the upper
+        // crossfade, the way the editor would.
         let mid = 0.5 * (pts[1][0] + pts[2][0]);
-        pts.insert(2, [mid, 0.55]);
-        let st = structural(&pts);
-        assert!(!st.contains(&2), "a bias point was locked: {st:?}");
-        assert_eq!(st, vec![0, 1, 3, 4]);
-        for i in st {
-            assert!(pts[i][1] < 0.01 || pts[i][1] > 0.99, "joint off its rail: {:?}", pts[i]);
+        let slope = 0.5 * (pts[2][0] + pts[3][0]);
+        let mut edited = pts.clone();
+        edited.insert(2, [mid, 0.55]);
+        edited.insert(4, [slope, 0.8]);
+        read_back(&mut k, 1, &edited);
+        let (out, roles) = layout(&k, 1);
+        assert_eq!(roles.len(), 6, "{out:?} {roles:?}");
+        assert_eq!(roles[2], Role::Bias);
+        assert_eq!(roles[4], Role::Slope { above: true });
+        assert_eq!(structural(&roles), vec![0, 1, 3, 5]);
+        for i in structural(&roles) {
+            assert!(out[i][1] < 0.01 || out[i][1] > 0.99, "joint off its rail: {:?}", out[i]);
         }
     }
 
-    /// Slack lives in the plateau. Offering to add a point inside a
-    /// crossfade is offering to break the boundary.
+    /// A new point goes on a slope (shaping that boundary) or in the
+    /// plateau (the band's bias); outside the band there is nothing to shape.
     #[test]
-    fn points_can_only_be_added_where_the_band_is_solid() {
-        let r = BandRanges::even(3, (0.0, 2.0), false, 0.5);
-        let pts = engine::bands::band_curve(&r, 1);
-        let (lo, hi) = plateau(&pts);
-        assert!(hi > lo, "no plateau found in {pts:?}");
-        // Inside the plateau: yes. Inside either crossfade, or outside the
-        // band entirely: no.
-        assert!(0.5 * (lo + hi) > lo && 0.5 * (lo + hi) < hi);
-        let below_fade = 0.5 * (pts[0][0] + pts[1][0]);
-        assert!(!(below_fade > lo && below_fade < hi), "crossfade accepted a point");
-        assert!(!(0.05 > lo && 0.05 < hi), "outside the band accepted a point");
-        // A band with no plateau (crossfades meeting) accepts nothing.
-        let tight = BandRanges::even(2, (0.0, 1.0), false, 1.0);
-        let (a, b) = plateau(&engine::bands::band_curve(&tight, 0));
-        assert!(b <= a || (b - a) < 1.0);
+    fn points_can_be_added_on_a_slope_or_the_plateau() {
+        let k = key3(0.5);
+        let (pts, roles) = layout(&k, 1);
+        let mid = |a: usize, b: usize| 0.5 * (pts[a][0] + pts[b][0]);
+        assert_eq!(region(&pts, &roles, mid(0, 1)), Some(Region::Slope(false)));
+        assert_eq!(region(&pts, &roles, mid(1, 2)), Some(Region::Plateau));
+        assert_eq!(region(&pts, &roles, mid(2, 3)), Some(Region::Slope(true)));
+        assert_eq!(region(&pts, &roles, 0.05), None, "outside the band accepted a point");
+        assert_eq!(region(&pts, &roles, 1.95), None);
+        // An end band's plateau runs to the end of the axis.
+        let (p0, r0) = layout(&k, 0);
+        assert_eq!(region(&p0, &r0, 0.05), Some(Region::Plateau));
+    }
+
+    /// A point added on a slope is the BOUNDARY's: it lands in the edge's
+    /// shape, the band next door falls through its complement, the
+    /// partition still sums to 1, and it survives an edit made from the
+    /// other side.
+    #[test]
+    fn a_slope_point_shapes_the_boundary_for_both_bands() {
+        let mut k = key3(0.6);
+        let (pts, _) = layout(&k, 1);
+        let x = pts[2][0] + 0.25 * (pts[3][0] - pts[2][0]);
+        let mut edited = pts.clone();
+        edited.insert(3, [x, 0.3]);
+        read_back(&mut k, 1, &edited);
+        let r = k.ranges.as_ref().unwrap();
+        assert_eq!(r.edges[1].shape.len(), 1, "{:?}", r.edges);
+        let s = r.edges[1].shape[0];
+        assert!((s[0] - 0.25).abs() < 1e-4 && (s[1] - 0.7).abs() < 1e-4, "{s:?}");
+        let w = r.weights(x);
+        assert!((w[1] - 0.3).abs() < 1e-3 && (w[2] - 0.7).abs() < 1e-3, "{w:?}");
+        for i in 0..=80 {
+            let t: f32 = r.weights(i as f32 / 40.0).iter().sum();
+            assert!((t - 1.0).abs() < 1e-4, "weights broke: {t}");
+        }
+        // The neighbour's own curve carries the complement.
+        let up = k.bands[2].curve();
+        assert!(up.iter().any(|p| (p[0] - x).abs() < 1e-4 && (p[1] - 0.7).abs() < 1e-4), "{up:?}");
+        // Read band 2 back untouched: the shape is the edge's, so it stays.
+        let (p2, _) = layout(&k, 2);
+        read_back(&mut k, 2, &p2);
+        assert_eq!(k.ranges.as_ref().unwrap().edges[1].shape.len(), 1);
+        // And deleting it from band 2's side removes it.
+        let (p2, r2) = layout(&k, 2);
+        let at = r2.iter().position(|r| *r == Role::Slope { above: false }).unwrap();
+        let mut del = p2.clone();
+        del.remove(at);
+        read_back(&mut k, 2, &del);
+        assert!(k.ranges.as_ref().unwrap().edges[1].shape.is_empty());
+    }
+
+    /// A corner dragged past the far corner of the NEXT boundary (which is
+    /// not on this band's curve) stops at it instead of swapping order.
+    #[test]
+    fn a_corner_stops_at_the_next_boundary() {
+        let mut k = key3(0.3);
+        let before = k.ranges.as_ref().unwrap().edges.clone();
+        let (pts, _) = layout(&k, 1);
+        let mut edited = pts.clone();
+        // Shove the upper crossfade's far corner past the top of the axis
+        // and the lower one's outer corner below zero.
+        edited[3][0] = 5.0;
+        edited[0][0] = -5.0;
+        read_back(&mut k, 1, &edited);
+        let r = k.ranges.as_ref().unwrap();
+        assert!(r.edges[0].at < r.edges[1].at, "{:?}", r.edges);
+        assert!(r.edges[1].at + 0.5 * r.edges[1].width <= 2.0 + 1e-5);
+        assert!(r.edges[0].at - 0.5 * r.edges[0].width >= -1e-5);
+        assert_eq!(r.edges.len(), before.len());
     }
 
     /// The invariant, end to end: whatever the curve came back looking like,
     /// what gets stored has its joints on 0 and 1.
     #[test]
     fn read_back_repairs_a_joint_dragged_off_its_rail() {
-        let mut k = engine::graph::LumaKeyParams::default();
-        k.adopt_ranges((0.0, 2.0));
-        *k.ranges.as_mut().unwrap() = BandRanges::even(3, (0.0, 2.0), false, 0.4);
-        k.sync_from_ranges();
+        let mut k = key3(0.4);
         let mut pts = k.bands[1].curve();
         // Shove a joint to a nonsense height and a bias point below zero.
         pts[1][1] = 0.42;
         let mid = 0.5 * (pts[1][0] + pts[2][0]);
         pts.insert(2, [mid, -3.0]);
         read_back(&mut k, 1, &pts);
-        let out = k.bands[1].curve();
+        let (out, roles) = layout(&k, 1);
         for p in &out {
             assert!(
                 p[1] >= 0.0 && p[1] <= 1.0,
                 "stored point outside coverage: {p:?} in {out:?}"
             );
         }
-        for i in structural(&out) {
+        for i in structural(&roles) {
             assert!(
                 out[i][1] < 0.01 || out[i][1] > 0.99,
                 "joint not repaired: {:?} in {out:?}",
@@ -774,9 +991,9 @@ mod tests {
     /// turned every boundary vertical the instant it was touched.
     #[test]
     fn dragging_a_crossfade_corner_slides_it_instead_of_collapsing_it() {
-        let r = BandRanges::even(3, (0.0, 2.0), false, 0.5);
-        let start = engine::bands::band_curve(&r, 1);
-        let mirror = corner_pairs(&start, false);
+        let k = key3(0.5);
+        let (start, roles) = layout(&k, 1);
+        let mirror = fade_groups(&roles, false);
         assert!(!mirror.is_empty());
         let width = |p: &[[f32; 2]]| p[1][0] - p[0][0];
         let w0 = width(&start);

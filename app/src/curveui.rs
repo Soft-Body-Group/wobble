@@ -131,6 +131,11 @@ pub struct CurveCfg<'a> {
     /// in agreement by hand. Y stays independent, so a mirrored pair can
     /// still cross at different heights.
     pub mirror: &'a [Vec<usize>],
+    /// A dragged point STOPS at its neighbour instead of passing it and
+    /// re-sorting to the other side. For a curve whose points are the
+    /// joints of a model (a band's corners and its slope) swapping two of
+    /// them silently re-means them; stopping is the honest answer.
+    pub keep_order: bool,
 }
 
 impl Default for CurveCfg<'_> {
@@ -149,6 +154,7 @@ impl Default for CurveCfg<'_> {
             pin_y: &[],
             add_ok: None,
             mirror: &[],
+            keep_order: false,
         }
     }
 }
@@ -653,6 +659,9 @@ pub fn curve_edit(
                     }
                 }
                 mirror_x(cfg, &mut next, &start, &moved);
+                if cfg.keep_order {
+                    hold_order(pts, &mut next);
+                }
                 changed |= apply(pts, &mut st.sel, next, &moved, cfg);
             }
             Some(Drag::Scale { origin, anchor, ax, ay, start }) => {
@@ -680,6 +689,9 @@ pub fn curve_edit(
                     if !pinned {
                         next[i][1] = a_y + (start[i][1] - a_y) * sy;
                     }
+                }
+                if cfg.keep_order {
+                    hold_order(pts, &mut next);
                 }
                 changed |= apply(pts, &mut st.sel, next, &moved, cfg);
             }
@@ -839,6 +851,43 @@ pub(crate) fn mirror_x(
     }
 }
 
+/// Closest two neighbours may come in x under [`CurveCfg::keep_order`].
+const ORDER_GAP: f32 = 1e-4;
+
+/// Stop points at their neighbours rather than let them pass
+/// ([`CurveCfg::keep_order`]). `now` is the curve as it stands (sorted),
+/// `next` where the gesture wants it, index for index. Every x travels the
+/// same FRACTION of the way from `now` to `next` — the largest at which no
+/// two neighbours close past [`ORDER_GAP`] — so a dragged point, or a
+/// rigidly moving group, stops against the first point in its way, and a
+/// scale box stops when any member meets one. Y is left alone: a point
+/// stopped against a wall still follows the hand up and down.
+///
+/// Fractional rather than per-point so a group keeps its own spacing; and
+/// measured from where the points ARE, not where the drag began, so a fast
+/// flick lands against the neighbour instead of short of it.
+pub(crate) fn hold_order(now: &[[f32; 2]], next: &mut [[f32; 2]]) {
+    let n = now.len().min(next.len());
+    let mut u = 1.0f32;
+    for i in 0..n.saturating_sub(1) {
+        let g0 = now[i + 1][0] - now[i][0];
+        let g1 = next[i + 1][0] - next[i][0];
+        // Pairs already closer than the gap (a hard boundary's corners)
+        // may stay where they are, never close further.
+        let floor = g0.min(ORDER_GAP);
+        if g1 >= floor {
+            continue;
+        }
+        let f = if g0 - g1 > 1e-12 { ((g0 - floor) / (g0 - g1)).clamp(0.0, 1.0) } else { 0.0 };
+        u = u.min(f);
+    }
+    if u < 1.0 {
+        for i in 0..n {
+            next[i][0] = now[i][0] + (next[i][0] - now[i][0]) * u;
+        }
+    }
+}
+
 fn apply(
     pts: &mut Vec<[f32; 2]>,
     sel: &mut Vec<usize>,
@@ -993,6 +1042,50 @@ mod tests {
         assert!(apply(&mut pts, &mut sel, next, &[1], &CurveCfg::default()));
         assert_eq!(sel, vec![2], "the moved point is now last");
         assert_eq!(pts[2], [1.5, 0.9]);
+    }
+
+    /// `keep_order`: a point dragged past its neighbour stops against it,
+    /// keeps following the hand in y, and the order never changes.
+    #[test]
+    fn a_held_point_stops_at_its_neighbour() {
+        let now = vec![[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]];
+        let mut next = vec![[0.0, 0.0], [1.5, 0.9], [1.0, 1.0]];
+        hold_order(&now, &mut next);
+        assert!(next[1][0] < next[2][0], "it passed: {next:?}");
+        assert!((next[2][0] - next[1][0] - ORDER_GAP).abs() < 1e-5, "stopped short: {next:?}");
+        assert_eq!(next[1][1], 0.9, "y stopped following the hand");
+        // And the other way, against the first point.
+        let mut back = vec![[0.0, 0.0], [-3.0, 0.2], [1.0, 1.0]];
+        hold_order(&now, &mut back);
+        assert!(back[1][0] > back[0][0], "{back:?}");
+        // A move that crosses nothing is untouched.
+        let mut free = vec![[0.0, 0.0], [0.7, 0.5], [1.0, 1.0]];
+        hold_order(&now, &mut free);
+        assert_eq!(free[1][0], 0.7);
+    }
+
+    /// A rigid group (a crossfade dragged whole) stops as ONE: its spacing
+    /// survives the stop.
+    #[test]
+    fn a_held_group_keeps_its_spacing() {
+        let now = vec![[0.0, 1.0], [0.4, 0.0], [0.6, 1.0], [1.0, 1.0]];
+        let mut next = now.clone();
+        next[1][0] += 0.9;
+        next[2][0] += 0.9;
+        hold_order(&now, &mut next);
+        assert!((next[2][0] - next[1][0] - 0.2).abs() < 1e-5, "{next:?}");
+        assert!(next[2][0] < next[3][0]);
+    }
+
+    /// Two corners of a hard cut sit closer than the gap; they may stay, and
+    /// moving something else is not blocked by them.
+    #[test]
+    fn a_hard_cut_does_not_jam_the_curve() {
+        let now = vec![[0.0, 1.0], [0.5, 1.0], [0.50001, 0.0], [1.0, 0.0]];
+        let mut next = now.clone();
+        next[3][0] = 0.8;
+        hold_order(&now, &mut next);
+        assert_eq!(next[3][0], 0.8);
     }
 
     #[test]

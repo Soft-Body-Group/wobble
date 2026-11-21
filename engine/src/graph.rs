@@ -3612,13 +3612,17 @@ impl From<LumaKeyCompat> for LumaKeyParams {
 #[cfg(feature = "serde")]
 impl LumaKeyParams {
     /// `adopt_ranges` for a key loaded from a pre-partition file, saying so
-    /// when the migration cannot keep everything. A hand-shaped ramp's
-    /// points sit ON the crossfade, and a locked partition has no place for
-    /// a point there (the crossfade is the boundary both bands share), so
-    /// the key comes back as the plain ramp between the same ends. That is a
-    /// real loss of someone's work and must not be silent.
+    /// when the migration cannot keep everything. A single ramp's hand shape
+    /// survives (it becomes the boundary's [`crate::bands::Edge::shape`]);
+    /// independent MULTI-band shapes cannot be reconciled into one shared
+    /// boundary each, so those come back as plain ramps between the same
+    /// ends. That is a real loss of someone's work and must not be silent.
     fn adopt_migrating(&mut self, span: (f32, f32)) {
-        let shaped: usize = self.bands.iter().map(|b| b.points.len()).sum();
+        let shaped: usize = if self.bands.len() > 1 {
+            self.bands.iter().map(|b| b.points.len()).sum()
+        } else {
+            0
+        };
         self.adopt_ranges(span);
         if shaped > 0 {
             log::warn!(
@@ -3697,7 +3701,24 @@ impl LumaKeyParams {
             let b = old.first().cloned().unwrap_or_default();
             let hi = b.hi.max(b.lo + 1e-4);
             let mut r = crate::bands::BandRanges::even(2, span, false, 0.0);
-            r.edges[0] = crate::bands::Edge::new(0.5 * (b.lo + hi), hi - b.lo);
+            let w = hi - b.lo;
+            let mut e = crate::bands::Edge::new(0.5 * (b.lo + hi), w);
+            // The ramp's own shape is the boundary's shape: the old curve
+            // rose through these points, and so does the upper band (band
+            // 0's output, inverted below, reads the same).
+            if b.ends == band_ends() && w > 0.0 {
+                e.shape = b
+                    .points
+                    .iter()
+                    .filter(|p| p[0] > b.lo && p[0] < hi)
+                    .map(|p| [(p[0] - b.lo) / w, p[1].clamp(0.0, 1.0)])
+                    .collect();
+            }
+            r.edges[0] = e;
+            r.curve = match b.interp {
+                CurveInterp::Linear => crate::bands::BandCurve::Linear,
+                CurveInterp::Smooth => crate::bands::BandCurve::Smooth,
+            };
             r
         } else {
             let mut r = crate::bands::BandRanges::even(old.len(), span, false, 0.5);

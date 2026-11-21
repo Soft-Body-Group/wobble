@@ -19,6 +19,12 @@
 //! by the same curve, so the pair sums to 1 everywhere. Widths are clamped
 //! so two crossfades can never overlap, which is what keeps that true for
 //! the whole axis rather than just for one pair.
+//!
+//! A crossfade can be SHAPED: [`Edge::shape`] holds points inside it, in
+//! the edge's own 0..1 coordinates, and both neighbours are derived from
+//! them (the upper band rises through them, the lower one falls through
+//! their complement). The shape belongs to the boundary, not to either band,
+//! which is the only way a hand-drawn slope can still sum to 1.
 
 /// How a crossfade gets from one band to the next.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -55,19 +61,79 @@ impl BandCurve {
 }
 
 /// One shared boundary between two adjacent bands.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Edge {
-    /// Where the two bands are equal, in axis units.
+    /// Where the two bands are equal, in axis units. With a [`shape`] that
+    /// is no longer literally true; it stays the crossfade's CENTRE.
+    ///
+    /// [`shape`]: Edge::shape
     pub at: f32,
     /// Total width of the crossfade, centred on `at`. 0 is a hard cut.
     pub width: f32,
+    /// Points inside the crossfade that shape its slope: `[t, v]`, `t` the
+    /// position across it (0 = its low corner, 1 = its high one) and `v` the
+    /// UPPER band's coverage there. The lower band gets `1 - v`, so the pair
+    /// still sums to 1. Empty = the plain linear/smooth ramp.
+    ///
+    /// Relative, so widening or sliding the crossfade carries its shape.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    pub shape: Vec<[f32; 2]>,
 }
 
 impl Edge {
     pub fn new(at: f32, width: f32) -> Self {
-        Self { at, width }
+        Self { at, width, shape: Vec::new() }
     }
+
+    /// The rising side at `t` (0..1 across the crossfade): `curve` through
+    /// the shape points, exactly as the shader's `curve_eval` draws it.
+    pub fn rise(&self, curve: BandCurve, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if self.shape.is_empty() {
+            return curve.eval(t);
+        }
+        let mut p: Vec<[f32; 2]> = Vec::with_capacity(self.shape.len() + 2);
+        p.push([0.0, 0.0]);
+        p.extend(self.shape.iter().copied());
+        p.push([1.0, 1.0]);
+        shaped_eval(&p, t, curve)
+    }
+}
+
+/// `p` sorted by x, `x` inside it. Linear, or the monotone cubic the shader
+/// uses (Fritsch-Carlson, flat ends) — the same maths as `curveui::eval`
+/// and the WGSL `curve_eval`, so `weights` agrees with the picture.
+fn shaped_eval(p: &[[f32; 2]], x: f32, curve: BandCurve) -> f32 {
+    let sec = |i: usize| (p[i + 1][1] - p[i][1]) / (p[i + 1][0] - p[i][0]).max(1e-5);
+    let tan = |i: usize| {
+        if i == 0 || i + 1 >= p.len() {
+            return 0.0;
+        }
+        let (a, b) = (sec(i - 1), sec(i));
+        if a * b <= 0.0 {
+            return 0.0;
+        }
+        let lim = 3.0 * a.abs().min(b.abs());
+        (0.5 * (a + b)).clamp(-lim, lim)
+    };
+    for i in 1..p.len() {
+        let (a, b) = (p[i - 1], p[i]);
+        if x <= b[0] {
+            let h = (b[0] - a[0]).max(1e-5);
+            let t = ((x - a[0]) / h).clamp(0.0, 1.0);
+            if curve == BandCurve::Linear {
+                return a[1] + (b[1] - a[1]) * t;
+            }
+            let (m0, m1) = (tan(i - 1) * h, tan(i) * h);
+            let (t2, t3) = (t * t, t * t * t);
+            return (2.0 * t3 - 3.0 * t2 + 1.0) * a[1]
+                + (t3 - 2.0 * t2 + t) * m0
+                + (-2.0 * t3 + 3.0 * t2) * b[1]
+                + (t3 - t2) * m1;
+        }
+    }
+    p[p.len() - 1][1]
 }
 
 /// The partition itself.
@@ -195,6 +261,13 @@ impl BandRanges {
             };
             let room = before.min(after).max(0.0);
             self.edges[i].width = self.edges[i].width.clamp(0.0, room);
+            // A shape lives strictly inside its crossfade, in order.
+            let s = &mut self.edges[i].shape;
+            for p in s.iter_mut() {
+                p[0] = p[0].clamp(1e-4, 1.0 - 1e-4);
+                p[1] = p[1].clamp(0.0, 1.0);
+            }
+            s.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
         }
     }
 
@@ -235,7 +308,7 @@ impl BandRanges {
         w[band.min(n - 1)] = 1.0;
         // Then the one crossfade `x` can be inside.
         for i in 0..self.edges.len() {
-            let e = self.edges[i];
+            let e = &self.edges[i];
             if e.width <= 0.0 {
                 continue;
             }
@@ -243,7 +316,7 @@ impl BandRanges {
             if d.abs() * 2.0 >= e.width {
                 continue;
             }
-            let t = self.curve.eval(d / e.width + 0.5);
+            let t = e.rise(self.curve, d / e.width + 0.5);
             // Edge i separates band i (below) from band i+1 (above); on a
             // wrapping axis the last edge closes back onto band 0.
             let (below, above) = if self.wrap {
@@ -348,7 +421,8 @@ impl BandRanges {
 /// reason `LumaBand` grew explicit end coverages.
 ///
 /// The points are the crossfade CORNERS, not a resampling: four points for a
-/// middle band, two or three at the ends. Whatever interpolates them (the
+/// middle band, two or three at the ends — plus, between each pair of
+/// corners, that edge's [`Edge::shape`] points. Whatever interpolates them (the
 /// shader's `curve_eval`, the UI's preview) decides linear versus smooth,
 /// and [`BandRanges::curve`] says which it should be.
 pub fn band_curve(r: &BandRanges, i: usize) -> Vec<[f32; 2]> {
@@ -363,22 +437,36 @@ pub fn band_curve(r: &BandRanges, i: usize) -> Vec<[f32; 2]> {
     // above (the one it falls across). On a wrapping axis both always exist;
     // on a linear axis the first and last bands are missing one.
     let below = if r.wrap {
-        Some(r.edges[(i + r.edges.len() - 1) % r.edges.len()])
+        Some(&r.edges[(i + r.edges.len() - 1) % r.edges.len()])
     } else if i > 0 {
-        Some(r.edges[i - 1])
+        Some(&r.edges[i - 1])
     } else {
         None
     };
     let above = if r.wrap {
-        Some(r.edges[i % r.edges.len()])
+        Some(&r.edges[i % r.edges.len()])
     } else if i < r.edges.len() {
-        Some(r.edges[i])
+        Some(&r.edges[i])
     } else {
         None
+    };
+    // The shape rides between the corners, in the edge's own coordinates:
+    // rising through `v` below this band, falling through `1 - v` above it.
+    // A hard cut has no inside to put it in.
+    let inner = |e: &Edge, rising: bool| -> Vec<[f32; 2]> {
+        if e.width <= 0.0 {
+            return Vec::new();
+        }
+        let x0 = e.at - e.width * 0.5;
+        e.shape
+            .iter()
+            .map(|p| [x0 + p[0] * e.width, if rising { p[1] } else { 1.0 - p[1] }])
+            .collect()
     };
     match below {
         Some(e) => {
             out.push([e.at - e.width * 0.5, 0.0]);
+            out.extend(inner(e, true));
             out.push([e.at + e.width * 0.5, 1.0]);
         }
         None => out.push([lo, 1.0]),
@@ -386,6 +474,7 @@ pub fn band_curve(r: &BandRanges, i: usize) -> Vec<[f32; 2]> {
     match above {
         Some(e) => {
             out.push([e.at - e.width * 0.5, 1.0]);
+            out.extend(inner(e, false));
             out.push([e.at + e.width * 0.5, 0.0]);
         }
         None => out.push([hi, 1.0]),
@@ -603,6 +692,44 @@ mod tests {
                 assert!((got - want).abs() < 1e-3, "band {i} at {x}: {got} vs {want}");
             }
         }
+    }
+
+    /// A shaped crossfade is still a partition: the upper band rises
+    /// through the shape and the lower one falls through its complement.
+    #[test]
+    fn a_shaped_crossfade_still_sums_to_one() {
+        for curve in BandCurve::ALL {
+            let mut b = BandRanges::even(3, (0.0, 2.0), false, 0.8);
+            b.curve = curve;
+            b.edges[0].shape = vec![[0.2, 0.7], [0.6, 0.8]];
+            b.edges[1].shape = vec![[0.5, 0.1]];
+            b.normalize();
+            sum_is_one(&b);
+            // The shape point itself is ON the curve.
+            let e = &b.edges[0];
+            let x = e.at - 0.5 * e.width + 0.2 * e.width;
+            assert!((b.weights(x)[1] - 0.7).abs() < 1e-3, "{:?}", b.weights(x));
+            assert!((b.weights(x)[0] - 0.3).abs() < 1e-3);
+        }
+    }
+
+    /// `band_curve` and `weights` describe the same shaped partition, for
+    /// both bands that share the edge.
+    #[test]
+    fn a_shaped_edge_lands_in_both_neighbours_curves() {
+        let mut r = BandRanges::even(3, (0.0, 2.0), false, 0.8);
+        r.curve = BandCurve::Linear;
+        r.edges[0].shape = vec![[0.25, 0.6]];
+        r.normalize();
+        let lower = band_curve(&r, 0);
+        let upper = band_curve(&r, 1);
+        assert_eq!(lower.len(), 4, "{lower:?}");
+        assert_eq!(upper.len(), 5, "{upper:?}");
+        assert!((lower[2][1] - 0.4).abs() < 1e-6 && (upper[1][1] - 0.6).abs() < 1e-6);
+        assert_eq!(lower[2][0], upper[1][0]);
+        let x = lower[2][0];
+        let w = r.weights(x);
+        assert!((w[0] - 0.4).abs() < 1e-4 && (w[1] - 0.6).abs() < 1e-4, "{w:?}");
     }
 
     #[test]

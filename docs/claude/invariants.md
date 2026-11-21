@@ -551,6 +551,14 @@
   dissolves keep the corrections and the band names with their bands
   (`LumaKeyParams::split_band`/`dissolve_band` do the bookkeeping the raw
   `sync_from_ranges` cannot; `luma_panel` reports them in `LumaOut`).
+  **A crossfade's slope points belong to the EDGE** (`bands::Edge::shape`,
+  relative 0..1 across the crossfade), never to a band: both neighbours
+  derive from it, one through `v` and one through `1 - v`, which is the only
+  way a shaped boundary still sums to 1. A slope point lands in TWO bands'
+  packed curves, so the editor checks both against `ZONE_PTS` before adding.
+  The band editor holds points in order (`CurveCfg::keep_order`): a point
+  stops at its neighbour, because roles in `bandui::read_back` are read by
+  position and a swap would re-mean a corner.
   **The ranges PREVIEW follows the keyer's contract, not a new one.**
   `GradeZones::preview` (a `ZonePreview`: matte / highlight / zones / off,
   plus the zone) is AUTHORED — a knob that undoes and saves — and `previewing` is
