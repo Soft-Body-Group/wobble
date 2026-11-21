@@ -244,7 +244,7 @@ def api_get(path: str) -> dict:
         with urllib.request.urlopen(req, timeout=5) as r:
             return json.loads(r.read().decode("utf-8"))
     except (OSError, ValueError, KeyError) as e:
-        raise RuntimeError("organisicator isn't running — start it to add plates by asset") from e
+        raise RuntimeError("organisicator isn't running — start it to reach its projects") from e
 
 
 def asset_ids(project: Project, inst: Optional[Instance], paths: list[str], projects: list, listing: dict) -> dict[str, int]:

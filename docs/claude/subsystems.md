@@ -1424,6 +1424,15 @@ Rules that are easy to break:
   (`addons::intern`), so a rescan does not leak a new copy each time.
 - Without `--api`, an enabled addon with `run` opens the API on port 0 and
   the port reaches the process as `WOBBLE_API_PORT`.
+- **Pickers** (`PickerDef`, `for: "load"`): `Addons::pickers_for` gives the
+  Load panel one button each (`nodes/read.rs` `picker_buttons`); a click is
+  `AssetAct::AddonPick` → `Addons::pick` (opens the named panel, queues
+  `{type: "pick", node}` with the graph key the API uses), and the process
+  answers with `load_set`. **No organisicator code in the Load panel**: its
+  footage browser is the organisicator addon's `media` panel
+  (`plugins/organisicator/media.py`), over organisicator's API.
+- `list` rows share a choice's options plumbing (`a.options`); a
+  double-click event carries `"activate": true`.
 - Next: addon hotkeys need `keymap` to take rows at runtime; viewer
   overlays need a declarative shape list; Tab search should list commands.
 
@@ -2016,7 +2025,10 @@ by itself. `--test-setup` with `WOBBLE_TEST_ORG_FIXTURE` set to a running
 A Load can name an organisicator ASSET instead of a path: `ENode::asset`
 (`AssetRef`: organisicator's database id for the indexed file/sequence, plus
 the names it had when last seen, for display only). The panel shows project
-/ shot / asset and a tree picker (`assets::Picker`), never the path. What
+/ shot / asset, never the path; footage is PICKED by the organisicator addon's
+Load picker (`addons::PickerDef`, answered with `load_set`), not by a window
+in the app. `assets::Picker` is now only the collect window's "which shot"
+chooser. What
 must stay true:
 
 - **Database-driven: the id is the truth, organisicator answers.** It serves
@@ -2032,8 +2044,9 @@ must stay true:
 - **Ids survive because organisicator rewrites rows in place**: a project
   move and a Files-view rename `rekey_dir` the index, `instance_rename` /
   `follow_dir_rename` keep a shot's record. A Finder rename does not.
-- The picker lists only what the index holds (a project organisicator has
-  not indexed says so) and only what `decode::is_supported` opens.
+- The addon's browser lists what the index holds (a project organisicator
+  has not indexed says so), plus footage LINKED to the shot (`linked` in
+  `/v1/projects/{id}/assets?instance=N`; an unindexed one loads by path).
 - The addon's "add plates" looks the plates' ids up through the same API
   (`shots.fetch_asset_ids`); `node_create` takes `asset: {id}`.
 - **A plain Load can be INGESTED** (`ingest…`, the picker's destination

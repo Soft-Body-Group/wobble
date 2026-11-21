@@ -42,6 +42,8 @@ pub(crate) struct Cx<'a> {
     pub load_errors: &'a HashMap<u64, String>,
     pub load_mirror: &'a Option<(u64, Option<(u64, u64)>)>,
     pub asset_act: &'a mut Option<AssetAct>,
+    /// Enabled addons' Load pickers: (addon id, picker). Each is a button.
+    pub pickers: &'a [(String, addons::PickerDef)],
     pub cache_meter: &'a mut Option<usize>,
     pub deferred_load: &'a mut Option<String>,
     pub deferred_refresh: &'a mut bool,
@@ -92,6 +94,7 @@ pub(crate) fn panel(
         load_errors,
         load_mirror,
         asset_act,
+        pickers,
         cache_meter,
         deferred_load,
         deferred_refresh,
@@ -143,9 +146,7 @@ pub(crate) fn panel(
             ui.end_row();
         });
         ui.horizontal(|ui| {
-            if ui.button("pick asset…").on_hover_text("choose another asset from the project tree").clicked() {
-                *asset_act = Some(AssetAct::Pick);
-            }
+            picker_buttons(ui, pickers, asset_act);
             if ui.button("reload").on_hover_text("find the asset again (after a move) and load it").clicked() {
                 *asset_act = Some(AssetAct::Reload);
             }
@@ -161,10 +162,8 @@ pub(crate) fn panel(
         );
     });
     ui.horizontal(|ui| {
-        #[cfg(not(target_arch = "wasm32"))]
-        if ui.button("pick asset…").on_hover_text("load an asset from an organisicator project by name — keeps working when the project moves").clicked() {
-            *asset_act = Some(AssetAct::Pick);
-        }
+        // Addons' media browsers (`addon.json` "pickers"), beside our own.
+        picker_buttons(ui, pickers, asset_act);
         #[cfg(not(target_arch = "wasm32"))]
         if !path.is_empty()
             && ui
@@ -661,4 +660,16 @@ pub(crate) fn panel(
         *deferred_refresh = true;
     }
     *cache_meter = Some(reader_slot);
+}
+
+/// One button per enabled addon picker for a Load; a click asks the addon
+/// (`addons::Addons::pick`), which fills the Load through `load_set`.
+fn picker_buttons(ui: &mut egui::Ui, pickers: &[(String, addons::PickerDef)], asset_act: &mut Option<AssetAct>) {
+    for (addon, k) in pickers {
+        let b = ui.button(&k.label);
+        let b = if k.tip.is_empty() { b } else { b.on_hover_text(&k.tip) };
+        if b.clicked() {
+            *asset_act = Some(AssetAct::AddonPick(addon.clone(), k.id.clone()));
+        }
+    }
 }

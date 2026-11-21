@@ -24,6 +24,12 @@
 //!   the house widgets; the process sets values, never pixels.
 //! - Nodes an addon wants ship beside it as `plugin.json` / `tool.json`
 //!   folders, which load whether or not the addon is enabled.
+//! - **Pickers** put a button of the addon's on a node's panel — today a
+//!   Load's, beside its file browser (`"pickers": [{"id", "label", "for":
+//!   "load"}]`). A click opens the picker's panel (`panel`, if named) and
+//!   queues `{type: "pick", picker, node}`; the process answers with an
+//!   ordinary call (`load_set`). So a media browser over some database is an
+//!   addon, not a hardcoded window.
 
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -59,6 +65,27 @@ pub struct Manifest {
     pub commands: Vec<CommandDef>,
     #[serde(default)]
     pub panels: Vec<PanelDef>,
+    #[serde(default)]
+    pub pickers: Vec<PickerDef>,
+}
+
+/// A button the addon puts on a node's panel (`for`: "load" today).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PickerDef {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub tip: String,
+    #[serde(rename = "for", default = "load_kind")]
+    pub target: String,
+    /// The addon's panel a click opens (the process fills it when it hears
+    /// the pick).
+    #[serde(default)]
+    pub panel: String,
+}
+
+fn load_kind() -> String {
+    "load".into()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -125,6 +152,25 @@ pub enum RowDef {
         #[serde(default)]
         default: String,
     },
+    /// A scrolling list to pick from (what a choice is when there are many
+    /// things, a browser's contents): an event with the clicked option, and
+    /// `"activate": true` when it was double-clicked. Options and the pick
+    /// are set like a choice's; `rows` is its height in lines.
+    List {
+        id: String,
+        #[serde(default)]
+        label: String,
+        #[serde(default)]
+        options: Vec<String>,
+        #[serde(default)]
+        default: String,
+        #[serde(default = "list_rows")]
+        rows: u32,
+    },
+}
+
+fn list_rows() -> u32 {
+    10
 }
 
 fn one() -> f32 {
@@ -139,7 +185,8 @@ impl RowDef {
             | RowDef::Toggle { id, .. }
             | RowDef::Text { id, .. }
             | RowDef::Field { id, .. }
-            | RowDef::Choice { id, .. } => id,
+            | RowDef::Choice { id, .. }
+            | RowDef::List { id, .. } => id,
         }
     }
 
@@ -149,7 +196,7 @@ impl RowDef {
             RowDef::Slider { default, .. } => json!(default),
             RowDef::Toggle { default, .. } => json!(default),
             RowDef::Text { text, .. } => json!(text),
-            RowDef::Field { default, .. } | RowDef::Choice { default, .. } => json!(default),
+            RowDef::Field { default, .. } | RowDef::Choice { default, .. } | RowDef::List { default, .. } => json!(default),
         }
     }
 }
@@ -165,6 +212,17 @@ impl Manifest {
         for c in &m.commands {
             if !ok(&c.id) || !seen.insert(format!("c/{}", c.id)) {
                 return Err(format!("command id '{}' is empty, malformed or repeated", c.id));
+            }
+        }
+        for k in &m.pickers {
+            if !ok(&k.id) || !seen.insert(format!("k/{}", k.id)) {
+                return Err(format!("picker id '{}' is empty, malformed or repeated", k.id));
+            }
+            if k.target != "load" {
+                return Err(format!("picker '{}': 'for' must be \"load\"", k.id));
+            }
+            if !k.panel.is_empty() && !m.panels.iter().any(|p| p.id == k.panel) {
+                return Err(format!("picker '{}' opens panel '{}', which isn't declared", k.id, k.panel));
             }
         }
         for p in &m.panels {
@@ -214,7 +272,7 @@ impl Addon {
         for p in &m.panels {
             for r in &p.rows {
                 values.insert(format!("{}/{}", p.id, r.id()), r.default_value());
-                if let RowDef::Choice { options: o, .. } = r {
+                if let RowDef::Choice { options: o, .. } | RowDef::List { options: o, .. } = r {
                     options.insert(format!("{}/{}", p.id, r.id()), o.clone());
                 }
             }
@@ -503,6 +561,27 @@ impl Addons {
         }
     }
 
+    /// Every enabled addon's pickers for a kind of node (`"load"`), as
+    /// (addon id, picker) — what that node's panel shows as buttons.
+    pub fn pickers_for(&self, target: &str) -> Vec<(String, PickerDef)> {
+        self.list
+            .iter()
+            .filter(|a| a.enabled)
+            .flat_map(|a| a.m.pickers.iter().filter(|k| k.target == target).map(|k| (a.m.id.clone(), k.clone())))
+            .collect()
+    }
+
+    /// A picker's button was clicked on node `node`: open its panel and tell
+    /// the process which node it is filling.
+    pub fn pick(&mut self, addon: &str, picker: &str, node: u64) {
+        let Some(a) = self.get_mut(addon).filter(|a| a.enabled) else { return };
+        let Some(k) = a.m.pickers.iter().find(|k| k.id == picker).cloned() else { return };
+        if !k.panel.is_empty() {
+            a.open_panels.insert(k.panel.clone());
+        }
+        a.push(json!({ "type": "pick", "picker": k.id, "for": k.target, "node": node }));
+    }
+
     /// For `addon_events`: everything queued, oldest first.
     pub fn take_events(&mut self, addon: &str) -> Vec<Value> {
         self.get_mut(addon).map(|a| a.events.drain(..).collect()).unwrap_or_default()
@@ -518,7 +597,7 @@ impl Addons {
         }
         for (k, v) in values {
             let key = format!("{panel}/{k}");
-            let choice = def.rows.iter().any(|r| r.id() == k && matches!(r, RowDef::Choice { .. }));
+            let choice = def.rows.iter().any(|r| r.id() == k && matches!(r, RowDef::Choice { .. } | RowDef::List { .. }));
             match v {
                 // A choice row takes its options and its pick in one object.
                 Value::Object(o) if choice => {
@@ -622,6 +701,39 @@ fn panel_rows(ui: &mut egui::Ui, a: &mut Addon, p: &PanelDef) {
                     a.values.insert(key.clone(), json!(v));
                 }
                 resp.lost_focus().then(|| json!(v))
+            }
+            RowDef::List { label, rows, .. } => {
+                let opts = a.options.get(&key).cloned().unwrap_or_default();
+                let pick = cur.as_str().unwrap_or_default().to_string();
+                let mut picked = None;
+                if !label.is_empty() {
+                    ui.label(egui::RichText::new(label).small());
+                }
+                let line = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt(("addon-list", &key))
+                        .max_height(line * (*rows).max(2) as f32)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            if opts.is_empty() {
+                                ui.weak("—");
+                            }
+                            for o in &opts {
+                                let r = ui.selectable_label(*o == pick, o.as_str());
+                                if r.double_clicked() {
+                                    picked = Some((json!(o), true));
+                                } else if r.clicked() {
+                                    picked = Some((json!(o), false));
+                                }
+                            }
+                        });
+                });
+                if let Some((v, activate)) = picked {
+                    a.values.insert(key.clone(), v.clone());
+                    a.push(json!({ "type": "panel", "panel": p.id, "row": r.id(), "value": v, "activate": activate }));
+                }
+                None
             }
             RowDef::Choice { label, .. } => {
                 let opts = a.options.get(&key).cloned().unwrap_or_default();
@@ -784,6 +896,45 @@ mod tests {
         let t = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/organisicator/addon.json")).unwrap();
         let m = Manifest::parse(&t).unwrap();
         assert_eq!(m.id, "organisicator");
+        assert!(m.pickers.iter().any(|k| k.target == "load"), "it offers a Load picker");
+    }
+
+    #[test]
+    fn a_picker_opens_its_panel_and_names_the_node() {
+        let m = Manifest::parse(
+            r#"{"id":"a","label":"A","pickers":[{"id":"media","label":"from db…","panel":"b"}],
+                "panels":[{"id":"b","label":"B","rows":[{"kind":"list","id":"l","options":["x"],"rows":4}]}]}"#,
+        )
+        .unwrap();
+        let mut a = Addon::new(PathBuf::new(), m);
+        a.enabled = true;
+        let mut ad = Addons::default();
+        ad.list.push(a);
+        let got = ad.pickers_for("load");
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].0.as_str(), got[0].1.label.as_str()), ("a", "from db…"));
+        ad.pick("a", "media", 42);
+        let ev = ad.take_events("a");
+        assert_eq!(ev[0]["type"], "pick");
+        assert_eq!(ev[0]["node"], 42);
+        assert!(ad.get_mut("a").unwrap().open_panels.contains("b"));
+        // A list takes options like a choice.
+        let mut v = Map::new();
+        v.insert("l".into(), json!({ "options": ["p", "q"], "value": "q" }));
+        ad.panel_set("a", "b", &v, None).unwrap();
+        assert_eq!(ad.get_mut("a").unwrap().options["b/l"], vec!["p", "q"]);
+        // Disabled: no buttons, no events.
+        ad.set_enabled("a", false, None);
+        assert!(ad.pickers_for("load").is_empty());
+        ad.pick("a", "media", 42);
+        assert!(ad.take_events("a").is_empty());
+    }
+
+    #[test]
+    fn bad_pickers_are_refused() {
+        assert!(Manifest::parse(r#"{"id":"a","label":"x","pickers":[{"id":"k","label":"k","for":"blur"}]}"#).is_err());
+        assert!(Manifest::parse(r#"{"id":"a","label":"x","pickers":[{"id":"k","label":"k","panel":"nope"}]}"#).is_err());
+        assert!(Manifest::parse(r#"{"id":"a","label":"x","pickers":[{"id":"k","label":"k"}]}"#).is_ok());
     }
 }
 

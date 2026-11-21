@@ -366,7 +366,7 @@ pub fn methods() -> Vec<Method> {
         // its manifest declared, and answers with ordinary calls.
         Method {
             name: "addon_events",
-            summary: "Wait for what the user did with an addon's commands and panels: [{type: 'command', command}, {type: 'panel', panel, row, value}]. Returns as soon as there is one, or empty after timeout_ms (default 20000, max 30000).",
+            summary: "Wait for what the user did with an addon's commands, panels and pickers: [{type: 'command', command}, {type: 'panel', panel, row, value, activate?}, {type: 'pick', picker, for: 'load', node}]. Returns as soon as there is one, or empty after timeout_ms (default 20000, max 30000).",
             params: obj(json!({
                 "addon": { "type": "string", "description": "the addon's id (WOBBLE_ADDON)" },
                 "timeout_ms": { "type": "integer" }
@@ -374,8 +374,18 @@ pub fn methods() -> Vec<Method> {
             mutates: false,
         },
         Method {
+            name: "load_set",
+            summary: "Point an existing Load at other footage, as a new clip with its own frame range: a 'path' (image sequence, movie or still), or an organisicator 'asset' by database id ({id: N}). What an addon's Load picker answers a {type: 'pick', node} event with.",
+            params: obj(json!({
+                "id": id,
+                "path": { "type": "string" },
+                "asset": { "type": "object", "description": "an organisicator asset by database id, {id: N}; re-found through organisicator on every load" }
+            }), &["id"]),
+            mutates: true,
+        },
+        Method {
             name: "addon_panel_set",
-            summary: "Set rows of an addon's panel: values maps a row id to its value (number for a slider, bool for a toggle, string for text or a field, string for a button's label; a choice takes the picked string, or {options: [..], value} to replace its options). open shows or hides the panel.",
+            summary: "Set rows of an addon's panel: values maps a row id to its value (number for a slider, bool for a toggle, string for text or a field, string for a button's label; a choice or a list takes the picked string, or {options: [..], value} to replace its options). open shows or hides the panel.",
             params: obj(json!({
                 "addon": { "type": "string" },
                 "panel": { "type": "string" },

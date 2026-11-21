@@ -1043,6 +1043,7 @@ impl Gfx {
                 self.api_node(id, true)
             }
             "node_create" => self.api_create(p),
+            "load_set" => self.api_load_set(p),
             "node_delete" => {
                 let id = need_id(p, "id")?;
                 self.api_exists(id)?;
@@ -1695,6 +1696,64 @@ impl Gfx {
             v["load_error"] = json!(e.to_string());
         }
         Ok(v)
+    }
+
+    /// `load_set`: point an existing Load at other footage — a path, or an
+    /// organisicator asset by id — as a new clip (its own range). What an
+    /// addon's Load picker answers with (`addons::PickerDef`).
+    fn api_load_set(&mut self, p: &Value) -> Result<Value, ApiError> {
+        let id = need_id(p, "id")?;
+        self.api_exists(id)?;
+        if !matches!(self.egraph.node(id).map(|n| &n.kind), Some(NodeKind::Read { .. })) {
+            return Err(ApiError::invalid(format!("node {id} is not a Load")));
+        }
+        let path = p.get("path").and_then(|v| v.as_str()).map(str::to_string);
+        let asset = match p.get("asset").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => Some(
+                serde_json::from_value::<crate::assets::AssetRef>(v.clone())
+                    .map_err(|e| ApiError::invalid(format!("asset: {e}")))?,
+            ),
+        };
+        match (path, asset) {
+            (Some(_), Some(_)) => Err(ApiError::invalid("give a Load a 'path' or an 'asset', not both")),
+            (None, None) => Err(ApiError::invalid("give 'path' or 'asset'")),
+            (None, Some(a)) => {
+                if let Some(n) = self.egraph.node_mut(id) {
+                    n.asset = Some(a);
+                }
+                self.load_asset_fresh(id);
+                Ok(self.load_set_answer(id))
+            }
+            (Some(path), None) => {
+                if let Some(n) = self.egraph.node_mut(id) {
+                    if n.project_only {
+                        return Err(ApiError::invalid(format!("node {id} is a Project Load: give it an 'asset'")));
+                    }
+                    n.asset = None;
+                    n.ui_label.clear();
+                }
+                if let Some(NodeKind::Read { path: rp, start, first, last, range, .. }) =
+                    self.egraph.node_mut(id).map(|n| &mut n.kind)
+                {
+                    *rp = path.clone();
+                    (*start, *first, *last, *range) = (None, None, None, None);
+                }
+                self.loaded.remove(&id);
+                self.load_errors.remove(&id);
+                self.load_read(id, &path);
+                Ok(self.load_set_answer(id))
+            }
+        }
+    }
+
+    fn load_set_answer(&mut self, id: u64) -> Value {
+        self.playback_dirty = true;
+        let mut v = json!({ "id": id });
+        if let Some(e) = self.load_errors.get(&id) {
+            v["load_error"] = json!(e.to_string());
+        }
+        v
     }
 
     /// Why a channel on `id` may not be written, if it may not.

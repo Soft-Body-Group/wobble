@@ -3219,8 +3219,16 @@ Wobble's equivalent of a Blender addon. It's a folder in `plugins/` or
 - **The manifest declares the UI; the app draws it.** Commands show up
   in the top bar's **addons** menu and in the **addons…** window. Panels
   are floating windows built from `button`, `slider`, `toggle`, `text`,
-  `field` and `choice` (a dropdown whose options the process can replace)
-  rows.
+  `field`, `choice` (a dropdown whose options the process can replace)
+  and `list` (a scrolling list for many things, like a browser's contents;
+  a double-click comes with `"activate": true`) rows.
+- **Pickers put the addon's button on a node's panel.** Today that means a
+  Load, next to its file browser: `"pickers": [{ "id": "media", "label":
+  "from project…", "for": "load", "panel": "media" }]`. A click opens that
+  panel and sends `{type: "pick", picker, node}`, and the addon fills the
+  Load with `load_set` (a `path`, or an organisicator `asset` by id). This
+  is how a media browser over a database works without being built into
+  wobble.
 - **`run` names a program.** It starts in the addon's folder with
   `WOBBLE_API_PORT` and `WOBBLE_ADDON` set, and talks to the app through
   the scripting API above. `addon_events` waits for clicks and slider
@@ -3251,11 +3259,16 @@ def add_blur(w):
 @addon.row("main", "size")
 def size(w, value): ...
 
+@addon.pick("media")            # a Load picker
+def media(w, node): ...         # later: w.load_set(id=node, path=...)
+
 addon.run()
 ```
 
 `plugins/hello_addon` is the complete example; `plugins/organisicator`
-(project navigation for organisicator-managed shows) is a real one. Not yet: addon hotkeys
+(project navigation for organisicator-managed shows, plus a Load picker
+that browses organisicator's database: a shot's own footage and the
+footage linked to it) is a real one. Not yet: addon hotkeys
 (the keymap is still a fixed table), viewer overlays and gizmos, or
 commands in the Tab search.
 

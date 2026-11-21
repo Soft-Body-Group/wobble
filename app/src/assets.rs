@@ -282,7 +282,7 @@ pub fn ingest(client: &Client, src: &str, dest: &Dest) -> Result<AssetRef, Strin
 /// The folder an ingest offers first, from what the footage is.
 pub const DEFAULT_FOLDER: &str = "plates";
 
-// ---- the picker ----------------------------------------------------------------
+// ---- where a comp is collected ----------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct Proj {
@@ -297,104 +297,38 @@ struct Inst {
     value: String,
 }
 
-/// One pickable asset in a shot.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Asset {
-    pub id: i64,
-    pub rel: String,
-    pub label: String,
-    pub frames: Option<i64>,
-    pub sequence: bool,
-}
-
-/// What a shot holds, as organisicator lists it (only what wobble reads).
-pub fn parse_assets(v: &Value) -> (bool, Vec<Asset>) {
-    let indexed = v.get("indexed").and_then(|i| i.as_bool()).unwrap_or(false);
-    let list = v["assets"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| {
-                    let rel = x["rel"].as_str()?.to_string();
-                    // Only what a Load can open: the decoder's own list.
-                    let probe = rel.replace('#', "0");
-                    if !engine::decode::is_supported(std::path::Path::new(&probe)) {
-                        return None;
-                    }
-                    Some(Asset {
-                        id: x["id"].as_i64()?,
-                        label: asset_label(&rel),
-                        rel,
-                        frames: x["frames"].as_i64(),
-                        sequence: x["kind"].as_str() == Some("sequence"),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    (indexed, list)
-}
-
-/// The asset picker's state: which Load it fills, organisicator's projects,
-/// and the trees / shot contents fetched so far (each on first expand).
+/// Where a whole comp is COLLECTED (`collect.rs`): a project and a shot in
+/// it from organisicator's tree, and the folder under the shot its footage
+/// goes in. (Picking FOOTAGE for a Load is not here: that is an addon's
+/// picker, `addons::PickerDef` — the organisicator addon's media browser.)
 pub struct Picker {
-    pub node: u64,
     client: Result<Client, String>,
     projects: Result<Vec<Proj>, String>,
     trees: HashMap<i64, Result<Vec<Inst>, String>>,
-    contents: HashMap<(i64, Option<i64>), Result<(bool, Vec<Asset>), String>>,
     pub filter: String,
-    /// The reference the Load holds now, to open the tree onto it.
-    current: Option<AssetRef>,
-    /// Some = choosing where to INGEST the Load's footage, not an asset:
-    /// the folder under the shot, and the shot picked so far.
-    ingest: Option<(String, Option<Dest>)>,
-    /// Choosing where a whole comp is COLLECTED (`collect.rs`), not one
-    /// Load: only the words differ.
-    collect: bool,
-}
-
-/// What the picker was used for this frame.
-pub enum Picked {
-    Asset(AssetRef),
-    IngestTo(Dest),
+    /// The folder under the shot, and the shot picked so far.
+    folder: String,
+    chosen: Option<Dest>,
 }
 
 impl Picker {
-    pub fn new(node: u64, current: Option<AssetRef>) -> Self {
+    /// The shot a comp is collected into; the folder is where its footage goes.
+    pub fn for_collect() -> Self {
         let mut p = Picker {
-            node,
             client: Err(String::new()),
             projects: Ok(Vec::new()),
             trees: HashMap::new(),
-            contents: HashMap::new(),
             filter: String::new(),
-            current,
-            ingest: None,
-            collect: false,
+            folder: DEFAULT_FOLDER.to_string(),
+            chosen: None,
         };
         p.refresh();
-        p
-    }
-
-    /// The picker as a destination chooser for an ingest.
-    pub fn for_ingest(node: u64) -> Self {
-        let mut p = Picker::new(node, None);
-        p.ingest = Some((DEFAULT_FOLDER.to_string(), None));
-        p
-    }
-
-    /// The shot a comp is collected into; the folder is where its footage goes.
-    pub fn for_collect() -> Self {
-        let mut p = Picker::for_ingest(u64::MAX);
-        p.collect = true;
         p
     }
 
     pub fn refresh(&mut self) {
         self.client = Client::discover();
         self.trees.clear();
-        self.contents.clear();
         self.projects = self.client.clone().and_then(|c| {
             let v = c.get("/v1/projects")?;
             Ok(v.as_array()
@@ -432,55 +366,31 @@ impl Picker {
             .clone()
     }
 
-    fn assets(&mut self, pid: i64, inst: Option<i64>) -> Result<(bool, Vec<Asset>), String> {
-        let client = self.client.clone();
-        self.contents
-            .entry((pid, inst))
-            .or_insert_with(|| {
-                let q = inst.map(|i| format!("?instance={i}")).unwrap_or_default();
-                Ok(parse_assets(&client?.get(&format!("/v1/projects/{pid}/assets{q}"))?))
-            })
-            .clone()
-    }
-
-    /// Draws the picker; returns the reference picked this frame, if any.
+    /// Draws the chooser; returns the destination once it is confirmed.
     /// `open` goes false when the window is closed.
-    pub fn ui(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<Picked> {
-        let mut picked = None;
+    pub fn ui(&mut self, ctx: &egui::Context, open: &mut bool) -> Option<Dest> {
         let mut refresh = false;
         let mut go = false;
-        let title = match (self.collect, self.ingest.is_some()) {
-            (true, _) => "collect into…",
-            (_, true) => "ingest into…",
-            _ => "pick asset",
-        };
-        let collect = self.collect;
-        egui::Window::new(title)
-            .id(egui::Id::new(("asset-picker", self.node)))
+        egui::Window::new("collect into…")
+            .id(egui::Id::new("collect-picker"))
             .open(open)
             .default_size([380.0, 460.0])
             .resizable(true)
             .collapsible(false)
             .show(ctx, |ui| {
-                if let Some((folder, chosen)) = &mut self.ingest {
-                    ui.weak(if collect {
-                        "pick the shot the comp is collected into; its footage goes in this folder of the shot"
-                    } else {
-                        "a COPY of this Load's footage goes into the shot you pick; the Load then reads the copy by id"
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("folder");
-                        ui.add(egui::TextEdit::singleline(folder).desired_width(140.0));
-                        let label = match chosen {
-                            Some(d) => format!("{} {} / {}", if collect { "use" } else { "ingest into" }, d.project_name, if d.shot.is_empty() { "(project)".into() } else { d.shot.join(" › ") }),
-                            None => "pick a shot below".into(),
-                        };
-                        if ui.add_enabled(chosen.is_some() && !folder.trim().is_empty(), egui::Button::new(label)).clicked() {
-                            go = true;
-                        }
-                    });
-                    ui.separator();
-                }
+                ui.weak("pick the shot the comp is collected into; its footage goes in this folder of the shot");
+                ui.horizontal(|ui| {
+                    ui.label("folder");
+                    ui.add(egui::TextEdit::singleline(&mut self.folder).desired_width(140.0));
+                    let label = match &self.chosen {
+                        Some(d) => format!("use {} / {}", d.project_name, if d.shot.is_empty() { "(project)".into() } else { d.shot.join(" › ") }),
+                        None => "pick a shot below".into(),
+                    };
+                    if ui.add_enabled(self.chosen.is_some() && !self.folder.trim().is_empty(), egui::Button::new(label)).clicked() {
+                        go = true;
+                    }
+                });
+                ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("filter");
                     ui.add(egui::TextEdit::singleline(&mut self.filter).desired_width(180.0));
@@ -502,19 +412,13 @@ impl Picker {
                 ui.separator();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for p in &projects {
-                        let here = self.current.as_ref().is_some_and(|c| c.project == p.name);
                         egui::CollapsingHeader::new(egui::RichText::new(&p.name).strong())
-                            .id_salt(("asset-proj", self.node, p.id))
-                            .default_open(here)
+                            .id_salt(("collect-proj", p.id))
                             .show(ui, |ui| match self.tree(p.id) {
                                 Err(e) => {
                                     ui.colored_label(crate::theme::error(), e);
                                 }
-                                Ok(tree) => {
-                                    if let Some(r) = self.level_ui(ui, p, &tree, None, &[]) {
-                                        picked = Some(r);
-                                    }
-                                }
+                                Ok(tree) => self.level_ui(ui, p, &tree, None, &[]),
                             });
                     }
                 });
@@ -523,82 +427,38 @@ impl Picker {
             self.refresh();
         }
         if go {
-            if let Some((folder, Some(d))) = &self.ingest {
+            if let Some(d) = &self.chosen {
                 let mut d = d.clone();
-                d.folder = folder.trim().trim_matches('/').to_string();
-                return Some(Picked::IngestTo(d));
+                d.folder = self.folder.trim().trim_matches('/').to_string();
+                return Some(d);
             }
         }
-        picked.map(Picked::Asset)
+        None
     }
 
-    /// One level of the tree: the assets of `inst`, then its children.
-    fn level_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        p: &Proj,
-        tree: &[Inst],
-        inst: Option<i64>,
-        chain: &[String],
-    ) -> Option<AssetRef> {
-        let mut picked = None;
+    /// One level of the tree: "put it here", then its children.
+    fn level_ui(&mut self, ui: &mut egui::Ui, p: &Proj, tree: &[Inst], inst: Option<i64>, chain: &[String]) {
         let filter = self.filter.to_lowercase();
-        if let Some((_, chosen)) = &mut self.ingest {
-            let here = chosen.as_ref().is_some_and(|d| d.project == p.id && d.instance == inst);
-            let label = if chain.is_empty() { format!("put it in {} itself", p.name) } else { format!("put it in {}", chain.join(" › ")) };
-            if ui.selectable_label(here, label).clicked() {
-                *chosen = Some(Dest {
-                    project: p.id,
-                    project_name: p.name.clone(),
-                    instance: inst,
-                    shot: chain.to_vec(),
-                    folder: String::new(),
-                });
-            }
-        } else {
-        match self.assets(p.id, inst) {
-            Err(e) => {
-                ui.colored_label(crate::theme::error(), e);
-            }
-            Ok((indexed, assets)) => {
-                if !indexed {
-                    ui.weak("not indexed yet — open this project's Work view in organisicator");
-                }
-                for a in assets.iter().filter(|a| filter.is_empty() || a.label.to_lowercase().contains(&filter)) {
-                    let sel = self.current.as_ref().is_some_and(|c| c.id == a.id);
-                    let span = match (a.sequence, a.frames) {
-                        (true, Some(n)) => format!("{n} frames"),
-                        (true, None) => "sequence".into(),
-                        _ => String::new(),
-                    };
-                    if ui.selectable_label(sel, format!("▸ {}    {}", a.label, span)).clicked() {
-                        picked = Some(AssetRef {
-                            id: a.id,
-                            project: p.name.clone(),
-                            shot: chain.to_vec(),
-                            rel: a.rel.clone(),
-                        });
-                    }
-                }
-            }
-        }
+        let here = self.chosen.as_ref().is_some_and(|d| d.project == p.id && d.instance == inst);
+        let label = if chain.is_empty() { format!("put it in {} itself", p.name) } else { format!("put it in {}", chain.join(" › ")) };
+        if (filter.is_empty() || label.to_lowercase().contains(&filter)) && ui.selectable_label(here, label).clicked() {
+            self.chosen = Some(Dest {
+                project: p.id,
+                project_name: p.name.clone(),
+                instance: inst,
+                shot: chain.to_vec(),
+                folder: String::new(),
+            });
         }
         let mut kids: Vec<&Inst> = tree.iter().filter(|i| i.parent == inst).collect();
         kids.sort_by_key(|i| i.value.to_lowercase());
         for k in kids {
             let mut sub = chain.to_vec();
             sub.push(k.value.clone());
-            let here = self.current.as_ref().is_some_and(|c| c.shot.starts_with(&sub));
             egui::CollapsingHeader::new(&k.value)
-                .id_salt(("asset-inst", self.node, p.id, k.id))
-                .default_open(here)
-                .show(ui, |ui| {
-                    if let Some(r) = self.level_ui(ui, p, tree, Some(k.id), &sub) {
-                        picked = Some(r);
-                    }
-                });
+                .id_salt(("collect-inst", p.id, k.id))
+                .show(ui, |ui| self.level_ui(ui, p, tree, Some(k.id), &sub));
         }
-        picked
     }
 }
 
@@ -715,19 +575,6 @@ mod tests {
         println!("asset {} -> {} ({:?})", r.id, res.path, res.named);
         assert!(res.path.contains("shots/a_010/plates"), "{}", res.path);
         assert_eq!(res.named.shot, ["a_010"]);
-    }
-
-    #[test]
-    fn the_picker_lists_only_what_a_load_can_open() {
-        let (indexed, a) = parse_assets(&json!({"indexed": true, "assets": [
-            {"id": 1, "kind": "sequence", "rel": "plates/bg/bg.####.exr", "frames": 96},
-            {"id": 2, "kind": "file", "rel": "scripts/comp.nk"},
-            {"id": 3, "kind": "file", "rel": "ref/look.jpg"},
-        ]}));
-        assert!(indexed);
-        assert_eq!(a.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 3]);
-        assert_eq!(a[0].label, "plates › bg");
-        assert_eq!(a[0].frames, Some(96));
     }
 
     #[test]

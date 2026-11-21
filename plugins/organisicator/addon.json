@@ -3,14 +3,18 @@
   "label": "Organisicator",
   "version": "0.1",
   "author": "wobble",
-  "description": "Work inside organisicator-managed projects: pick a shot, open and save its comps, send Writes to its render folder, read its plates. The wobble twin of organisicator's Blender add-on.",
+  "description": "Work inside organisicator-managed projects: pick a shot, open and save its comps, send Writes to its render folder, read its plates, and load footage from organisicator's database (a shot's own and the footage linked to it) instead of the file browser. The wobble twin of organisicator's Blender add-on.",
   "run": ["python3", "main.py"],
   "commands": [
     { "id": "panel", "label": "projects…", "tip": "open the Organisicator panel" },
+    { "id": "browse", "label": "load from project…", "tip": "a new Load with footage picked from organisicator's database" },
     { "id": "save", "label": "save comp to shot", "tip": "save the comp in the picked shot's comp folder, Writes pointed at its renders" },
     { "id": "version_up", "label": "version up", "tip": "…_v004.wbl -> …_v005.wbl, Writes following" },
     { "id": "route", "label": "renders to shot", "tip": "point every Write at the shot's render folder" },
     { "id": "plates", "label": "add plates", "tip": "a Load for each sequence in the shot's plates folder" }
+  ],
+  "pickers": [
+    { "id": "media", "label": "from project…", "tip": "pick footage from organisicator's database: the shot's own and the footage linked to it", "for": "load", "panel": "media" }
   ],
   "panels": [
     {
@@ -30,6 +34,21 @@
         { "kind": "button", "id": "plates", "label": "add plates as Reads" },
         { "kind": "button", "id": "reveal", "label": "reveal shot folder" },
         { "kind": "button", "id": "rescan", "label": "rescan projects" }
+      ]
+    },
+    {
+      "id": "media",
+      "label": "Load from project",
+      "rows": [
+        { "kind": "text", "id": "target", "text": "" },
+        { "kind": "choice", "id": "project", "label": "project" },
+        { "kind": "choice", "id": "shot", "label": "shot" },
+        { "kind": "field", "id": "filter", "label": "filter" },
+        { "kind": "list", "id": "footage", "rows": 12 },
+        { "kind": "text", "id": "info", "text": "" },
+        { "kind": "button", "id": "load", "label": "load" },
+        { "kind": "button", "id": "new", "label": "as a new Load" },
+        { "kind": "button", "id": "refresh", "label": "refresh" }
       ]
     }
   ]

@@ -187,9 +187,14 @@ class Addon:
         def size(w, value):
             ...
 
+        @addon.pick("media")          # a Load picker ("pickers" in addon.json)
+        def media(w, node):
+            ...                       # answer with w.load_set(id=node, ...)
+
         addon.run()
 
-    A handler that raises is printed (the addons window shows the output)
+    ``addon.event`` is the event being handled (a list row's double-click
+    has ``"activate": True``). A handler that raises is printed (the addons window shows the output)
     and the loop carries on.
     """
 
@@ -200,6 +205,8 @@ class Addon:
         self.w = client or connect()
         self._commands = {}
         self._rows = {}
+        self._picks = {}
+        self.event = {}
 
     def command(self, name):
         def deco(fn):
@@ -210,6 +217,13 @@ class Addon:
     def row(self, panel, row):
         def deco(fn):
             self._rows[(panel, row)] = fn
+            return fn
+        return deco
+
+    def pick(self, picker):
+        """A handler for a picker's button on a node's panel: fn(w, node)."""
+        def deco(fn):
+            self._picks[picker] = fn
             return fn
         return deco
 
@@ -237,8 +251,11 @@ class Addon:
 
     def run(self):
         for ev in self.events():
+            self.event = ev
             if ev.get("type") == "command":
                 fn, args = self._commands.get(ev.get("command")), ()
+            elif ev.get("type") == "pick":
+                fn, args = self._picks.get(ev.get("picker")), (ev.get("node"),)
             else:
                 fn, args = self._rows.get((ev.get("panel"), ev.get("row"))), (ev.get("value"),)
             if fn is None:

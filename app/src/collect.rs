@@ -581,12 +581,9 @@ impl Window {
             });
         if let Some(mut p) = self.picker.take() {
             let mut open = true;
-            match p.ui(ctx, &mut open) {
-                Some(assets::Picked::IngestTo(d)) => {
-                    self.dest = Some(d);
-                    open = false;
-                }
-                Some(assets::Picked::Asset(_)) | None => {}
+            if let Some(d) = p.ui(ctx, &mut open) {
+                self.dest = Some(d);
+                open = false;
             }
             if open {
                 self.picker = Some(p);

@@ -4595,8 +4595,6 @@ struct Gfx {
     recovery: Option<report::Recovery>,
     /// AOV-rebuild dialog: (source Read, [(layer name, label, checked)]).
     aov_dialog: Option<(u64, Vec<(String, String, bool)>)>,
-    /// The project-asset picker, open on one Load (`assets`).
-    asset_picker: Option<assets::Picker>,
     /// The project browser (`projectui`): a Project Load's footage, or a
     /// comp opened from / saved to a project.
     project_browser: Option<projectui::Browser>,
@@ -5415,9 +5413,11 @@ enum RotoAction {
 }
 
 /// What the Load panel asked of its project asset.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum AssetAct {
-    Pick,
+    /// An addon's picker button (addon id, picker id): the addon fills the
+    /// Load through the API (`load_set`).
+    AddonPick(String, String),
     /// A Project Load's footage, from the project browser.
     PickProject,
     Reload,
@@ -6744,7 +6744,6 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
         autosave: report::Autosave::new(!opts.headless() && !cfg!(target_arch = "wasm32")),
         recovery: if opts.headless() { None } else { report::take_recovery() },
         aov_dialog: None,
-        asset_picker: None,
         project_browser: None,
         project_offered: Default::default(),
         collect: None,
@@ -8555,33 +8554,6 @@ impl Gfx {
                 self.playback_dirty = true;
             }
         }
-    }
-
-    /// Copies a plain Load's footage into organisicator at `dest` on a
-    /// worker; `poll_asset_ingest` turns the Load into an asset Load when
-    /// the copy is indexed. The original files are never moved.
-    fn start_asset_ingest(&mut self, node: u64, dest: assets::Dest) {
-        let Some(src) = self.egraph.node(node).and_then(|n| match &n.kind {
-            NodeKind::Read { path, .. } if !path.is_empty() => {
-                Some(engine::paths::expand_home(path).to_string_lossy().into_owned())
-            }
-            _ => None,
-        }) else {
-            return;
-        };
-        let client = match assets::Client::discover() {
-            Ok(c) => c,
-            Err(e) => {
-                self.asset_ingest_msg = Some((node, e));
-                return;
-            }
-        };
-        let (tx, rx) = std::sync::mpsc::channel();
-        bg::spawn(move || {
-            let _ = tx.send(assets::ingest(&client, &src, &dest));
-        });
-        self.asset_ingest = Some((node, rx));
-        self.asset_ingest_msg = None;
     }
 
     /// Opens the collect window on the comp as it is now.
@@ -15680,29 +15652,6 @@ impl Gfx {
         }
         self.poll_asset_ingest();
         self.collect_ui(&ctx);
-        if let Some(mut picker) = self.asset_picker.take() {
-            let mut open = true;
-            let picked = picker.ui(&ctx, &mut open);
-            let node = picker.node;
-            match picked {
-                Some(assets::Picked::Asset(r)) => {
-                    // A different asset is a different clip: its own range.
-                    if let Some(n) = self.egraph.node_mut(node) {
-                        n.asset = Some(r);
-                    }
-                    self.load_asset_fresh(node);
-                    open = false;
-                }
-                Some(assets::Picked::IngestTo(dest)) => {
-                    self.start_asset_ingest(node, dest);
-                    open = false;
-                }
-                None => {}
-            }
-            if open && self.egraph.node(node).is_some() {
-                self.asset_picker = Some(picker);
-            }
-        }
         if let Some((src, mut picks)) = self.aov_dialog.take() {
             let mut open = true;
             // Some(true)=select ladder, Some(false)=cancel; harp is its own.
@@ -23414,8 +23363,10 @@ impl Gfx {
                 // past the match (keying post-pass), so the load defers.
                 let mut deferred_load: Option<String> = None;
                 let mut deferred_refresh = false;
-                // Load panel: (re)load its asset / open the picker / drop the asset.
+                // Load panel: (re)load its asset / an addon's picker / drop the asset.
                 let mut asset_act: Option<AssetAct> = None;
+                // Enabled addons' buttons for a Load (`addon.json` "pickers").
+                let load_pickers = self.addons.pickers_for("load");
                 // A Recombine's h-spacing edit lands on the PAIRED Breakout
                 // (the param is locked between the bars, and sync mirrors
                 // it back down) — applied after the node borrow ends.
@@ -24093,6 +24044,7 @@ impl Gfx {
                                 load_errors: &self.load_errors,
                                 load_mirror: &self.load_mirror,
                                 asset_act: &mut asset_act,
+                                pickers: &load_pickers,
                                 cache_meter: &mut cache_meter,
                                 deferred_load: &mut deferred_load,
                                 deferred_refresh: &mut deferred_refresh,
@@ -24954,9 +24906,9 @@ impl Gfx {
                     asset_act = Some(AssetAct::PickProject);
                 }
                 match asset_act {
-                    Some(AssetAct::Pick) => {
-                        let current = self.egraph.node(key).and_then(|n| n.asset.clone());
-                        self.asset_picker = Some(assets::Picker::new(key, current));
+                    Some(AssetAct::AddonPick(addon, picker)) => {
+                        // The API's node id is the graph key.
+                        self.addons.pick(&addon, &picker, key);
                     }
                     Some(AssetAct::PickProject) => self.open_project_browser(projectui::Mode::Media(key)),
                     Some(AssetAct::Reload) => self.load_asset(key),

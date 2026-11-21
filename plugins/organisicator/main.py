@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import core
+import media
 import shots
 import wobble
 
@@ -248,6 +249,166 @@ for row, fn in [("open", open_comp), ("save", save), ("version_up", version_up),
     addon.row(P, row)(fn)
 for cmd, fn in [("panel", panel), ("save", save), ("version_up", version_up), ("route", lambda w: addon.status(f"{route(w)} Write(s) pointed at the shot's renders")), ("plates", add_plates)]:
     addon.command(cmd)(fn)
+
+
+# ---- load from project: the media browser ----------------------------------
+#
+# The Load panel's "from project…" button (a picker in addon.json) opens this
+# with the Load it fills; "load from project…" in the menu opens it for a new
+# Load. Everything comes from organisicator's database through its API.
+
+M = "media"
+mstate = {
+    "node": None,  # the Load being filled, or None = make a new one
+    "projects": [],  # /v1/projects
+    "pid": None,
+    "instances": [],  # /v1/projects/{pid} instances
+    "shots": [],  # [(label, instance id or None)]
+    "inst": None,
+    "answer": None,  # /v1/projects/{pid}/assets?instance=
+    "rows": [],
+    "pick": None,  # the picked row
+    "filter": "",
+}
+
+
+def m_rows():
+    mstate["rows"] = media.footage_rows(mstate["answer"] or {}, mstate["instances"], mstate["filter"])
+    if mstate["pick"] and not any(r["label"] == mstate["pick"]["label"] for r in mstate["rows"]):
+        mstate["pick"] = None
+
+
+def m_fetch_shot():
+    pid, inst = mstate["pid"], mstate["inst"]
+    mstate["answer"] = None
+    if pid is not None:
+        q = f"?instance={inst}" if inst is not None else ""
+        mstate["answer"] = shots.api_get(f"/v1/projects/{pid}/assets{q}")
+    m_rows()
+
+
+def m_fetch_project(pid, inst=None):
+    mstate["pid"], mstate["inst"], mstate["pick"] = pid, inst, None
+    mstate["instances"] = shots.api_get(f"/v1/projects/{pid}").get("instances", []) if pid is not None else []
+    mstate["shots"] = media.shot_options(mstate["instances"])
+    if inst not in [i for _, i in mstate["shots"]]:
+        mstate["inst"] = None
+    m_fetch_shot()
+
+
+def m_show():
+    names = [p["name"] for p in mstate["projects"]]
+    cur = next((p["name"] for p in mstate["projects"] if p["id"] == mstate["pid"]), "")
+    shot = next((lbl for lbl, i in mstate["shots"] if i == mstate["inst"]), "")
+    node = mstate["node"]
+    addon.set(
+        M,
+        target=f"fills Load {node}" if node is not None else "makes a new Load",
+        project={"options": names, "value": cur},
+        shot={"options": [lbl for lbl, _ in mstate["shots"]], "value": shot},
+        footage={"options": [r["label"] for r in mstate["rows"]], "value": (mstate["pick"] or {}).get("label", "")},
+        info=media.info(mstate["pick"], mstate["answer"]),
+        load="load" if node is not None else "add Load",
+    )
+
+
+def m_start(w, node):
+    """Open the browser for `node` (None = a new Load), on the footage the
+    Load holds now, else on the shot the Projects panel has picked."""
+    mstate["node"] = node
+    mstate["projects"] = [p for p in shots.api_get("/v1/projects") if p.get("online", True)]
+    pid, inst = None, None
+    asset = (w.node_get(id=node).get("asset") or {}) if node is not None else {}
+    if asset.get("id"):
+        try:
+            pid, inst = media.locate(shots.api_get(f"/v1/assets/{asset['id']}"))
+        except RuntimeError:
+            pass
+    if pid is None and state["project"] is not None:
+        root = os.path.realpath(state["project"].root)
+        pid = next((p["id"] for p in mstate["projects"] if os.path.realpath(p.get("root", "")) == root), None)
+        inst = state["shot"].id if (pid is not None and state["shot"] is not None) else None
+    if pid is None and mstate["projects"]:
+        pid = mstate["projects"][0]["id"]
+    m_fetch_project(pid, inst)
+    m_show()
+    addon.set(M, open=True)
+
+
+def m_load(w, new=False):
+    row = mstate["pick"]
+    if row is None:
+        raise RuntimeError("pick footage first")
+    what = {"asset": {"id": row["id"]}} if row["id"] is not None else {"path": row["path"]}
+    node = mstate["node"]
+    if new or node is None:
+        name = row["rel"].rsplit("/", 1)[-1].split(".")[0] or "footage"
+        r = w.node_create(type="Load", name=name, **what)
+        node = r.get("id")
+        if not new:
+            mstate["node"] = node
+        w.view_set(id=node)
+    else:
+        r = w.load_set(id=node, **what)
+    err = r.get("load_error")
+    addon.status(f"couldn't load {row['rel']}: {err}" if err else f"loaded {row['rel']}")
+    if not err and not new:
+        addon.set(M, open=False)
+
+
+@addon.pick("media")
+def pick_media(w, node):
+    m_start(w, node)
+
+
+@addon.row(M, "project")
+def m_pick_project(w, v):
+    pid = next((p["id"] for p in mstate["projects"] if p["name"] == v), None)
+    m_fetch_project(pid)
+    m_show()
+
+
+@addon.row(M, "shot")
+def m_pick_shot(w, v):
+    mstate["inst"] = next((i for lbl, i in mstate["shots"] if lbl == v), None)
+    mstate["pick"] = None
+    m_fetch_shot()
+    m_show()
+
+
+@addon.row(M, "filter")
+def m_filter(w, v):
+    mstate["filter"] = str(v or "")
+    m_rows()
+    m_show()
+
+
+@addon.row(M, "footage")
+def m_pick(w, v):
+    mstate["pick"] = next((r for r in mstate["rows"] if r["label"] == v), None)
+    if addon.event.get("activate"):
+        return m_load(w)
+    m_show()
+
+
+@addon.row(M, "load")
+def m_load_row(w, _v=None):
+    m_load(w)
+
+
+@addon.row(M, "new")
+def m_new(w, _v=None):
+    m_load(w, new=True)
+
+
+@addon.row(M, "refresh")
+def m_refresh(w, _v=None):
+    mstate["projects"] = [p for p in shots.api_get("/v1/projects") if p.get("online", True)]
+    m_fetch_project(mstate["pid"], mstate["inst"])
+    m_show()
+
+
+addon.command("browse")(lambda w: m_start(w, None))
 
 
 # ---- start -----------------------------------------------------------------
