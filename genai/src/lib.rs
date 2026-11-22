@@ -20,7 +20,8 @@
 //!   every take, and propagated by the engine like any research-only model.
 //!
 //! Services: fal with your own key ([`fal`]), the wobble relay with credits
-//! ([`relay`]), and a local ComfyUI ([`comfy`]).
+//! ([`relay`]), a local ComfyUI ([`comfy`]), and models that run on this
+//! machine as a process ([`local`]).
 
 pub mod app;
 pub mod catalog;
@@ -30,6 +31,7 @@ pub mod fal;
 pub mod history;
 pub mod http;
 pub mod image;
+pub mod local;
 pub mod pipeline;
 #[cfg(feature = "relay")]
 pub mod relay;

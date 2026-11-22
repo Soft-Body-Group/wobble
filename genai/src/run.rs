@@ -395,6 +395,14 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                 (h(&parts), comp_mp)
             }
         };
+        if let Op::Generate { model, .. } = &step.op {
+            let local = catalog::get(model).filter(|m| m.service == catalog::Service::Local);
+            if let Some(m) = local.filter(|_| cached(dir, &key).is_none()) {
+                // Not installed, or no weights: said now, not after the
+                // steps above it have run.
+                crate::local::ready().map_err(|e| format!("{}: {e}", m.label))?;
+            }
+        }
         keys[i] = key;
         mp[i] = m;
     }
@@ -444,13 +452,13 @@ pub fn video_opts(m: &RemoteModel, opts: &crate::pipeline::Opts) -> Option<(u32,
         // their defaults, which the quote reads past (`quote_settings`).
         return Some((6, 1080));
     }
-    let Dialect::Seedance { max_seconds, top_res, .. } = m.dialect else { return None };
+    let (min_seconds, max_seconds, top_res) = m.dialect.video_range()?;
     let res = [480, 720, 1080]
         .into_iter()
         .filter(|&r| r <= top_res)
         .min_by_key(|&r| r.abs_diff(opts.res))
         .unwrap_or(720);
-    Some((opts.seconds.clamp(4, max_seconds), res))
+    Some((opts.seconds.clamp(min_seconds, max_seconds), res))
 }
 
 /// The frame a video step should come back at: its resolution on the
@@ -730,6 +738,20 @@ pub fn request_clip(
                 "resolution": format!("{res}p"),
                 "aspect_ratio": "auto",
                 "generate_audio": false,
+                "seed": seed,
+            })
+        }
+        (Task::ImageToVideo, Dialect::LtxLocal) => {
+            let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
+            let (w, h) = video_size(m, opts, comp);
+            json!({
+                "prompt": prompt(),
+                // A path on this machine, or nothing: text-to-video.
+                "image": images.get(1).cloned().flatten(),
+                "seconds": secs,
+                "res": res,
+                "width": w,
+                "height": h,
                 "seed": seed,
             })
         }
@@ -1313,6 +1335,57 @@ fn execute(
                     } else {
                         Val::Image(path)
                     }
+                } else if m.service == catalog::Service::Local {
+                    // On this machine: images go as paths, nothing is
+                    // uploaded, quoted or billed.
+                    let prompt = match get(&vals, i, 0) {
+                        Some(Val::Text(t)) => Some(t),
+                        _ => None,
+                    };
+                    let images: Vec<Option<String>> = (0..p.steps[i].inputs.len())
+                        .map(|port| match get(&vals, i, port) {
+                            Some(Val::Image(path)) => Some(path.to_string_lossy().into_owned()),
+                            _ => None,
+                        })
+                        .collect();
+                    let req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, None)?;
+                    let _ = tx.send(Event::Step(i, StepState::Sending));
+                    let txp = tx.clone();
+                    let phase = move |ph: Phase| {
+                        let _ = txp.send(Event::Step(
+                            i,
+                            match ph {
+                                Phase::Queued(n) => StepState::Queued(n),
+                                Phase::Running => StepState::Running,
+                            },
+                        ));
+                    };
+                    let cx = Cx { http: &web, cancel: stop, phase: &phase, deadline: Duration::from_secs(60 * 60) };
+                    let work = dir.join(format!(".local-{key}"));
+                    let out = work.join("result.mp4");
+                    let ran = crate::local::run(&req, &work, &out, &cx);
+                    let bytes = ran.and_then(|()| Ok(std::fs::read(&out)?));
+                    let _ = std::fs::remove_dir_all(&work);
+                    let bytes = bytes.map_err(|e| anyhow!("{}: {e}", m.label))?;
+                    let path = commit(
+                        dir,
+                        key,
+                        "result.mp4",
+                        &bytes,
+                        &Meta {
+                            file: "result.mp4".into(),
+                            model: m.id.into(),
+                            endpoint: m.endpoint.into(),
+                            service: "local".into(),
+                            usd: Some(0.0),
+                            when: now(),
+                            nsfw_flagged: false,
+                            prompt: prompt.as_deref().map(str::to_string),
+                            seed: Some(*seed),
+                            request: Some(scrub_request(&req)),
+                        },
+                    )?;
+                    Val::Image(path)
                 } else {
                     let svc = svcs.remote.as_deref().ok_or_else(|| {
                         anyhow!(if cfg!(feature = "relay") {
@@ -2109,4 +2182,25 @@ mod tests {
         assert_eq!(old.prompt, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_local_ltx_step_sends_paths_and_is_neither_quoted_nor_billed() {
+        let m = catalog::get("local/ltx-2.5-distilled").unwrap();
+        let mut o = crate::pipeline::Opts::default();
+        o.seconds = 30;
+        o.res = 720;
+        // Text-to-video: no start frame.
+        let r = request(m, &o, 7, (1920, 1080), Some("a cat"), &[None, None]).unwrap();
+        assert_eq!(r["image"], Value::Null);
+        assert_eq!(r["seconds"], 10, "clamped to the model's longest");
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(1280), Some(720)));
+        assert_eq!(r["seed"], 7);
+        let r = request(m, &o, 7, (1920, 1080), Some("a cat"), &[None, Some("/tmp/f.png".into())]).unwrap();
+        assert_eq!(r["image"], "/tmp/f.png");
+        let gen = Op::Generate { model: m.id.into(), seed: 1, opts: o };
+        assert!(!gen.is_remote());
+        assert!(gen.optional(1), "no start frame is text-to-video");
+        assert!(!gen.optional(0));
+    }
+
 }

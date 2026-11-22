@@ -44,7 +44,9 @@ pub const REPO: &str = "https://github.com/Lightricks/LTX-2.git";
 /// `ltx_pipelines.hdr_ic_lora` the way that module's `main()` does, and
 /// calls its EXR helpers, which a later commit is free to rename. Bump it
 /// and re-test, never float it.
-pub const COMMIT: &str = "e98f6d927d83c92ef2be6aec76c8440b19306e39";
+/// Shared with the GenAI node's local LTX (`genai::local`), which runs in
+/// the same checkout and environment.
+pub const COMMIT: &str = genai::local::LTX_COMMIT;
 pub const LICENCE_URL: &str = "https://github.com/Lightricks/LTX-2/blob/main/LICENSE";
 /// The two gated model pages the user accepts the licence on.
 pub const MODEL_PAGES: [&str; 2] = [
@@ -130,6 +132,9 @@ pub struct Jobs {
     pub run: Option<Run>,
     pub install: Option<Job>,
     pub fetch: Option<Job>,
+    /// The GenAI node's local LTX weights (`genai::local::WEIGHTS`): a
+    /// different set from this node's, fetched into the same models dir.
+    pub local_fetch: Option<Job>,
 }
 
 /// What the panel is told, built by `Gfx::ltxhdr_view`.
@@ -189,7 +194,9 @@ fn command(dir: &Path) -> Result<std::process::Command, String> {
     let driver = dir.join(DRIVER_NAME);
     std::fs::write(&driver, DRIVER).map_err(|e| format!("writing the driver: {e}"))?;
     let mut c = std::process::Command::new(uv);
-    c.arg("run").arg("--project").arg(dir).arg("python").arg(&driver);
+    // --inexact: keep what the environment has beyond the defaults (the
+    // NVFP4 kernels the GenAI node's local LTX built), rather than strip it.
+    c.arg("run").arg("--inexact").arg("--project").arg(dir).arg("python").arg(&driver);
     c.current_dir(dir);
     Ok(c)
 }
@@ -312,7 +319,7 @@ impl Gfx {
 
     /// `install…`: fetch the pinned checkout and build its environment, on
     /// a thread, its output streamed to the panel.
-    fn ltxhdr_install(&mut self) {
+    pub(crate) fn ltxhdr_install(&mut self) {
         if self.jobs.ltxhdr.install.as_ref().is_some_and(|i| i.result.is_none()) {
             return;
         }
@@ -369,6 +376,35 @@ impl Gfx {
             job.result = Some(Err(e));
         }
         self.jobs.ltxhdr.fetch = Some(job);
+    }
+
+    /// The GenAI panel's `fetch LTX weights…` for its local LTX: the
+    /// GenAI driver's `--fetch`, in the shared environment, with the user's
+    /// own Hugging Face login.
+    pub(crate) fn genai_local_fetch(&mut self) {
+        if self.jobs.ltxhdr.local_fetch.as_ref().is_some_and(|f| f.result.is_none()) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut job = Job { rx, log: vec![], progress: (0, 0), result: None };
+        let dir = install_dir();
+        if !genai::local::installed(&dir) {
+            job.result = Some(Err("install LTX-2 first: the fetch runs in its environment".into()));
+            self.jobs.ltxhdr.local_fetch = Some(job);
+            return;
+        }
+        let driver = dir.join("wobble_ltx.py");
+        if let Err(e) = std::fs::write(&driver, genai::local::DRIVER) {
+            job.result = Some(Err(format!("writing the driver: {e}")));
+            self.jobs.ltxhdr.local_fetch = Some(job);
+            return;
+        }
+        let mut cmd = std::process::Command::new(genai::local::python(&dir));
+        cmd.arg(&driver).arg("--fetch").arg(genai::local::models_dir()).current_dir(&dir);
+        if let Err(e) = spawn(cmd, tx, Arc::new(AtomicBool::new(false)), "ltx-local-fetch") {
+            job.result = Some(Err(e));
+        }
+        self.jobs.ltxhdr.local_fetch = Some(job);
     }
 
     /// The `run` click: adopt a result on disk, else render the input.
@@ -453,6 +489,9 @@ impl Gfx {
             drain(i);
         }
         if let Some(f) = self.jobs.ltxhdr.fetch.as_mut() {
+            drain(f);
+        }
+        if let Some(f) = self.jobs.ltxhdr.local_fetch.as_mut() {
             drain(f);
         }
         let Some(r) = self.jobs.ltxhdr.run.as_mut() else { return };
@@ -557,7 +596,22 @@ fn install_into(dir: &Path, uv: &Path, tx: &Sender<Msg>) -> Result<(), String> {
     let _ = tx.send(Msg::Line("uv sync --package ltx-pipelines (torch and friends: a few GB, a while)".into()));
     let mut c = std::process::Command::new(uv);
     c.arg("sync").arg("--package").arg("ltx-pipelines").arg("--python").arg("3.12").current_dir(dir);
-    run(c).map_err(|e| format!("uv sync: {e}"))
+    run(c).map_err(|e| format!("uv sync: {e}"))?;
+    // The NVFP4 kernels the GenAI node's local LTX runs on: CUDA only, and
+    // built here (a few minutes). Best effort: this node does not need
+    // them, so a machine that cannot build them still has a working install.
+    if cfg!(target_os = "linux") {
+        let _ = tx.send(Msg::Line("uv sync --group kernels (the NVFP4 kernels for local LTX; builds CUDA code, a few minutes)".into()));
+        let mut c = std::process::Command::new(uv);
+        // `dev` carries the CUDA compiler the build uses (pip's nvcc, matched
+        // to torch), so no system toolkit is needed.
+        c.args(["sync", "--package", "ltx-pipelines", "--python", "3.12", "--group", "dev", "--group", "kernels"])
+            .current_dir(dir);
+        if let Err(e) = run(c) {
+            let _ = tx.send(Msg::Line(format!("the NVFP4 kernels did not build ({e}); local LTX will not run here, the LTX HDR node still will")));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

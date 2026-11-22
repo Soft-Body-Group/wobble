@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::{self, Dialect, Task};
+use crate::catalog::{self, Task};
 use crate::pipeline::{Op, Pipeline};
 
 /// Which value of a step a field edits.
@@ -82,7 +82,7 @@ pub fn has(p: &Pipeline, i: usize, what: What) -> bool {
                 matches!(m.task, Task::Upscale | Task::VideoUpscale | Task::Outpaint) && m.dialect.scale_range().is_some()
             }
             (Some(m), What::Megapixels) => m.task == Task::TextToImage,
-            (Some(m), What::Seconds) => matches!(m.dialect, Dialect::Seedance { .. }),
+            (Some(m), What::Seconds) => m.dialect.video_range().is_some(),
             _ => false,
         },
         _ => false,
@@ -131,10 +131,10 @@ pub fn range(p: &Pipeline, i: usize, what: What) -> Option<Range> {
             let lo = lo.max(0.25);
             Range { lo, hi: hi.min(2.0).max(lo), whole: false }
         }
-        What::Seconds => match model?.dialect {
-            Dialect::Seedance { max_seconds, .. } => Range { lo: 4.0, hi: max_seconds as f32, whole: true },
-            _ => return None,
-        },
+        What::Seconds => {
+            let (lo, hi, _) = model?.dialect.video_range()?;
+            Range { lo: lo as f32, hi: hi as f32, whole: true }
+        }
         What::ClipSeconds => Range { lo: 0.5, hi: 30.0, whole: false },
     })
 }

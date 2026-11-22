@@ -419,14 +419,23 @@ impl Op {
     pub fn optional(&self, port: usize) -> bool {
         match self {
             Op::Comfy { .. } | Op::Template { .. } | Op::Comp { .. } | Op::Group { .. } => true,
-            Op::Generate { model, .. } => catalog::get(model).is_some_and(|m| port >= task_ports(m.task).len()),
+            Op::Generate { model, .. } => catalog::get(model).is_some_and(|m| {
+                port >= task_ports(m.task).len()
+                    // A local LTX with no start frame is text-to-video.
+                    || (m.dialect == catalog::Dialect::LtxLocal && port == 1)
+            }),
             _ => false,
         }
     }
 
-    /// Does running this step send something off the machine?
+    /// Does running this step send something off the machine? A model on
+    /// this machine (`Service::Local`) does not: it is neither quoted nor
+    /// billed, and needs no key.
     pub fn is_remote(&self) -> bool {
-        matches!(self, Op::Generate { .. })
+        match self {
+            Op::Generate { model, .. } => catalog::get(model).is_none_or(|m| m.service != catalog::Service::Local),
+            _ => false,
+        }
     }
 
     /// What a step is called as a node in the pipeline's dive (and in its

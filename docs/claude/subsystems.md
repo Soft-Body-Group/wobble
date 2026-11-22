@@ -1874,9 +1874,26 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   upstream stays in the rig and is decoded when only the GenAI is viewed.
   Making it unsampled needs `sample_through` during capture (the Blender
   precedent). For the same reason it does not `clears_slow`.
+- **Local models** (`Service::Local`, `genai/src/local.rs`,
+  `tools/wobble_ltx.py`): LTX-2.5 distilled image/text-to-video on this
+  machine, as a process. `Op::is_remote` is false for them, so they are
+  never quoted, billed or gated on a key; images go as PATHS, never data
+  URIs; an empty image port is text-to-video (`Op::optional`). Ids are
+  `local/…` and the dialect is `LtxLocal` (a test pins both, so a local
+  request can never reach fal). The checkout and Python env are the LTX
+  HDR node's (`~/.wobble/LTX-2`, `genai::local::LTX_COMMIT` is the one
+  pin), plus the optional `kernels` group (NVFP4, built at install, Linux
+  only): so the driver runs with the venv's python, never `uv run`, and
+  the HDR node's `uv run` is `--inexact`, or either would strip the
+  kernels. Weights: the NVFP4 distilled transformer + Gemma 4 text encoder
+  + conv VAE + audio VAE + x2 upsampler (~48 GB, gated, `--fetch` under the
+  user's HF login), run with `--quantization nvfp4-prequant --offload cpu`
+  so a 16 GB RTX 50-series fits. The plan says what is missing
+  (`local::ready`) before anything runs; `WOBBLE_LTX_CMD` is the stand-in.
 - Tests: `cargo test -p genai` (unit + `tests/services.rs`: fal queue,
   422 reasons, cancel reaching the provider, relay cap + charge, ComfyUI
-  uploads/placeholders, all on localhost); `genaiui::tests` (inner graph,
+  uploads/placeholders, all on localhost; `tests/local.rs`: a local step
+  against a stand-in tool); `genaiui::tests` (inner graph,
   panel fit incl. keys open); `genai_panel_render` (ignored) draws the
   real panel to `target/genai-panel-gpu.png`.
 

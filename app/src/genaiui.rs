@@ -1356,6 +1356,102 @@ pub struct View {
     pub fps: f32,
     /// What the run's text steps wrote, per step.
     pub texts: BTreeMap<usize, String>,
+    /// The local LTX's install and weights, for a step on this machine.
+    pub local: LocalView,
+}
+
+/// Where the local LTX (`genai::local`) stands, for its model panel.
+#[derive(Default)]
+pub struct LocalView {
+    pub installed: bool,
+    pub weights: bool,
+    /// The install job's last line, or how it ended.
+    pub install: Option<Result<String, String>>,
+    /// The weights fetch: its last line and progress, or how it ended.
+    pub fetch: Option<Result<(String, usize, usize), String>>,
+}
+
+/// A local model's install / fetch click, left for the host by
+/// `op_fields` (whose callers have no action to return it through).
+#[derive(Clone, Copy)]
+enum LocalAct {
+    Install,
+    Fetch,
+}
+
+fn local_act_id() -> egui::Id {
+    egui::Id::new("genai-local-act")
+}
+
+/// The install / fetch click a panel drew this frame, as an action.
+pub fn take_local_act(ui: &Ui) -> Option<Action> {
+    let a = ui.data(|d| d.get_temp::<LocalAct>(local_act_id()))?;
+    ui.data_mut(|d| d.remove::<LocalAct>(local_act_id()));
+    Some(match a {
+        LocalAct::Install => Action::LocalInstall,
+        LocalAct::Fetch => Action::LocalFetch,
+    })
+}
+
+/// The local LTX's rows: installed or not, weights or not, and the two
+/// buttons that change that. Nothing installs or downloads without a click.
+fn local_rows(ui: &mut Ui, l: &LocalView) {
+    let act = |ui: &Ui, a: LocalAct| ui.data_mut(|d| d.insert_temp(local_act_id(), a));
+    let dir = genai::local::install_dir();
+    ui.horizontal(|ui| {
+        let busy = matches!(l.install, Some(Ok(_)));
+        if l.installed {
+            ui.weak(small(format!("LTX-2 installed in {}", dir.display())));
+        } else {
+            ui.colored_label(theme::warn(), small("LTX-2 is not installed"));
+        }
+        if !busy && ui.small_button(if l.installed { "reinstall…" } else { "install…" })
+            .on_hover_text("fetch the pinned LTX-2 checkout and build its Python environment (a few GB, with the NVFP4 kernels: CUDA, a few minutes)")
+            .clicked()
+        {
+            act(ui, LocalAct::Install);
+        }
+    });
+    match &l.install {
+        Some(Ok(line)) => {
+            ui.weak(small(format!("installing: {line}")));
+        }
+        Some(Err(e)) => {
+            ui.colored_label(theme::error(), small(format!("install failed: {e}")));
+        }
+        None => {}
+    }
+    ui.horizontal(|ui| {
+        let busy = matches!(l.fetch, Some(Ok(_)));
+        if l.weights {
+            ui.weak(small("LTX-2.5 weights ready"));
+        } else {
+            ui.colored_label(
+                theme::warn(),
+                small(format!("LTX-2.5 weights: {:.0} GB to fetch", genai::local::weights_bytes() as f64 / 1e9)),
+            );
+        }
+        if !busy && !l.weights && l.installed && ui.small_button("fetch weights…")
+            .on_hover_text(format!(
+                "download the NVFP4 distilled transformer, the Gemma text encoder, the VAEs and the upscaler into {}. \
+                 The repository is gated: accept the licence at {} and log in (hf auth login) first",
+                genai::local::models_dir().display(),
+                genai::local::MODEL_PAGE
+            ))
+            .clicked()
+        {
+            act(ui, LocalAct::Fetch);
+        }
+    });
+    match &l.fetch {
+        Some(Ok((line, a, b))) => {
+            ui.weak(small(format!("fetching {a}/{b}: {line}")));
+        }
+        Some(Err(e)) => {
+            ui.colored_label(theme::error(), small(format!("fetch failed: {e}")));
+        }
+        None => {}
+    }
 }
 
 /// One result in a model step's gallery.
@@ -1419,6 +1515,9 @@ pub enum Action {
     /// Cancel / dismiss the run of ONE step (several can be going).
     CancelStep(usize),
     DismissStep(usize),
+    /// The local LTX: install its checkout, fetch its weights.
+    LocalInstall,
+    LocalFetch,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1795,6 +1894,9 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                             *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000;
                         }
                     });
+                    if m.service == catalog::Service::Local {
+                        local_rows(ui, &v.local);
+                    }
                     if !m.dialect.sends_seed() {
                         ui.weak(small("this model takes no seed: a new one asks for a variation"));
                     }
@@ -1807,9 +1909,9 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                             ui.weak(small("at the comp's aspect"));
                         }
                         Task::ImageToVideo | Task::TextToVideo => {
-                            if let catalog::Dialect::Seedance { max_seconds, top_res, .. } = m.dialect {
-                                let mut secs = opts.seconds.clamp(4, max_seconds) as f32;
-                                crate::widgets::plain_slider(ui, "seconds", &mut secs, 4.0, max_seconds as f32, false);
+                            if let Some((min_seconds, max_seconds, top_res)) = m.dialect.video_range() {
+                                let mut secs = opts.seconds.clamp(min_seconds, max_seconds) as f32;
+                                crate::widgets::plain_slider(ui, "seconds", &mut secs, min_seconds as f32, max_seconds as f32, false);
                                 opts.seconds = secs.round() as u32;
                                 ui.horizontal(|ui| {
                                     ui.add_sized([crate::widgets::LABEL_W, 16.0], egui::Label::new(small("size")));
@@ -1819,10 +1921,14 @@ fn op_fields(ui: &mut Ui, id: &dyn Fn(&str) -> egui::Id, op: &mut Op, v: &View, 
                                         }
                                     }
                                 });
-                                ui.weak(small(priced!(
-                                    "billed per second; no audio; plays from the frame it was made at",
-                                    "no audio; plays from the frame it was made at"
-                                )));
+                                if m.service == catalog::Service::Local {
+                                    ui.weak(small("on this GPU, free; no audio; plays from the frame it was made at"));
+                                } else {
+                                    ui.weak(small(priced!(
+                                        "billed per second; no audio; plays from the frame it was made at",
+                                        "no audio; plays from the frame it was made at"
+                                    )));
+                                }
                             }
                             if !video_ok() {
                                 ui.colored_label(theme::error(), small(NO_VIDEO));
@@ -2517,6 +2623,38 @@ impl Gfx {
         g.background.iter().rposition(fits).map(|k| g.background.remove(k))
     }
 
+    /// The local LTX's state, only when the pipeline has a local step
+    /// (the checks touch the disk). Inside a dive the steps are the graph's
+    /// own nodes, and the owner is not in it.
+    fn genai_local_view(&self, node: u64) -> LocalView {
+        let is_local = |op: &Op| {
+            matches!(op, Op::Generate { model, .. }
+                if catalog::get(model).is_some_and(|m| m.service == catalog::Service::Local))
+        };
+        let local = match self.egraph.node(node).map(|n| &n.kind) {
+            Some(NodeKind::GenAi(p)) => p.pipeline.steps.iter().any(|s| is_local(&s.op)),
+            _ => self.egraph.nodes.values().any(|n| matches!(&n.kind, NodeKind::GenAiStep(op) if is_local(op))),
+        };
+        if !local {
+            return LocalView::default();
+        }
+        let j = &self.jobs.ltxhdr;
+        LocalView {
+            installed: genai::local::installed(&genai::local::install_dir()),
+            weights: genai::local::weights_ready(&genai::local::models_dir()),
+            install: j.install.as_ref().and_then(|i| match &i.result {
+                None => Some(Ok(i.log.last().cloned().unwrap_or_default())),
+                Some(Err(e)) => Some(Err(e.clone())),
+                Some(Ok(())) => None,
+            }),
+            fetch: j.local_fetch.as_ref().and_then(|f| match &f.result {
+                None => Some(Ok((f.log.last().cloned().unwrap_or_default(), f.progress.0, f.progress.1))),
+                Some(Err(e)) => Some(Err(e.clone())),
+                Some(Ok(())) => None,
+            }),
+        }
+    }
+
     pub(crate) fn genai_view_of(&self, node: u64, step: Option<usize>) -> View {
         let cfg = &self.jobs.genai.cfg;
         let bill = match cfg.route {
@@ -2580,6 +2718,7 @@ impl Gfx {
             state,
             steps: mine.map(|r| r.steps.clone()).unwrap_or_default(),
             texts: mine.map(|r| r.texts.clone()).unwrap_or_default(),
+            local: self.genai_local_view(node),
             // Only a run being PREPARED blocks another (the capture is
             // shared); paid ones go on beside it.
             busy_elsewhere: self.jobs.genai.run.as_ref().is_some_and(|r| r.node != node && r.active()),
@@ -2711,6 +2850,8 @@ impl Gfx {
                 self.genai_reload_config();
             }
             Action::Refresh => self.jobs.genai.account = Account::Unknown,
+            Action::LocalInstall => self.ltxhdr_install(),
+            Action::LocalFetch => self.genai_local_fetch(),
         }
     }
 
@@ -5711,6 +5852,7 @@ mod tests {
             take_missing: true,
             fps: 24.0,
             texts: BTreeMap::new(),
+            local: LocalView::default(),
         }
     }
 

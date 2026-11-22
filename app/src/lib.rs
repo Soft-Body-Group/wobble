@@ -11691,7 +11691,11 @@ impl Gfx {
         if self.jobs.depth.run.is_some() || self.jobs.depth.install.is_some() {
             self.depth_poll();
         }
-        if self.jobs.ltxhdr.run.is_some() || self.jobs.ltxhdr.install.is_some() || self.jobs.ltxhdr.fetch.is_some() {
+        if self.jobs.ltxhdr.run.is_some()
+            || self.jobs.ltxhdr.install.is_some()
+            || self.jobs.ltxhdr.fetch.is_some()
+            || self.jobs.ltxhdr.local_fetch.is_some()
+        {
             self.ltxhdr_poll();
         }
         if self.jobs.difflight.any() {
@@ -24342,9 +24346,11 @@ impl Gfx {
                         blender_click = blenderui::panel(ui, node, bp, &blender_view);
                     }
                     NodeKind::GenAi(gp) => {
-                        genai_click = genaiui::panel(ui, node, gp, &genai_view);
+                        genai_click = genaiui::panel(ui, node, gp, &genai_view).or_else(|| genaiui::take_local_act(ui));
                     }
-                    NodeKind::GenAiStep(op) => genai_click = genaiui::step_panel(ui, node, op, &genai_view),
+                    NodeKind::GenAiStep(op) => {
+                        genai_click = genaiui::step_panel(ui, node, op, &genai_view).or_else(|| genaiui::take_local_act(ui))
+                    }
                     NodeKind::RotoNode(engine::graph::RotoInner::Axis(a)) => {
                         if let Some(h) = rotodive::axis_panel(ui, &mut rcx, a) {
                             hud_drag_out = Some(h);

@@ -19,12 +19,15 @@
 //! ships; the quote comes from the provider (fal's pricing API) or from the
 //! relay, at the moment you are about to press run.
 
-/// Which service answers an endpoint. Every entry here is fal-shaped today:
-/// fal directly with your key, or the wobble relay with credits, which
-/// forwards to the same endpoint and hands back the same output JSON.
+/// Which service answers an endpoint. `Fal` is fal directly with your key,
+/// or the wobble relay with credits, which forwards to the same endpoint
+/// and hands back the same output JSON. `Local` is a tool on this machine
+/// (`crate::local`): free, no key, nothing leaves the machine, and the
+/// endpoint names the tool's own mode rather than a URL path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
     Fal,
+    Local,
 }
 
 /// What a model does, which fixes its ports and how its request is built.
@@ -243,6 +246,11 @@ pub enum Dialect {
     /// No seed: the authored seed keys the cache, so the same step gives
     /// the same words until you ask for another.
     Llm { system: &'static str },
+    /// LTX-2.5 on this machine (`crate::local`): `prompt`, an optional
+    /// start frame (`image`, a PATH, not a data URI: nothing is uploaded),
+    /// `seed`, `seconds`, `res` (the short side) and the comp's aspect. No
+    /// start frame is text-to-video.
+    LtxLocal,
 }
 
 /// What the Prompt Enhancer is told to be.
@@ -472,6 +480,18 @@ impl Dialect {
         }
     }
 
+    /// A video model's (shortest, longest) seconds and its top resolution
+    /// class, or `None` for a model that does not make video from a still.
+    pub fn video_range(self) -> Option<(u32, u32, u32)> {
+        match self {
+            Dialect::Seedance { max_seconds, top_res, .. } => Some((4, max_seconds, top_res)),
+            // 8k+1 frames at 24 fps; ten seconds is 241 frames, which the
+            // distilled pipeline holds in one chunk on a 16 GB card.
+            Dialect::LtxLocal => Some((1, 10, 1080)),
+            _ => None,
+        }
+    }
+
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
@@ -497,6 +517,7 @@ impl Dialect {
                 | Dialect::Sam3d
                 | Dialect::KontextMulti
                 | Dialect::QwenEditPlus
+                | Dialect::LtxLocal
         )
     }
 
@@ -1493,6 +1514,21 @@ pub const CATALOG: &[RemoteModel] = &[
         licence: "fal lists it for commercial use",
         about: "relight a picture to a named style: natural, studio, golden hour, blue hour, dramatic, rim light, neon, moonlight…; the prompt picks it",
     },
+    RemoteModel {
+        id: "local/ltx-2.5-distilled",
+        label: "LTX-2.5 distilled (this machine)",
+        short: "ltx local",
+        service: Service::Local,
+        endpoint: "distilled",
+        dialect: Dialect::LtxLocal,
+        task: Task::ImageToVideo,
+        // Restricted, like the LTX HDR node: the LTX-2.x community licence
+        // limits commercial use by revenue.
+        commercial: false,
+        licence: "Lightricks LTX-2.x community licence (commercial use limited by revenue)",
+        about: "image-to-video on your own GPU, free; leave the image port empty for text-to-video. \
+                NVFP4 on an RTX 50-series (16 GB is enough), ~48 GB of weights",
+    },
 ];
 
 pub fn get(id: &str) -> Option<&'static RemoteModel> {
@@ -1689,6 +1725,17 @@ mod tests {
         }
     }
 
+    /// A local model runs as a process on this machine; anything else
+    /// is a fal-shaped endpoint. A dialect is one or the other, so a
+    /// request built for a local tool can never be sent to fal.
+    #[test]
+    fn local_models_are_local_dialects() {
+        for m in CATALOG {
+            assert_eq!(m.service == Service::Local, m.dialect == Dialect::LtxLocal, "{}", m.id);
+            assert_eq!(m.service == Service::Local, m.id.starts_with("local/"), "{}", m.id);
+        }
+    }
+
     #[test]
     fn dialects_match_their_tasks() {
         for m in CATALOG {
@@ -1712,6 +1759,7 @@ mod tests {
                     | Dialect::Ltx25Upscale
                     | Dialect::Ltx25Reframe
                     | Dialect::Ltx25Alpha
+                    | Dialect::LtxLocal
             );
             assert_eq!(video, m.task.is_video(), "{}", m.id);
         }
