@@ -123,11 +123,25 @@ def route(w, comp_stem=None):
 
 
 def save_as(w, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    d = os.path.dirname(path)
+    if not os.path.isdir(d):
+        # organisicator makes the folder (only one its template declares),
+        # so nothing untracked appears; without it running, make it here.
+        try:
+            shots.api_post("/v1/mkdir", {"path": d})
+        except RuntimeError:
+            pass
+        os.makedirs(d, exist_ok=True)
     n = route(w, os.path.splitext(os.path.basename(path))[0])
     w.setup_save(path=path)
     show()
-    addon.status(f"saved {os.path.basename(path)}" + (f", {n} Write(s) to the shot's renders" if n else ""))
+    # Tell organisicator, so the comp is in its Work view without a rescan.
+    told = ""
+    try:
+        shots.api_post("/v1/register", {"path": path})
+    except RuntimeError as e:
+        told = f" (organisicator not told: {e})"
+    addon.status(f"saved {os.path.basename(path)}" + (f", {n} Write(s) to the shot's renders" if n else "") + told)
 
 
 def save(w, _v=None):
