@@ -85,6 +85,10 @@ pub(crate) struct SuiteState {
     pub(crate) paint_bake: Option<u64>,
     /// --test-tab: (stage, frames).
     pub(crate) tab: Option<(u32, u32)>,
+    /// --test-quickadd: (stage, start).
+    pub(crate) quickadd: Option<(u32, std::time::Instant)>,
+    /// --test-quickadd: the node count a stage compares against.
+    pub(crate) quickadd_n: usize,
     /// --test-zones: (stage, frames in it, the Grade), the press point, and
     /// the wall-clock start the budget runs on.
     pub(crate) zones: Option<(u32, u32, u64)>,

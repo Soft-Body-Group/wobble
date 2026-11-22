@@ -407,6 +407,9 @@ slots! {
         keys_curves: "curves scope" = shade(S::cost_nc, rgb(198, 142, 255));
         keys_paint: "paint scope" = shade(S::error, rgb(255, 128, 148));
         keys_props: "properties scope" = shade(S::keys_graph, rgb(120, 214, 176));
+        /// Quick create's letters (ctrl+Tab), on the keys window and the
+        /// graph's quick-create card.
+        keys_quick: "quick-create scope" = shade(S::keys_viewer, rgb(110, 196, 236));
     }
     "node families" {
         /// Moving a family recolours every node type in it; each type keeps

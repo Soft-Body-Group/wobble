@@ -555,6 +555,9 @@ struct NodeSearch {
     sel: usize,
 }
 
+/// A catalog entry's builder, as quick create carries it.
+type QuickMake = std::sync::Arc<dyn Fn(usize) -> NodeKind + Send + Sync>;
+
 /// One addable node type.
 pub struct NodeEntry {
     pub cat: NodeCat,
@@ -3489,6 +3492,104 @@ impl NodeEditor {
 
     pub fn test_ops_pie_open(&self) -> bool {
         self.ops_pie.is_some()
+    }
+
+    /// Whether the Tab search popup is open (`--test-quickadd`: ctrl+Tab
+    /// must not open it).
+    pub fn test_search_open(&self) -> bool {
+        self.search.is_some()
+    }
+
+    /// Quick create's letters that add something HERE — the catalog entry
+    /// each names, offered in this graph (a dive offers its own world) and
+    /// past the project's maturity threshold — as (action, entry).
+    fn quick_entries(&self, min: NodeStatus) -> Vec<(crate::keymap::Act, &'static str, QuickMake)> {
+        let cat = node_catalog();
+        crate::keymap::QUICK
+            .iter()
+            .filter_map(|(a, label)| {
+                cat.iter()
+                    .find(|e| {
+                        e.label == *label
+                            && entry_offered(e, self.in_noise, self.in_geo, self.in_sdf, self.in_particles, self.in_genai, self.in_roto)
+                            && min.admits(e.status)
+                    })
+                    .map(|e| (*a, e.label, e.make.clone()))
+            })
+            .collect()
+    }
+
+    /// The node a quick-create letter adds here, built with `slot`.
+    fn quick_kind(&self, act: crate::keymap::Act, min: NodeStatus, slot: usize) -> Option<NodeKind> {
+        self.quick_entries(min).into_iter().find(|(a, ..)| *a == act).map(|(_, _, make)| make(slot))
+    }
+
+    /// The armed mode's card beside the pointer: every letter and what it
+    /// adds, so the map documents itself. Painted, not a widget: it must
+    /// not take the hover off the graph (that disarms).
+    fn draw_quick_card(&self, ui: &egui::Ui, at: Pos2, min: NodeStatus) {
+        use crate::keymap as km;
+        let rows: Vec<(String, String)> = self
+            .quick_entries(min)
+            .into_iter()
+            .map(|(a, label, _)| (km::binding(a).key.symbol_or_name().to_string(), label.to_string()))
+            .collect();
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.id().with("quick-create"),
+        ));
+        let vis = ui.visuals();
+        let font = egui::FontId::proportional(12.0);
+        let row_h = 17.0;
+        let cols = 2usize;
+        let per = rows.len().div_ceil(cols).max(1);
+        let col_w = 132.0;
+        let head = 20.0;
+        let size = egui::vec2(col_w * cols as f32 + 12.0, head + per as f32 * row_h + 8.0);
+        let screen = ui.ctx().content_rect();
+        let mut min_pt = at + egui::vec2(18.0, 18.0);
+        min_pt.x = min_pt.x.min(screen.max.x - size.x - 4.0).max(screen.min.x + 4.0);
+        min_pt.y = min_pt.y.min(screen.max.y - size.y - 4.0).max(screen.min.y + 4.0);
+        let r = egui::Rect::from_min_size(min_pt, size);
+        painter.rect(r, 6.0, vis.window_fill, vis.window_stroke, egui::StrokeKind::Inside);
+        let accent = crate::theme::keys_quick();
+        let chord = km::binding(km::Act::GraphQuickCreate);
+        painter.text(
+            r.min + egui::vec2(8.0, 5.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "quick create ({}) \u{00b7} esc cancels",
+                ui.ctx().format_shortcut(&egui::KeyboardShortcut {
+                    modifiers: chord.mods,
+                    logical_key: chord.key
+                })
+            ),
+            font.clone(),
+            vis.weak_text_color(),
+        );
+        if rows.is_empty() {
+            painter.text(
+                r.min + egui::vec2(8.0, head),
+                egui::Align2::LEFT_TOP,
+                "nothing to add here",
+                font,
+                vis.weak_text_color(),
+            );
+            return;
+        }
+        for (i, (cap, label)) in rows.iter().enumerate() {
+            let p = r.min + egui::vec2(8.0 + (i / per) as f32 * col_w, head + (i % per) as f32 * row_h);
+            let cap_r = egui::Rect::from_min_size(p, egui::vec2(18.0, row_h - 3.0));
+            painter.rect_stroke(cap_r, 3.0, egui::Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+            painter.text(cap_r.center(), egui::Align2::CENTER_CENTER, cap, font.clone(), accent);
+            painter.text(
+                p + egui::vec2(24.0, (row_h - 3.0) * 0.5),
+                egui::Align2::LEFT_CENTER,
+                label,
+                font.clone(),
+                vis.text_color(),
+            );
+        }
     }
 
     /// Last frame's (frame index, big tier, exact picture, screen rect)
@@ -7284,6 +7385,19 @@ impl NodeEditor {
             let at = pointer.map(|p| view.to_graph(p)).unwrap_or(Pos2::ZERO);
             self.search = Some(NodeSearch { at, query: String::new(), sel: 0 });
         }
+        // Quick create (ctrl+Tab, then one key): `keymap::quick_pre` arms
+        // it and turns the key into a pick; the add is the search's own.
+        crate::keymap::set_graph_hovered(resp.hovered() && self.search.is_none());
+        if let Some(act) = crate::keymap::take_quick_pick() {
+            let at = pointer.map(|p| view.to_graph(p)).unwrap_or(Pos2::ZERO);
+            if let Some(kind) = self.quick_kind(act, graph.node_status_min, *next_read_slot) {
+                if kind.reader_slot().is_some() {
+                    *next_read_slot += 1;
+                }
+                let id = add_wired(graph, kind, at, selection, self.zoom, self.patch_mode);
+                self.added.push(id);
+            }
+        }
         if !ui.ctx().egui_wants_keyboard_input() && !crate::keymap::capturing() {
             use crate::keymap::{self, Act};
             // A key that edits the GRAPH only fires while the graph is under
@@ -8825,6 +8939,7 @@ impl NodeEditor {
                 item(km::Act::GraphSourcePie, "hold: global patch"),
                 item(km::Act::GraphRegionPie, "hold: region patch"),
                 item(km::Act::GraphSearch, "search"),
+                item(km::Act::GraphQuickCreate, "quick create: then one key adds a node"),
                 item(km::Act::GraphGrab, "grab a noodle"),
                 item(km::Act::GraphTidy, "tidy"),
                 item(km::Act::GraphRename, "rename"),
@@ -11081,6 +11196,13 @@ impl NodeEditor {
             }
             if close {
                 self.search = None;
+            }
+        }
+
+        // --- quick create's card, while it waits for its key.
+        if crate::keymap::quick_armed() {
+            if let Some(p) = pointer {
+                self.draw_quick_card(ui, p, graph.node_status_min);
             }
         }
 

@@ -49,6 +49,7 @@ mod plugin;
 mod precache;
 mod propspie;
 mod proxy;
+mod quickadd;
 mod range;
 mod rc;
 mod record;

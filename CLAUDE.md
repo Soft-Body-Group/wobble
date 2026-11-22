@@ -155,7 +155,7 @@ and time out spuriously):
 
 ```bash
 B=./target/release/wobble; D=data/2k_zip_bg
-for t in click box slice magnet nodeux blendnav tv mswipe tab paint anim gizmokey curves keyer setup \
+for t in click box slice magnet nodeux blendnav tv mswipe tab quickadd paint anim gizmokey curves keyer setup \
          spline patchlive zoom cachemeter bin browser thumbs dpx plugin \
          curveedit noise geo sdf mblur \
          nodepack track planar colourkey channels write picker layer shader cost focus keymap cpick zones eyedrop cornerpin gridwarp warp compose subwob blender genai corridor sammie flow seedvr upscale depth ltxhdr stabilize text; do  # + record, with WOBBLE_TEST_FOCUS=1

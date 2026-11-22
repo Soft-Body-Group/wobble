@@ -149,6 +149,11 @@ pub enum Scope {
     Paint,
     /// The properties panels (docked strip or popped out).
     Props,
+    /// The one key after the quick-create chord (ctrl+Tab over the graph):
+    /// a letter that ADDS a node. Its own scope, because these letters are
+    /// the graph's letters again (G grade vs G grab) and only ever read
+    /// while the mode is armed — see [`quick_pre`].
+    Quick,
 }
 
 impl Scope {
@@ -160,6 +165,7 @@ impl Scope {
             Scope::Curves => "curves",
             Scope::Paint => "paint",
             Scope::Props => "properties",
+            Scope::Quick => "quick create",
         }
     }
     /// The keyboard's scope tint: the dots on a keycap, the ring on a
@@ -172,10 +178,18 @@ impl Scope {
             Scope::Curves => theme::keys_curves(),
             Scope::Paint => theme::keys_paint(),
             Scope::Props => theme::keys_props(),
+            Scope::Quick => theme::keys_quick(),
         }
     }
-    pub const ALL: [Scope; 6] =
-        [Scope::App, Scope::Viewer, Scope::Graph, Scope::Curves, Scope::Paint, Scope::Props];
+    pub const ALL: [Scope; 7] = [
+        Scope::App,
+        Scope::Viewer,
+        Scope::Graph,
+        Scope::Curves,
+        Scope::Paint,
+        Scope::Props,
+        Scope::Quick,
+    ];
 }
 
 /// Every remappable action. The enum is the call-site handle; the string
@@ -296,6 +310,25 @@ pub enum Act {
     BrushUp,
     /// Held: pointer motion sets the brush (Blender's F).
     BrushAdjust,
+    /// Arms quick create: the next key adds the node [`QUICK`] maps it to.
+    GraphQuickCreate,
+    QuickGrade,
+    QuickBlur,
+    QuickBlend,
+    QuickTransform,
+    QuickCrop,
+    QuickKeyer,
+    QuickLumaKey,
+    QuickLoad,
+    QuickRender,
+    QuickChannelSelect,
+    QuickNoise,
+    QuickPaint,
+    QuickRoto,
+    QuickText,
+    QuickDot,
+    QuickDefocus,
+    QuickCurve,
 }
 
 pub struct Def {
@@ -1272,6 +1305,65 @@ pub const DEFS: &[Def] = &[
         Binding::plain(Key::F),
         KeyOnly,
     ),
+    // ctrl, not ⌘, on every OS (⌘Tab is the Mac's app switcher). Over the
+    // graph only, like the search it sits beside — but in the quick scope
+    // with its letters: the search is any-mods Tab, and would read as a
+    // clash in the graph's.
+    def(
+        Act::GraphQuickCreate,
+        "graph.quick_create",
+        "quick create: the next key adds a node",
+        Scope::Quick,
+        Binding::ctrl(Key::Tab),
+        Exact,
+    ),
+    def(Act::QuickGrade, "quick.grade", "Grade", Scope::Quick, Binding::plain(Key::G), Exact),
+    def(Act::QuickBlur, "quick.blur", "Blur", Scope::Quick, Binding::plain(Key::B), Exact),
+    def(Act::QuickBlend, "quick.blend", "Blend (merge)", Scope::Quick, Binding::plain(Key::M), Exact),
+    def(Act::QuickTransform, "quick.transform", "Transform", Scope::Quick, Binding::plain(Key::T), Exact),
+    def(Act::QuickCrop, "quick.crop", "Crop", Scope::Quick, Binding::plain(Key::C), Exact),
+    def(Act::QuickKeyer, "quick.keyer", "Keyer", Scope::Quick, Binding::plain(Key::K), Exact),
+    def(Act::QuickLumaKey, "quick.lumakey", "LumaKey", Scope::Quick, Binding::plain(Key::L), Exact),
+    def(Act::QuickLoad, "quick.load", "Load", Scope::Quick, Binding::plain(Key::R), Exact),
+    def(Act::QuickRender, "quick.render", "Render (write)", Scope::Quick, Binding::plain(Key::W), Exact),
+    def(
+        Act::QuickChannelSelect,
+        "quick.channelselect",
+        "ChannelSelect (shuffle)",
+        Scope::Quick,
+        Binding::plain(Key::S),
+        Exact,
+    ),
+    def(Act::QuickNoise, "quick.noise", "Noise", Scope::Quick, Binding::plain(Key::N), Exact),
+    def(Act::QuickPaint, "quick.paint", "Paint", Scope::Quick, Binding::plain(Key::P), Exact),
+    def(Act::QuickRoto, "quick.roto", "Roto (spline)", Scope::Quick, Binding::plain(Key::O), Exact),
+    def(Act::QuickText, "quick.text", "Text", Scope::Quick, Binding::plain(Key::X), Exact),
+    def(Act::QuickDot, "quick.dot", "Dot", Scope::Quick, Binding::plain(Key::D), Exact),
+    def(Act::QuickDefocus, "quick.defocus", "Defocus", Scope::Quick, Binding::plain(Key::F), Exact),
+    def(Act::QuickCurve, "quick.curve", "Curve", Scope::Quick, Binding::plain(Key::U), Exact),
+];
+
+/// Quick create's letters: each `Scope::Quick` action and the add-menu
+/// entry it makes, by its label in `editor::node_catalog` (the editor
+/// resolves it there, so the add is the menus' own).
+pub const QUICK: &[(Act, &str)] = &[
+    (Act::QuickGrade, "Grade"),
+    (Act::QuickBlur, "Blur"),
+    (Act::QuickBlend, "Blend"),
+    (Act::QuickTransform, "Transform"),
+    (Act::QuickCrop, "Crop"),
+    (Act::QuickKeyer, "Keyer"),
+    (Act::QuickLumaKey, "LumaKey"),
+    (Act::QuickLoad, "Load"),
+    (Act::QuickRender, "Render"),
+    (Act::QuickChannelSelect, "ChannelSelect"),
+    (Act::QuickNoise, "Noise"),
+    (Act::QuickPaint, "Paint"),
+    (Act::QuickRoto, "Spline"),
+    (Act::QuickText, "Text"),
+    (Act::QuickDot, "Dot"),
+    (Act::QuickDefocus, "Defocus"),
+    (Act::QuickCurve, "Curve"),
 ];
 
 pub fn def_of(a: Act) -> &'static Def {
@@ -1454,6 +1546,9 @@ pub fn scrub_key_down() -> bool {
 /// single-letter key and needs no strip).
 pub fn take_search(ctx: &egui::Context, raw: &mut egui::RawInput) -> bool {
     use std::sync::atomic::Ordering;
+    // Quick create first: its chord is ctrl+Tab, which the search below
+    // would otherwise take, and while armed it owns every key.
+    quick_pre(ctx, raw);
     // A number field is being typed into: Tab is the spreadsheet move to
     // the next one (`num_tab_pre`), not the search or the scrub.
     if num_tab_pre(ctx, raw) {
@@ -1482,6 +1577,127 @@ pub fn take_search(ctx: &egui::Context, raw: &mut egui::RawInput) -> bool {
     });
     raw.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Tab, .. }));
     hit
+}
+
+// ---------------------------------------------------------------------------
+// Quick create.
+//
+// ctrl+Tab over the graph arms a one-shot mode: the NEXT key adds the node
+// [`QUICK`] maps it to (the add menus' own add: placed and wired from the
+// selection), then the mode is gone. Escape, a click, focus leaving the
+// window or any unmapped key just disarms. It lives at the RAW level, with
+// the Tab steal, because while armed every key event is stripped before
+// egui sees it: no app, viewer or graph hotkey can fire on the letter, and
+// nothing types it into a field.
+
+static QUICK_ARMED: AtomicBool = AtomicBool::new(false);
+/// The graph canvas was under the pointer on its last pass (the editor
+/// stamps it): quick create only arms there, like the search.
+static GRAPH_HOVERED: AtomicBool = AtomicBool::new(false);
+/// The letter's action, waiting for the graph editor to take it.
+static QUICK_PICK: RwLock<Option<Act>> = RwLock::new(None);
+
+/// Is quick create waiting for its key?
+pub fn quick_armed() -> bool {
+    QUICK_ARMED.load(Ordering::Relaxed)
+}
+
+/// Stamped by the graph editor every pass.
+pub fn set_graph_hovered(on: bool) {
+    GRAPH_HOVERED.store(on, Ordering::Relaxed);
+    // The graph went away under an armed mode (pane closed, pointer left
+    // it): nothing could take the letter, so stop eating keys.
+    if !on {
+        QUICK_ARMED.store(false, Ordering::Relaxed);
+    }
+}
+
+/// The quick-create pick, once: the editor adds it.
+pub fn take_quick_pick() -> Option<Act> {
+    QUICK_PICK.write().unwrap().take()
+}
+
+/// The quick-create action a pressed key fires, if any. The arming chord's
+/// modifiers may still be held (ctrl+Tab, then G before letting go of
+/// ctrl): those are taken off before matching.
+fn quick_hit(key: Key, mods: Modifiers) -> Option<Act> {
+    let arm = binding(Act::GraphQuickCreate).mods;
+    let lifted = Modifiers {
+        alt: mods.alt && !arm.alt,
+        shift: mods.shift && !arm.shift,
+        ctrl: mods.ctrl && !(arm.ctrl || arm.command),
+        command: mods.command && !(arm.ctrl || arm.command),
+        mac_cmd: mods.mac_cmd && !(arm.ctrl || arm.command),
+    };
+    QUICK.iter().map(|(a, _)| *a).find(|a| {
+        let b = binding(*a);
+        key == b.key && (mods.matches_exact(b.mods) || lifted.matches_exact(b.mods))
+    })
+}
+
+/// The raw-level half of quick create: arm on the chord, and while armed
+/// strip every key and text event, turning the first real press into the
+/// pick (or a cancel).
+fn quick_pre(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if capturing() {
+        QUICK_ARMED.store(false, Ordering::Relaxed);
+        return;
+    }
+    let arm = binding(Act::GraphQuickCreate);
+    let is_arm = |e: &egui::Event| {
+        matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. }
+            if *key == arm.key && modifiers.matches_exact(arm.mods))
+    };
+    if !quick_armed() {
+        let Some(i) = raw.events.iter().position(is_arm) else { return };
+        // Not while a field takes the keyboard, and only over the graph.
+        if ctx.egui_wants_keyboard_input() || !GRAPH_HOVERED.load(Ordering::Relaxed) {
+            return;
+        }
+        QUICK_ARMED.store(true, Ordering::Relaxed);
+        *QUICK_PICK.write().unwrap() = None;
+        // The chord is spent: neither the search nor the scrub sees it.
+        // Whatever came after it in the same batch is the mode's.
+        let rest = raw.events.split_off(i + 1);
+        raw.events.pop();
+        quick_events(raw, rest);
+        ctx.request_repaint();
+        return;
+    }
+    let all = std::mem::take(&mut raw.events);
+    quick_events(raw, all);
+}
+
+/// Feed events to an ARMED mode: keys and text are eaten, the first real
+/// press decides, and from the moment it is decided the rest pass on.
+fn quick_events(raw: &mut egui::RawInput, events: Vec<egui::Event>) {
+    let mut armed = quick_armed();
+    for e in events {
+        if !armed {
+            raw.events.push(e);
+            continue;
+        }
+        match &e {
+            // Repeats of the held chord, and releases, decide nothing.
+            egui::Event::Key { pressed: true, repeat: false, key, modifiers, .. } => {
+                if *key != Key::Escape {
+                    if let Some(a) = quick_hit(*key, *modifiers) {
+                        *QUICK_PICK.write().unwrap() = Some(a);
+                    }
+                }
+                armed = false;
+            }
+            egui::Event::Key { .. } | egui::Event::Text(_) => {}
+            // A click (or the window losing focus) cancels and goes on
+            // to do what it does.
+            egui::Event::PointerButton { pressed: true, .. } | egui::Event::WindowFocused(false) => {
+                armed = false;
+                raw.events.push(e);
+            }
+            _ => raw.events.push(e),
+        }
+    }
+    QUICK_ARMED.store(armed, Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -2578,6 +2794,35 @@ mod tests {
     use super::*;
 
     /// Prefs ids are the contract with every setup already on disk.
+    /// Every quick-create letter names a node the comp's add menus offer,
+    /// once, and every quick-scope letter row is in the table.
+    #[test]
+    fn quick_create_names_real_nodes() {
+        let cat = crate::editor::node_catalog();
+        for (a, label) in QUICK {
+            assert_eq!(def_of(*a).scope, Scope::Quick, "{label}");
+            assert!(
+                cat.iter().any(|e| e.label == *label
+                    && crate::editor::entry_offered(e, false, false, false, false, false, false)),
+                "quick create names {label:?}, which the comp's catalog does not offer"
+            );
+        }
+        for d in DEFS.iter().filter(|d| d.scope == Scope::Quick && d.act != Act::GraphQuickCreate) {
+            assert!(QUICK.iter().any(|(a, _)| *a == d.act), "{} has no QUICK row", d.id);
+        }
+    }
+
+    /// The letter after ctrl+Tab matches with ctrl let go or still held;
+    /// shift is not lifted (shift+G is not G).
+    #[test]
+    fn quick_hit_lifts_the_arming_chord() {
+        reset_all();
+        assert_eq!(quick_hit(Key::G, Modifiers::NONE), Some(Act::QuickGrade));
+        assert_eq!(quick_hit(Key::G, Modifiers::CTRL), Some(Act::QuickGrade));
+        assert_eq!(quick_hit(Key::G, Modifiers::SHIFT), None);
+        assert_eq!(quick_hit(Key::J, Modifiers::NONE), None);
+    }
+
     #[test]
     fn ids_are_unique() {
         let mut ids: Vec<&str> = DEFS.iter().map(|d| d.id).collect();

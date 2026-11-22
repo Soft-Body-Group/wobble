@@ -2915,6 +2915,7 @@ impl Options {
             || self.test_range
             || self.test_paint
             || self.test_tab
+            || self.test_quickadd
             || self.test_zones
             || self.test_picker
             || self.test_anim
@@ -3096,6 +3097,7 @@ mod options_tests {
             ("range", |o| o.test_range = true),
             ("paint", |o| o.test_paint = true),
             ("tab", |o| o.test_tab = true),
+            ("quickadd", |o| o.test_quickadd = true),
             ("zones", |o| o.test_zones = true),
             ("picker", |o| o.test_picker = true),
             ("anim", |o| o.test_anim = true),
@@ -3415,6 +3417,9 @@ struct Options {
     test_paint: bool,
     /// Self-test: Tab search — type a filter, Enter, expect the node added.
     test_tab: bool,
+    /// Self-test: ctrl+Tab quick create — one key adds its node; Escape,
+    /// an unmapped key cancel.
+    test_quickadd: bool,
     /// Self-test: a Grade's ranges through the real panel — ranges tab, add
     /// zones, every zone tab, split, dissolve, the matte preview.
     test_zones: bool,
@@ -3622,6 +3627,7 @@ fn base_options() -> Options {
         test_range: false,
         test_paint: false,
         test_tab: false,
+        test_quickadd: false,
         test_zones: false,
         test_picker: false,
         test_anim: false,
@@ -3783,6 +3789,7 @@ pub fn run() -> anyhow::Result<()> {
             "--test-range" => opts.test_range = true,
             "--test-paint" => opts.test_paint = true,
             "--test-tab" => opts.test_tab = true,
+            "--test-quickadd" => opts.test_quickadd = true,
             "--test-zones" => opts.test_zones = true,
             "--test-picker" => opts.test_picker = true,
             "--test-anim" => opts.test_anim = true,
@@ -6564,6 +6571,8 @@ fn build_gfx_with(window: Arc<Window>, ctx: GpuContext, opts: &Options) -> anyho
             paint: opts.test_paint.then_some((0, 0, 0)),
             paint_bake: None,
             tab: opts.test_tab.then_some((0, 0)),
+            quickadd: opts.test_quickadd.then(|| (0, std::time::Instant::now())),
+            quickadd_n: 0,
             zones: opts.test_zones.then_some((0, 0, 0)),
             zones_at: egui::Pos2::ZERO,
             zones_t0: None,
@@ -12002,6 +12011,9 @@ impl Gfx {
             if self.test.tab.is_some() {
                 self.drive_test_tab(&mut raw_input);
             }
+            if self.test.quickadd.is_some() {
+                self.drive_test_quickadd(&mut raw_input);
+            }
             if self.test.zones.is_some() {
                 self.drive_test_zones(&mut raw_input);
             }
@@ -15444,6 +15456,7 @@ impl Gfx {
                                 ("rgb slider: hold D".into(), "slide orange / cyan (temperature)"),
                                 ("rgb slider: hold F".into(), "slide green / magenta (tint)"),
                 (key_of(Act::GraphSearch), "graph: node search at the cursor"),
+                (key_of(Act::GraphQuickCreate), "graph: quick create \u{2014} then one key adds its node (G grade, B blur\u{2026}; remap under quick create)"),
                 (key_of(Act::DiveIn), "graph: open the selected subwob / Noise / 2dini"),
                 (key_of(Act::DiveOut), "graph: back up one level out of it"),
                 (key_of(Act::GraphBypass), "graph: bypass the selection"),
