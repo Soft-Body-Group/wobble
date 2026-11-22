@@ -2102,6 +2102,80 @@ pub(crate) fn land_grab(graph: &mut EditorGraph, from: Port, to: Port, zoom: f32
     true
 }
 
+/// Land SEVERAL noodles grabbed with `G` (a selection's outputs, already
+/// in the order they should take: left to right) on node `dst`, one input
+/// each. From the clicked input `start` (taken even if wired), or from the
+/// first, every FREE picture input after it takes the next noodle; a node
+/// with a growing row of inputs — a Layer's stack, a GenAI Pipeline's bar,
+/// an image edit's reference pictures — grows until all of them fit (or
+/// it is full). Returns how many landed.
+pub(crate) fn land_grab_many(
+    graph: &mut EditorGraph,
+    srcs: &[(u64, u32)],
+    dst: u64,
+    start: Option<usize>,
+    zoom: f32,
+) -> usize {
+    let srcs: Vec<(u64, u32)> = srcs.iter().copied().filter(|(s, _)| *s != dst && graph.node(*s).is_some()).collect();
+    let from = start.unwrap_or(0);
+    let free = |g: &EditorGraph| -> Vec<usize> {
+        let Some(n) = g.node(dst) else { return Vec::new() };
+        (from..n.kind.input_count())
+            .filter(|k| n.kind.input_kind(*k) == PortKind::Image)
+            .filter(|k| Some(*k) == start || g.input_of(dst, *k).is_none())
+            .collect()
+    };
+    let mut slots = free(graph);
+    while slots.len() < srcs.len() {
+        let grew = graph.nodes.get_mut(&dst).is_some_and(|n| grow_input(&mut n.kind));
+        if !grew {
+            break;
+        }
+        slots = free(graph);
+    }
+    let pairs: Vec<((u64, u32), usize)> = srcs.into_iter().zip(slots).collect();
+    for ((s, o), k) in &pairs {
+        connect_or_bridge(graph, *s, *o, dst, *k, zoom);
+    }
+    pairs.len()
+}
+
+/// Most picture inputs a GenAI Pipeline grows to from one gesture (a
+/// box-select past this caught more than anyone meant to send).
+pub(crate) const GENAI_GROW_MAX: usize = 16;
+
+/// One more picture input on a node whose inputs are a growing row; false
+/// when it has no such row or the row is full.
+pub(crate) fn grow_input(kind: &mut NodeKind) -> bool {
+    match kind {
+        NodeKind::Layer(p) if p.layers.len() < engine::graph::LAYER_MAX => {
+            p.layers.push(Default::default());
+            true
+        }
+        NodeKind::GenAi(p) if p.model.is_none() => {
+            let images = (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Image).count();
+            if images >= GENAI_GROW_MAX {
+                return false;
+            }
+            p.pipeline.add_input(genai::InKind::Image);
+            true
+        }
+        // Inside a pipeline: a model that takes a list of reference
+        // pictures shows `refs` + 1 of them (the host keeps `refs` at the
+        // highest one wired, so this only has to stay ahead of the wires).
+        NodeKind::GenAiStep(genai::Op::Generate { model, opts, .. }) => {
+            match genai::catalog::get(model) {
+                Some(m) if m.grows_refs() && opts.refs + 1 < m.max_refs() => {
+                    opts.refs += 1;
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// The wire the DAG refuses is the loop the user meant: `src`'s output fed
 /// back into an UPSTREAM `dst.input` lowers to a LoopIn/LoopOut pair — the
 /// tap replaces the back-edge at `dst.input` (whatever fed it becomes the

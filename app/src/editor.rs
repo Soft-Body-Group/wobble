@@ -3396,6 +3396,11 @@ pub struct NodeEditor {
     /// you can pan and zoom to a node that was never on screen, and lands
     /// when you click a port (or is dropped by `G`/Esc).
     grab: Option<Port>,
+    /// `G` with several nodes selected: ALL their noodles, carried like
+    /// `grab` and in the order they will land (left to right as the nodes
+    /// stand). A click on a node lands them one input each, growing a
+    /// Layer / GenAI row to fit (`land_grab_many`).
+    grab_many: Vec<(u64, u32)>,
     /// Hold `.` and press a wire or a dot: the pull setting its tension.
     dot_place: Option<DotPlace>,
     /// Selected backdrops. Kept apart from the node selection: Delete on a
@@ -3840,6 +3845,7 @@ impl Default for NodeEditor {
             tv_state: std::collections::HashMap::new(),
             sel_port: None,
             grab: None,
+            grab_many: Vec::new(),
             dot_place: None,
             sel_groups: Vec::new(),
             group_hits: Vec::new(),
@@ -7220,6 +7226,29 @@ impl NodeEditor {
                         crate::innards::click(ui.ctx(), graph, iid, &hits, p, alt);
                         *selection = vec![iid];
                     }
+                } else if (p - op).length() < 5.0
+                    && !self.grab_many.is_empty()
+                    && (p_port.is_some()
+                        || p_node.is_some()
+                        || self.plus_hits.iter().any(|(_, r)| r.contains(p)))
+                {
+                    // Several noodles in hand (G on a selection): the node
+                    // clicked takes them all, one input each, from the
+                    // input clicked (or its first free one) on.
+                    let dst = p_port
+                        .map(|q| q.node())
+                        .or(p_node)
+                        .or_else(|| self.plus_hits.iter().find(|(_, r)| r.contains(p)).map(|(b, _)| *b));
+                    let start = match p_port {
+                        Some(Port::In(_, k)) => Some(k),
+                        _ => None,
+                    };
+                    if let Some(dst) = dst {
+                        let srcs = std::mem::take(&mut self.grab_many);
+                        land_grab_many(graph, &srcs, dst, start, zoom_now);
+                        *selection = vec![dst];
+                        self.sel_port = None;
+                    }
                 } else if (p - op).length() < 5.0 {
                     if let Some((bid, rect_hit)) = self
                         .plus_hits
@@ -7408,6 +7437,7 @@ impl NodeEditor {
                 self.sel_groups.clear();
                 self.sel_port = None;
                 self.grab = None;
+                self.grab_many.clear();
             }
         }
         let mut read_removed = false;
@@ -7808,8 +7838,23 @@ impl NodeEditor {
             // node — until a click on a port lands it, or G/Esc drops it.
             // The point is reaching a node that is nowhere near the screen,
             // which a press-drag-release wire cannot do.
+            //
+            // With SEVERAL nodes selected, G picks up all their noodles at
+            // once, ordered left to right as they stand, for a node with a
+            // row of inputs (a Layer, a GenAI Pipeline, an edit's
+            // references): a click on it lands one per input.
             if over && ui.input(|i| keymap::pressed(i, Act::GraphGrab)) {
-                if self.grab.take().is_none() {
+                let many: Vec<u64> = selection
+                    .iter()
+                    .copied()
+                    .filter(|s| graph.node(*s).is_some_and(|n| n.kind.output_count() > 0))
+                    .collect();
+                if !self.grab_many.is_empty() {
+                    self.grab_many.clear();
+                } else if self.grab.is_none() && many.len() >= 2 {
+                    self.grab_many = genai_pick_order(graph, &many).into_iter().map(|s| (s, 0)).collect();
+                    self.drag = None;
+                } else if self.grab.take().is_none() {
                     if let Some(port) = self.sel_port.or(hit_port) {
                         // Grabbing a WIRED input takes its wire off and
                         // carries the far end, exactly as dragging it does.
@@ -8019,6 +8064,7 @@ impl NodeEditor {
         // selection dies with its backdrop.
         self.sel_port = self.sel_port.filter(|p| graph.nodes.contains_key(&p.node()));
         self.grab = self.grab.filter(|p| graph.nodes.contains_key(&p.node()));
+        self.grab_many.retain(|(s, _)| graph.nodes.contains_key(s));
         self.sel_groups.retain(|id| graph.groups.iter().any(|g| g.id == *id));
 
         // Every noodle carries a first and last frame: hover a wire and it
@@ -8975,7 +9021,7 @@ impl NodeEditor {
                 item(km::Act::GraphRegionPie, "hold: region patch"),
                 item(km::Act::GraphSearch, "search"),
                 item(km::Act::GraphQuickCreate, "quick create: then one key adds a node"),
-                item(km::Act::GraphGrab, "grab a noodle"),
+                item(km::Act::GraphGrab, "grab a noodle (several selected: all their noodles)"),
                 item(km::Act::GraphTidy, "tidy"),
                 item(km::Act::GraphRename, "rename"),
                 item(km::Act::GraphRegionMenu, "tap: region · hold + swipe: multiply (a matte: mask)"),
@@ -10029,6 +10075,16 @@ impl NodeEditor {
             } else {
                 self.grab = None; // its node went away under it
             }
+        }
+        if let (false, Some(p)) = (self.grab_many.is_empty(), pointer) {
+            let hot = theme::wire_held();
+            for (s, o) in &self.grab_many {
+                if let Some(at) = port_pos(Port::Out(*s, *o)) {
+                    wire(&painter, at, p, Stroke::new(2.5, hot));
+                    painter.circle_stroke(at, 6.0, Stroke::new(1.5, hot));
+                }
+            }
+            painter.circle_filled(p, 4.5, hot);
         }
 
         // M held mid-drag, before the swipe lands: say what crossing a node
@@ -11776,6 +11832,57 @@ mod tests {
         let NodeKind::GenAi(p) = &g.node(n1).unwrap().kind else { panic!("not genai") };
         assert_eq!(p.inputs(), 2);
         assert_eq!(g.input_of(n1, 0), Some(reads[0]));
+    }
+
+    /// G on several nodes, landed on a node with a row of inputs: one
+    /// noodle per input, left to right as they stand, the row growing to
+    /// fit — a Layer's stack, a GenAI Pipeline's bar, an edit model's
+    /// reference pictures inside a pipeline. A clicked input is where the
+    /// row starts; wired inputs after it are kept.
+    #[test]
+    fn grabbing_several_noodles_fills_a_growing_row() {
+        let mut g = EditorGraph::default();
+        let reads: Vec<u64> = [300.0, 0.0, 600.0]
+            .iter()
+            .enumerate()
+            .map(|(i, x)| g.add(NodeKind::read(i, ""), Pos2::new(*x, 0.0)))
+            .collect();
+        let held: Vec<(u64, u32)> = genai_pick_order(&g, &reads).into_iter().map(|s| (s, 0)).collect();
+        let left_to_right = [reads[1], reads[0], reads[2]];
+
+        let layer = g.add(NodeKind::Layer(engine::graph::LayerParams::new()), Pos2::new(0.0, 300.0));
+        assert_eq!(land_grab_many(&mut g, &held, layer, None, 1.0), 3);
+        assert_eq!(g.node(layer).unwrap().kind.input_count(), 3, "the stack grew to fit");
+        for (k, r) in left_to_right.iter().enumerate() {
+            assert_eq!(g.input_of(layer, k), Some(*r), "layer {k}");
+        }
+
+        let pipe = g.add(NodeKind::GenAi(engine::graph::GenAiParams::new(9)), Pos2::new(0.0, 600.0));
+        assert_eq!(land_grab_many(&mut g, &held, pipe, None, 1.0), 3);
+        let NodeKind::GenAi(p) = &g.node(pipe).unwrap().kind else { panic!("not genai") };
+        let images: Vec<usize> = (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Image).collect();
+        assert_eq!(images.len(), 3, "an image input per noodle");
+        for (k, r) in images.iter().zip(left_to_right) {
+            assert_eq!(g.input_of(pipe, *k), Some(r));
+        }
+
+        // Inside a pipeline: an edit's picture, then references grown.
+        let op = genai::Op::Generate { model: "fal/nano-banana-pro-edit".into(), seed: 1, opts: Default::default() };
+        let edit = g.add(NodeKind::GenAiStep(op), Pos2::new(0.0, 900.0));
+        let first_pic = (0..g.node(edit).unwrap().kind.input_count())
+            .find(|k| g.node(edit).unwrap().kind.input_kind(*k) == PortKind::Image)
+            .unwrap();
+        assert_eq!(land_grab_many(&mut g, &held, edit, Some(first_pic), 1.0), 3);
+        for (k, r) in left_to_right.iter().enumerate() {
+            assert_eq!(g.input_of(edit, first_pic + k), Some(*r), "picture {k}");
+        }
+
+        // A Blend has no row to grow: what fits lands, the rest is dropped.
+        let blend = g.add(NodeKind::Blend { op: engine::graph::BlendOp::Over, mix: 1.0, gain: [1.0, 1.0] }, Pos2::new(0.0, 1200.0));
+        let fits = (0..g.node(blend).unwrap().kind.input_count())
+            .filter(|k| g.node(blend).unwrap().kind.input_kind(*k) == PortKind::Image)
+            .count();
+        assert_eq!(land_grab_many(&mut g, &held, blend, None, 1.0), fits.min(3));
     }
 
     /// One selected mid-chain: the new node splices in and sits BETWEEN
