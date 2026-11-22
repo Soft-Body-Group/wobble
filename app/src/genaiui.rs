@@ -465,6 +465,29 @@ pub(crate) fn step_is_matte(steps: &[genai::Step], i: usize) -> bool {
     go(steps, i, 0)
 }
 
+/// What viewing model step `i` shows while it has made nothing: the
+/// picture on its first wired image port (an Input's plate, a comp node's
+/// or Spline's stand-in), the image it would work on. None for a step with
+/// no picture wired (text to image) or one fed by another model (the node's
+/// reader holds one file at a time: it shows the take, as before).
+pub(crate) fn unmade_view(
+    comp: &mut crate::editor::EditorGraph,
+    owner: u64,
+    steps: &[genai::Step],
+    i: usize,
+    fmt: Option<(u32, u32)>,
+) -> Option<u64> {
+    let s = steps.get(i)?;
+    let ports = s.op.ports();
+    let j = s.inputs.iter().enumerate().find_map(|(p, from)| {
+        matches!(ports.get(p), Some((genai::Pipe::Image | genai::Pipe::Video, _))).then_some(*from).flatten()
+    })?;
+    if matches!(steps.get(j)?.op, Op::Generate { .. } | Op::Comfy { .. } | Op::Result { .. }) {
+        return None;
+    }
+    stand_in(comp, owner, steps, j, fmt)
+}
+
 /// Put the comp nodes step `i` needs into `comp` (the graph the pipeline
 /// node `owner` lives in) as STAND-INS, wired as the steps are: a Shape, a
 /// Comp and every such step above it, an Input standing for whatever is
@@ -1118,6 +1141,11 @@ pub struct Runs {
     /// comp cannot change while inside): what a Spline drawn in there is
     /// rendered at, so it lines up with the plate.
     pub dive_fmt: Option<(u32, u32)>,
+    /// The model step viewed in the open pipeline has made nothing of its
+    /// own to show (`genai_dive_show`): the viewer shows the picture it
+    /// reads instead (`unmade_view`), never the pipeline node's own
+    /// passthrough, which is whatever is on the node's FIRST input.
+    pub dive_unmade: bool,
     /// Per GenAI node, each step's (name, cache key) as its LAST run
     /// planned them (a whole run or one step's): what viewing a step
     /// inside shows, before any take's own stages.
@@ -1216,6 +1244,7 @@ impl Default for Runs {
             clip_frames: vec![],
             stages: Default::default(),
             dive_fmt: None,
+            dive_unmade: false,
             step_keys: Default::default(),
             pending_load: false,
             shown: Default::default(),
@@ -3893,6 +3922,7 @@ impl Gfx {
     /// a redraw; does nothing outside a GenAI dive.
     pub(crate) fn genai_dive_show(&mut self) {
         if !self.dive.last().is_some_and(|d| d.kind == crate::DiveKind::GenAi) {
+            self.jobs.genai.dive_unmade = false;
             return;
         }
         // An Input wired into a model's VIDEO port is read as a clip: it
@@ -3981,6 +4011,12 @@ impl Gfx {
             self.playback_dirty = true;
         }
         let ran = ran.map(|(p, _)| p);
+        // A model step viewed for itself (not through a comp node below).
+        let model_viewed = self
+            .egraph
+            .active_view()
+            .and_then(|v| self.egraph.node(v))
+            .is_some_and(|n| matches!(n.kind, NodeKind::GenAiStep(Op::Generate { .. } | Op::Comfy { .. })));
         let stage = ran.or_else(|| viewed.and_then(|(i, op)| {
             let name = op.name();
             let take = take.as_ref()?;
@@ -3995,6 +4031,11 @@ impl Gfx {
             let m = run::cached(&dir, key)?;
             Some(dir.join(key).join(m.file)).filter(|p| playable(p))
         }));
+        let unmade = model_viewed && stage.is_none();
+        if self.jobs.genai.dive_unmade != unmade {
+            self.jobs.genai.dive_unmade = unmade;
+            self.playback_dirty = true;
+        }
         let want = stage.or_else(|| take.as_ref().map(|t| t.path(&dir)).filter(|p| playable(p)));
         let want = want.map(|p| p.to_string_lossy().into_owned());
         if self.loaded.get(&owner).map(|l| &l.path) != want.as_ref() {

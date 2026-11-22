@@ -21120,6 +21120,18 @@ impl Gfx {
                     return Some(g);
                 }
             }
+            // A model step that has made nothing shows the picture it
+            // reads, not the node's passthrough of its FIRST input.
+            if self.jobs.genai.dive_unmade {
+                let ids: Vec<u64> =
+                    self.egraph.nodes.iter().filter(|(_, n)| genaiui::is_step(&n.kind)).map(|(id, _)| *id).collect();
+                let at = self.egraph.active_view().and_then(|v| ids.iter().position(|&x| x == v));
+                let steps = genaiui::from_editor(&self.egraph);
+                if let Some(id) = at.and_then(|i| genaiui::unmade_view(&mut g, owner, &steps, i, self.jobs.genai.dive_fmt)) {
+                    g.view = Some(id);
+                    return Some(g);
+                }
+            }
             let port = viewed.and_then(|n| match &n.kind {
                 NodeKind::GenAiStep(genai::pipeline::Op::Input { input, .. }) => Some(*input),
                 _ => None,
