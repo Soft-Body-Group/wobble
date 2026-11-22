@@ -445,6 +445,12 @@ pub fn request_clip(
             .map(Value::String)
             .ok_or_else(|| anyhow!("{} needs an image", m.label))
     };
+    // An edit's picture, then every reference wired after it, in port
+    // order, as far as the model takes them.
+    let with_refs = || -> Result<Value> {
+        let refs = images.iter().skip(2).flatten().take(m.max_refs()).cloned().map(Value::String);
+        Ok(Value::Array(std::iter::once(img(1)).chain(refs.map(Ok)).collect::<Result<_>>()?))
+    };
     let prompt_text = prompt.unwrap_or("");
     let style = Dialect::lighting_style(prompt.unwrap_or(""));
     let prompt = || json!(m.dialect.instruct(prompt.unwrap_or("")));
@@ -641,16 +647,30 @@ pub fn request_clip(
             })
         }
         (Task::Edit, Dialect::Gemini) => json!({
-            "prompt": prompt(), "image_urls": [img(1)?], "seed": seed,
+            "prompt": prompt(), "image_urls": with_refs()?, "seed": seed,
             // The input decides the shape.
             "aspect_ratio": "auto",
             "resolution": Dialect::gemini_resolution(opts.megapixels),
             "num_images": 1, "output_format": "png",
         }),
         (Task::Edit, Dialect::Seedream | Dialect::GptImage) => json!({
-            "prompt": prompt(), "image_urls": [img(1)?],
+            "prompt": prompt(), "image_urls": with_refs()?,
             "num_images": 1, "output_format": "png",
         }),
+        (_, Dialect::KontextMulti) => json!({
+            "prompt": prompt(), "image_urls": with_refs()?, "seed": seed,
+            "num_images": 1, "output_format": "png",
+        }),
+        (_, Dialect::QwenEditPlus) => {
+            // The comp's aspect: fal's default size is a square.
+            let (lo, hi) = m.dialect.mp_range();
+            let (w, h) = image::fit_size(comp.0.max(1), comp.1.max(1), opts.megapixels.clamp(lo, hi));
+            json!({
+                "prompt": prompt(), "image_urls": with_refs()?, "seed": seed,
+                "image_size": {"width": w, "height": h},
+                "num_images": 1, "output_format": "png",
+            })
+        }
         (Task::Inpaint, Dialect::GptImage) => json!({
             "prompt": prompt(), "image_urls": [img(1)?], "mask_url": img(2)?,
             "num_images": 1, "output_format": "png",
@@ -1323,6 +1343,52 @@ mod tests {
 
     fn m(id: &str) -> &'static RemoteModel {
         catalog::get(id).unwrap()
+    }
+
+    #[test]
+    fn multi_picture_edits_grow_a_port_per_reference_and_send_them_all() {
+        use crate::pipeline::{Op, Pipe};
+        let o = Opts::default();
+        for id in [
+            "fal/seedream-5-pro-edit",
+            "fal/nano-banana-pro-edit",
+            "fal/nano-banana-2-edit",
+            "fal/gpt-image-2-edit",
+            "fal/flux-kontext-pro-multi",
+            "fal/qwen-image-edit-plus",
+        ] {
+            let model = m(id);
+            assert!(model.grows_refs(), "{id}");
+            // A step with nothing extra wired (an old setup) has its two
+            // ports and one free reference; each one wired adds another.
+            let step = |refs| Op::Generate { model: id.into(), seed: 1, opts: Opts { refs, ..Opts::default() } };
+            let names: Vec<_> = step(0).ports().iter().map(|p| p.1).collect();
+            assert_eq!(names, ["prompt", "image", "reference 2"], "{id}");
+            assert_eq!(step(2).ports().len(), 5, "{id}");
+            assert!(step(2).ports()[2..].iter().all(|p| p.0 == Pipe::Image) && step(2).optional(4));
+            assert_eq!(step(99).ports().len(), 2 + model.max_refs(), "{id}: capped");
+            // The picture first, then every wired reference in port order;
+            // an unwired port in between is skipped.
+            let pics = [None, Some("data:a".into()), Some("data:b".into()), None, Some("data:c".into())];
+            let r = request(model, &o, 7, (2048, 1080), Some("p"), &pics).unwrap();
+            assert_eq!(r["image_urls"], json!(["data:a", "data:b", "data:c"]), "{id}");
+            assert!(r.get("image_url").is_none(), "{id}");
+            // Only the edited picture: still a list of one.
+            let one = request(model, &o, 7, (2048, 1080), Some("p"), &pics[..2]).unwrap();
+            assert_eq!(one["image_urls"], json!(["data:a"]), "{id}");
+        }
+        // No more than the provider takes.
+        let gpt = m("fal/gpt-image-2-edit");
+        let many: Vec<Option<String>> =
+            std::iter::once(None).chain((0..30).map(|k| Some(format!("data:{k}")))).collect();
+        let r = request(gpt, &o, 7, (2048, 1080), Some("p"), &many).unwrap();
+        assert_eq!(r["image_urls"].as_array().unwrap().len(), 16);
+        // Qwen gets the comp's shape, not fal's square default.
+        let q = request(m("fal/qwen-image-edit-plus"), &o, 7, (2048, 1080), Some("p"), &many[..2]).unwrap();
+        assert!(q["image_size"]["width"].as_u64() > q["image_size"]["height"].as_u64(), "{q}");
+        // The fixed two-picture edits and single-picture models are unchanged.
+        assert!(!m("fal/nano-banana-pro-edit-ref").grows_refs() && !m("fal/flux-kontext-pro").grows_refs());
+        assert!(!m("fal/gpt-image-2-inpaint").grows_refs() && !m("fal/nano-banana-pro").grows_refs());
     }
 
     #[test]

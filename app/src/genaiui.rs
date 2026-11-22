@@ -1600,7 +1600,7 @@ fn op_ports(m: &catalog::RemoteModel, opts: &Opts) -> Vec<String> {
             _ => name.to_string(),
         })
         .collect();
-    v.extend(m.dialect.extra_ports(opts.refs).iter().map(|n| format!("{n} (optional)")));
+    v.extend(m.extra_ports(opts.refs).iter().map(|n| format!("{n} (optional)")));
     v
 }
 
@@ -3947,17 +3947,18 @@ impl Gfx {
             }
         }
         // A model with a growing list of reference ports (Seedance's
-        // reference) always shows one free: `refs` follows the wires.
+        // reference, the multi-picture image edits) always shows one free:
+        // `refs` follows the wires.
         let wires: Vec<(u64, usize)> = self.egraph.edges.iter().map(|e| (e.0, e.1)).collect();
         for (id, n) in self.egraph.nodes.iter_mut() {
             let NodeKind::GenAiStep(Op::Generate { model, opts, .. }) = &mut n.kind else { continue };
             let Some(m) = catalog::get(model) else { continue };
-            if m.dialect.extra_ports(1).len() < 2 {
+            if !m.grows_refs() {
                 continue;
             }
             let base = genai::pipeline::task_ports(m.task).len();
             let top = wires.iter().filter(|w| w.0 == *id).map(|w| w.1 + 1).max().unwrap_or(0);
-            let refs = top.saturating_sub(base).min(7);
+            let refs = top.saturating_sub(base).min(m.max_refs());
             if opts.refs != refs {
                 opts.refs = refs;
             }

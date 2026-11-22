@@ -121,6 +121,14 @@ pub enum Dialect {
     /// size must hold at least 655,360 px. Billed by tokens, which fal's
     /// pricing API does not turn into a price, so it quotes as unknown.
     GptImage,
+    /// FLUX.1 Kontext [pro] multi: Kontext's fields, but the pictures go
+    /// in `image_urls` (the first is the one edited, the rest it draws
+    /// on). No size: the model follows its inputs.
+    KontextMulti,
+    /// Qwen Image Edit Plus (2509): `image_urls`, `seed`, and an
+    /// `image_size {width, height}`, which we take from the comp's aspect
+    /// (fal's default is a square).
+    QwenEditPlus,
     /// Microsoft MoGe (2 and 3): geometry from one image. We ask for the
     /// normals variant, skip the mesh and point-cloud exports (time, and
     /// files nobody reads), and take `normal_map`. Its `depth_map` is a
@@ -254,6 +262,8 @@ impl Dialect {
             Dialect::Gemini => (0.5, 4.0),
             // 655,360 px is GPT Image's floor.
             Dialect::GptImage => (0.66, 4.0),
+            // Qwen-Image works around a megapixel.
+            Dialect::QwenEditPlus => (0.5, 2.0),
             _ => (0.1, 4.0),
         }
     }
@@ -323,22 +333,6 @@ impl Dialect {
         }
     }
 
-    /// OPTIONAL ports this model has after its task's own: a reference
-    /// picture for Wan 2.7's edit; for Seedance's reference endpoint, more
-    /// reference pictures — `refs` already wired plus one free, so there
-    /// is always somewhere to land the next (`Opts::refs`, at most 8 more).
-    pub fn extra_ports(self, refs: usize) -> &'static [&'static str] {
-        const MORE: [&str; 8] = [
-            "reference 2", "reference 3", "reference 4", "reference 5",
-            "reference 6", "reference 7", "reference 8", "reference 9",
-        ];
-        match self {
-            Dialect::Wan27Edit => &["reference"],
-            Dialect::Seedance { reference: true, .. } => &MORE[..(refs + 1).min(MORE.len())],
-            _ => &[],
-        }
-    }
-
     /// Does the request carry our authored seed? When not, the seed still
     /// keys the cache (a "new seed" is how you ask for a variation).
     pub fn sends_seed(self) -> bool {
@@ -360,6 +354,8 @@ impl Dialect {
                 | Dialect::BriaBackground
                 | Dialect::GeminiRef { .. }
                 | Dialect::Sam3d
+                | Dialect::KontextMulti
+                | Dialect::QwenEditPlus
         )
     }
 
@@ -491,6 +487,52 @@ pub struct RemoteModel {
     pub about: &'static str,
 }
 
+impl RemoteModel {
+    /// How many reference pictures this model takes AFTER its task's own
+    /// image: the most `extra_ports` will ever grow to. The caps are the
+    /// provider's documented totals less the main picture:
+    /// - Seedream 5 edit: 10 (fal's schema: "up to 10 images").
+    /// - Nano Banana Pro / 2 edit: 14 (Google's Gemini image docs; fal's
+    ///   Nano Banana 2 page says the same).
+    /// - GPT Image 2 edit: 16 (fal's schema, `maxItems: 16`).
+    /// - Kontext multi, Qwen Edit Plus: no documented maximum, so 9, the
+    ///   same as Seedance's reference (Qwen works best with 1-3).
+    /// - Seedance reference: 9.
+    pub fn max_refs(&self) -> usize {
+        match (self.task, self.dialect) {
+            (_, Dialect::Seedance { reference: true, .. }) => 8,
+            (_, Dialect::Wan27Edit) => 1,
+            (Task::Edit, Dialect::Seedream) => 9,
+            (Task::Edit, Dialect::Gemini) => 13,
+            (Task::Edit, Dialect::GptImage) => 15,
+            (Task::Edit, Dialect::KontextMulti | Dialect::QwenEditPlus) => 8,
+            _ => 0,
+        }
+    }
+
+    /// Does this model take a GROWING list of reference ports (one free
+    /// past the last wired), rather than a fixed set?
+    pub fn grows_refs(&self) -> bool {
+        self.max_refs() > 1
+    }
+
+    /// OPTIONAL ports this model has after its task's own: Wan 2.7's edit
+    /// has one reference picture; a model that takes a list of them has
+    /// `refs` already wired plus one free, so there is always somewhere to
+    /// land the next (`Opts::refs`), up to `max_refs`.
+    pub fn extra_ports(&self, refs: usize) -> &'static [&'static str] {
+        const MORE: [&str; 15] = [
+            "reference 2", "reference 3", "reference 4", "reference 5", "reference 6",
+            "reference 7", "reference 8", "reference 9", "reference 10", "reference 11",
+            "reference 12", "reference 13", "reference 14", "reference 15", "reference 16",
+        ];
+        match self.dialect {
+            Dialect::Wan27Edit => &["reference"],
+            _ => &MORE[..(refs + 1).min(self.max_refs()).min(MORE.len())],
+        }
+    }
+}
+
 /// The model a fresh GenAI node generates with.
 pub const DEFAULT_MODEL: &str = "fal/flux-schnell";
 
@@ -533,6 +575,30 @@ pub const CATALOG: &[RemoteModel] = &[
         commercial: true,
         licence: "Black Forest Labs API terms (commercial use through the API)",
         about: "edit a picture by instruction: \"make it night\", \"remove the sign\"",
+    },
+    RemoteModel {
+        id: "fal/flux-kontext-pro-multi",
+        label: "FLUX.1 Kontext [pro] multi",
+        short: "kontext multi",
+        service: Service::Fal,
+        endpoint: "fal-ai/flux-pro/kontext/multi",
+        dialect: Dialect::KontextMulti,
+        task: Task::Edit,
+        commercial: true,
+        licence: "Black Forest Labs API terms (commercial use through the API)",
+        about: "Kontext over several pictures: edit the first, drawing on the references wired after it (a person, a product, a style)",
+    },
+    RemoteModel {
+        id: "fal/qwen-image-edit-plus",
+        label: "Qwen Image Edit Plus",
+        short: "qwen edit+",
+        service: Service::Fal,
+        endpoint: "fal-ai/qwen-image-edit-plus",
+        dialect: Dialect::QwenEditPlus,
+        task: Task::Edit,
+        commercial: true,
+        licence: "Qwen-Image weights are Apache-2.0; fal API terms",
+        about: "Alibaba's open edit model over several pictures (person + product, person + scene); best with 1-3",
     },
     RemoteModel {
         id: "fal/flux-fill-pro",

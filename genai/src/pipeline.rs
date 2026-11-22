@@ -221,7 +221,7 @@ pub struct Opts {
     #[serde(default = "default_res")]
     pub res: u32,
     /// How many of the model's EXTRA reference ports are in use
-    /// (`Dialect::extra_ports`): the host keeps it at the highest one
+    /// (`RemoteModel::extra_ports`): the host keeps it at the highest one
     /// wired, so one more is always free. Not part of any key: the wires
     /// are.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -352,7 +352,7 @@ impl Op {
             Op::Generate { model, opts, .. } => match catalog::get(model) {
                 Some(m) => {
                     let mut v = task_ports(m.task);
-                    v.extend(m.dialect.extra_ports(opts.refs).iter().map(|n| (Pipe::Image, *n)));
+                    v.extend(m.extra_ports(opts.refs).iter().map(|n| (Pipe::Image, *n)));
                     v
                 }
                 // An id this build does not know keeps no ports, so its
