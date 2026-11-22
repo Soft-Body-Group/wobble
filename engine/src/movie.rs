@@ -212,9 +212,11 @@ impl Session {
         // already runs several sessions at once; this is what makes a
         // SINGLE session keep up on ProRes, where slice threading is most
         // of the decode speed.
+        // `..Default`: an FFmpeg before 6 has a `safe` field too.
         decoder.set_threading(ff::codec::threading::Config {
             kind: ff::codec::threading::Type::Frame,
             count: 0,
+            ..Default::default()
         });
         Ok(Self {
             path: path.to_path_buf(),
