@@ -1235,11 +1235,32 @@ pub(crate) fn feeds_for_new(
     if let (NodeKind::Layer(_), [_, _, ..]) = (kind, picked.as_slice()) {
         return picked.iter().take(kind.input_count()).enumerate().map(|(i, s)| (*s, i)).collect();
     }
+    // A free-form GenAI Pipeline takes EVERY pick, one an image input,
+    // left to right as they stand in the graph (so the wires into its bar
+    // don't cross); `add_wired` grows it to fit. Mattes are left alone.
+    if let (NodeKind::GenAi(p), [_, _, ..]) = (kind, picked.as_slice()) {
+        if p.model.is_none() {
+            let images = (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Image);
+            return genai_pick_order(graph, &picked).into_iter().zip(images).collect();
+        }
+    }
     match (picked.as_slice(), swappable_inputs(kind)) {
         ([fg, bg, ..], Some((a, b))) => vec![(*fg, a), (*bg, b)],
         ([first, ..], _) => vec![(*first, 0)],
         _ => Vec::new(),
     }
+}
+
+/// Most image inputs a GenAI Pipeline grows from a selection: past this
+/// a box-select has caught more than anyone meant to send.
+const GENAI_PICKS_MAX: usize = 16;
+
+/// The picks feeding a new GenAI Pipeline, in the order its image inputs
+/// take them: left to right, then top to bottom, as they stand.
+fn genai_pick_order(graph: &EditorGraph, picked: &[u64]) -> Vec<u64> {
+    let mut v: Vec<(u64, Pos2)> = picked.iter().filter_map(|s| graph.node(*s).map(|n| (*s, n.pos))).collect();
+    v.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.1.y.total_cmp(&b.1.y)));
+    v.into_iter().map(|(s, _)| s).collect()
 }
 
 /// Every creation path's add — Tab search, the right-click menu, the F1
@@ -1340,6 +1361,20 @@ pub(crate) fn add_wired(
         if let Some(NodeKind::Layer(p)) = graph.nodes.get_mut(&id).map(|n| &mut n.kind) {
             if picks > p.layers.len() {
                 p.layers.resize(picks.min(engine::graph::LAYER_MAX), Default::default());
+            }
+        }
+    }
+    // So does a GenAI Pipeline: an image input for each pick.
+    if !patch_mode {
+        let picks = selection.iter().filter(|s| **s != id && graph.node(**s).is_some()).count();
+        if let Some(NodeKind::GenAi(p)) = graph.nodes.get_mut(&id).map(|n| &mut n.kind) {
+            if picks >= 2 && p.model.is_none() {
+                let images = |p: &engine::graph::GenAiParams| {
+                    (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Image).count()
+                };
+                while images(p) < picks.min(GENAI_PICKS_MAX) {
+                    p.pipeline.add_input(genai::InKind::Image);
+                }
             }
         }
     }
@@ -11711,6 +11746,36 @@ mod tests {
         let NodeKind::Layer(p) = &g.node(l1).unwrap().kind else { panic!("not a stack") };
         assert_eq!(p.layers.len(), 2);
         assert_eq!(g.input_of(l1, 0), Some(reads[0]));
+    }
+
+    /// A GenAI Pipeline made with several reads picked gets an image
+    /// input for each, fed left to right as they stand; its matte stays
+    /// free. A one-model node's inputs are fixed and are not grown.
+    #[test]
+    fn a_genai_pipeline_from_picks_takes_every_one() {
+        let mut g = EditorGraph::default();
+        let reads: Vec<u64> = [300.0, 0.0, 600.0]
+            .iter()
+            .enumerate()
+            .map(|(i, x)| g.add(NodeKind::read(i, ""), Pos2::new(*x, 0.0)))
+            .collect();
+        let mut sel = reads.clone();
+        let n = add_wired(&mut g, NodeKind::GenAi(engine::graph::GenAiParams::new(9)), Pos2::ZERO, &mut sel, 1.0, false);
+        let NodeKind::GenAi(p) = &g.node(n).unwrap().kind else { panic!("not genai") };
+        let images: Vec<usize> = (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Image).collect();
+        assert_eq!(images.len(), 3, "an image input per pick");
+        let mattes: Vec<usize> = (0..p.inputs()).filter(|k| p.pipeline.in_kind(*k) == genai::InKind::Matte).collect();
+        assert_eq!(mattes.len(), 1);
+        assert_eq!(g.input_of(n, mattes[0]), None, "the matte is left free");
+        for (k, r) in images.iter().zip([reads[1], reads[0], reads[2]]) {
+            assert_eq!(g.input_of(n, *k), Some(r), "input {k} is the read {k} from the left");
+        }
+        // One pick: the pipeline as it always was, fed its first image.
+        let mut one = vec![reads[0]];
+        let n1 = add_wired(&mut g, NodeKind::GenAi(engine::graph::GenAiParams::new(10)), Pos2::ZERO, &mut one, 1.0, false);
+        let NodeKind::GenAi(p) = &g.node(n1).unwrap().kind else { panic!("not genai") };
+        assert_eq!(p.inputs(), 2);
+        assert_eq!(g.input_of(n1, 0), Some(reads[0]));
     }
 
     /// One selected mid-chain: the new node splices in and sits BETWEEN
