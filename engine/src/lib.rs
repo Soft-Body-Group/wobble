@@ -65,6 +65,7 @@ pub mod safetensors;
 pub mod searaft;
 pub mod camtrack;
 pub mod stabilize;
+pub mod stab3d;
 pub mod staging;
 pub mod still;
 pub mod timing;

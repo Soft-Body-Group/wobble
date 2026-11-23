@@ -128,3 +128,7 @@ path = "src/bin/models.rs"
 [[bin]]
 name = "planar"
 path = "src/bin/planar.rs"
+
+[[bin]]
+name = "stab3d"
+path = "src/bin/stab3d.rs"
