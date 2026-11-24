@@ -113,7 +113,7 @@ pub fn video_ok() -> bool {
 
 /// Is this model one this build may offer?
 fn offered(m: &catalog::RemoteModel) -> bool {
-    if m.task.takes_clip() || m.task == Task::VideoUpscale {
+    if m.task.reads_video() {
         clip_ok()
     } else {
         !m.task.is_video() || video_ok()

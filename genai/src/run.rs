@@ -323,7 +323,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     Task::Relight => in_mp(1).unwrap_or(comp_mp),
                     Task::Edit | Task::Inpaint | Task::EditRef => in_mp(1).unwrap_or(comp_mp),
                     Task::Outpaint => in_mp(1).unwrap_or(comp_mp) * (opts.scale as f64).powi(2),
-                    Task::ImageToVideo => {
+                    Task::ImageToVideo | Task::TextToVideo => {
                         let (w, h) = video_size(m, opts, inputs.comp);
                         w as f64 * h as f64 / 1e6
                     }
@@ -331,6 +331,7 @@ pub fn plan(p: &Pipeline, inputs: &Inputs, dir: &Path) -> Result<Plan, String> {
                     // video price is billed on.
                     Task::VideoEdit | Task::VideoInpaint => in_mp(1).unwrap_or(0.0),
                     Task::VideoUpscale => in_mp(0).unwrap_or(0.0) * (opts.scale as f64).powi(2),
+                    Task::VideoReframe | Task::VideoMatte => in_mp(0).unwrap_or(0.0),
                     // A splat has no megapixels; nor have words.
                     Task::ImageTo3D | Task::Enhance | Task::Describe => 0.0,
                 };
@@ -390,6 +391,12 @@ pub fn t2i_size(m: &RemoteModel, opts: &crate::pipeline::Opts, comp: (u32, u32))
 /// A video step's (seconds, resolution), clamped to what its model takes;
 /// `None` for a model that does not make video.
 pub fn video_opts(m: &RemoteModel, opts: &crate::pipeline::Opts) -> Option<(u32, u32)> {
+    if let Dialect::Ltx23 { .. } = m.dialect {
+        // Length and resolution are the model's own settings
+        // (`Dialect::params`, in extra and so in the key): these are
+        // their defaults, which the quote reads past (`quote_settings`).
+        return Some((6, 1080));
+    }
     let Dialect::Seedance { max_seconds, top_res, .. } = m.dialect else { return None };
     let res = [480, 720, 1080]
         .into_iter()
@@ -495,6 +502,60 @@ pub fn request_clip(
                 "enable_prompt_expansion": false,
             })
         }
+        (_, Dialect::Ltx23 { image, .. }) => {
+            let mut v = json!({
+                "prompt": prompt(),
+                "duration": 6,
+                "resolution": "1080p",
+                "fps": 25,
+                // A take is pictures: no soundtrack to pay for.
+                "generate_audio": false,
+            });
+            if image {
+                v["image_url"] = img(1)?;
+                // The start frame decides the shape.
+                v["aspect_ratio"] = json!("auto");
+                if let Some(Some(e)) = images.get(2) {
+                    v["end_image_url"] = json!(e);
+                }
+            } else {
+                v["aspect_ratio"] = json!(if comp.1 > comp.0 { "9:16" } else { "16:9" });
+            }
+            v
+        }
+        (_, Dialect::LtxExtend) => json!({
+            "video_url": img(1)?, "prompt": prompt(), "duration": 5, "mode": "end",
+        }),
+        (_, Dialect::LtxRetake) => json!({
+            "video_url": img(1)?, "prompt": prompt(), "start_time": 0, "duration": 5,
+            // Our clips carry no sound to keep or replace.
+            "retake_mode": "replace_video",
+        }),
+        (_, Dialect::LtxCleanPlate | Dialect::LtxRenderToReal) => {
+            let c = clip.ok_or_else(|| anyhow!("{} needs the clip's length", m.label))?;
+            let mut v = json!({
+                "prompt": prompt(),
+                "video_url": img(1)?,
+                "resolution": "720p",
+                "num_frames": c.frames,
+                "frames_per_second": c.fps,
+                "seed": seed,
+                "generate_audio": false,
+            });
+            if m.dialect == Dialect::LtxRenderToReal {
+                v["intensity"] = json!("light");
+                v["enable_detail_refine"] = json!(false);
+                if let Some(Some(r)) = images.get(2) {
+                    v["image_url"] = json!(r);
+                }
+            }
+            v
+        }
+        (_, Dialect::Ltx25Upscale) => json!({ "video_url": img(0)?, "resolution": "1080p" }),
+        (_, Dialect::Ltx25Reframe) => json!({
+            "video_url": img(0)?, "aspect_ratio": "9:16", "resolution": "1080p",
+        }),
+        (_, Dialect::Ltx25Alpha) => json!({ "video_url": img(0)? }),
         (_, Dialect::SeedanceEdit) => json!({
             "prompt": prompt(),
             // Editing: length and shape follow the clip.
@@ -591,6 +652,8 @@ pub fn request_clip(
             "video_url": img(0)?, "upscale_factor": opts.scale, "seed": seed,
         }),
         (Task::VideoUpscale, _) => json!({ "video_url": img(0)?, "upscale_factor": opts.scale }),
+        (Task::VideoReframe | Task::VideoMatte, _) => json!({ "video_url": img(0)? }),
+        (Task::TextToVideo, _) => json!({ "prompt": prompt(), "seed": seed }),
         (Task::VideoEdit | Task::VideoInpaint, _) => json!({
             "prompt": prompt(), "video_url": img(1)?, "seed": seed,
         }),
@@ -716,7 +779,43 @@ pub fn request_clip(
             o.insert(k, x);
         }
     }
+    check_settings(m, &v, clip)?;
     Ok(v)
+}
+
+/// What a model refuses that only the request's own settings show (the
+/// panel's choices, merged from extra): said here, in the quote, before
+/// anything is uploaded or billed.
+fn check_settings(m: &RemoteModel, v: &Value, clip: Option<ClipShape>) -> Result<()> {
+    let num = |k: &str| v.get(k).and_then(|x| x.as_f64());
+    let res = v.get("resolution").and_then(|x| x.as_str()).unwrap_or("");
+    match m.dialect {
+        Dialect::Ltx23 { fast: true, .. } if num("duration").unwrap_or(0.0) > 10.0 => {
+            if num("fps") != Some(25.0) || res != "1080p" {
+                bail!("{} runs past 10 s only at 1080p and 25 fps", m.label);
+            }
+        }
+        Dialect::LtxCleanPlate => {
+            if let Some(c) = clip {
+                let secs = c.frames as f32 / c.fps.max(1.0);
+                let top = if res == "480p" { 15.0 } else { 6.0 };
+                if secs > top + 0.05 {
+                    bail!("{} takes about {top} s at {res}; this clip is {secs:.1} s", m.label);
+                }
+            }
+        }
+        Dialect::LtxRetake => {
+            if let Some(c) = clip {
+                let secs = c.frames as f32 / c.fps.max(1.0);
+                let end = num("start_time").unwrap_or(0.0) + num("duration").unwrap_or(5.0);
+                if end as f32 > secs + 0.05 {
+                    bail!("{} retakes up to {end} s; this clip is {secs:.1} s", m.label);
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Bria Expand's canvas for a `w`x`h` picture grown `scale` times: the
@@ -781,7 +880,7 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
                 p.steps[i].inputs.iter().map(|s| s.map(|_| "<image>".to_string())).collect();
             // A video upscaler is billed on the clip it is sent too, when
             // that is the captured one.
-            let clip = step_clip(p, i, inputs).filter(|_| m.task.takes_clip() || m.task == Task::VideoUpscale);
+            let clip = step_clip(p, i, inputs).filter(|_| m.task.reads_video());
             let r = request_clip(m, opts, *seed, inputs.comp, Some("<prompt>"), &ph, clip.map(Clip::shape))?;
             let video = match clip {
                 // Billed on the clip sent: its length, its size.
@@ -792,7 +891,11 @@ pub fn quote(p: &Pipeline, plan: &Plan, inputs: &Inputs, svc: &dyn Service, http
                 }),
             };
             let video = video.map(|v| quote_settings(m, &r, v));
-            Ok((m.endpoint.to_string(), r, plan.mp[i], video, clip.is_some()))
+            // Detail refine makes the clip twice the size each way: four
+            // times the megapixels it is billed on.
+            let refine = r.get("enable_detail_refine").and_then(|x| x.as_bool()) == Some(true);
+            let mp = if refine { plan.mp[i] * 4.0 } else { plan.mp[i] };
+            Ok((m.endpoint.to_string(), r, mp, video, clip.is_some()))
         })
         .collect::<Result<_>>()?;
     let items: Vec<QuoteItem> = reqs
@@ -819,7 +922,8 @@ fn quote_settings(m: &RemoteModel, req: &Value, mut v: VideoCall) -> VideoCall {
         Some("480p") => Some(480.0),
         Some("720p") => Some(720.0),
         Some("1080p") => Some(1080.0),
-        Some("4k") => Some(2160.0),
+        Some("1440p") => Some(1440.0),
+        Some("2160p" | "4k") => Some(2160.0),
         _ => None,
     };
     if let Some(res) = res {
@@ -835,6 +939,25 @@ fn quote_settings(m: &RemoteModel, req: &Value, mut v: VideoCall) -> VideoCall {
             v.default_res = true;
             if let Some(d) = req.get("duration").and_then(|d| d.as_f64()).filter(|d| *d > 0.0) {
                 v.seconds = v.seconds.min(d);
+            }
+        }
+        Dialect::Ltx23 { .. } => {
+            // Listed at 1080p; 1440p bills twice that, 2160p four times
+            // (the same for the fast endpoint).
+            v.rate = match res {
+                Some(r) if r >= 2160.0 => 4.0,
+                Some(r) if r >= 1440.0 => 2.0,
+                _ => 1.0,
+            };
+            v.default_res = true;
+            if let Some(d) = req.get("duration").and_then(|d| d.as_f64()) {
+                v.seconds = d;
+            }
+        }
+        Dialect::LtxExtend | Dialect::LtxRetake => {
+            // Billed on the seconds made, not the clip sent.
+            if let Some(d) = req.get("duration").and_then(|d| d.as_f64()) {
+                v.seconds = d;
             }
         }
         Dialect::SeedanceEdit => {
@@ -1196,7 +1319,7 @@ fn execute(
                         continue;
                     }
                     let (url, nsfw) = if m.task.is_video() {
-                        let url = service::output_video(&ran.output)
+                        let url = service::output_video_at(&ran.output, m.dialect.output_key(m.task))
                             .ok_or_else(|| anyhow!("{} returned no video", m.label))?;
                         (url, false)
                     } else {
@@ -1755,5 +1878,85 @@ mod tests {
         // And its own limits are checked on THAT clip: one second is short.
         ins.shape_clips.insert(crop, clip(24, 1280, 720));
         assert!(plan(&p, &ins, &dir).unwrap_err().contains("2-10 s"));
+    }
+
+    #[test]
+    fn ltx_models_ask_in_their_own_words_and_refuse_before_billing() {
+        use crate::pipeline::Op;
+        let o = Opts::default();
+        let pic = Some("data:a".to_string());
+        let vid = Some("data:video/mp4;base64,AAAA".to_string());
+        let shape = ClipShape { frames: 72, fps: 24.0 };
+        let with = |extra: &str| Opts { extra: extra.into(), ..Opts::default() };
+
+        // Text to video: the comp's aspect, integer fields, no audio, no seed.
+        let t = request(m("fal/ltx-2.3-t2v"), &o, 7, (1080, 1920), Some("p"), &[None]).unwrap();
+        assert_eq!(t["aspect_ratio"], "9:16");
+        assert_eq!((t["duration"].clone(), t["fps"].clone()), (json!(6), json!(25)));
+        assert_eq!(t["generate_audio"], false);
+        assert!(t.get("seed").is_none() && t.get("image_url").is_none(), "{t}");
+        // Past 10 s only at 1080p and 25 fps.
+        let fast = m("fal/ltx-2.3-t2v-fast");
+        assert!(request(fast, &with(r#"{"duration":20}"#), 7, (1920, 1080), Some("p"), &[None]).is_ok());
+        assert!(request(fast, &with(r#"{"duration":20,"fps":24}"#), 7, (1920, 1080), Some("p"), &[None]).is_err());
+        assert!(request(fast, &with(r#"{"duration":12,"resolution":"2160p"}"#), 7, (1920, 1080), Some("p"), &[None]).is_err());
+
+        // Image to video: start frame, an optional end frame on port 2.
+        let i2v = m("fal/ltx-2.3-i2v");
+        let a = request(i2v, &o, 7, (1920, 1080), Some("p"), &[None, pic.clone()]).unwrap();
+        assert_eq!(a["image_url"], "data:a");
+        assert_eq!(a["aspect_ratio"], "auto");
+        assert!(a.get("end_image_url").is_none());
+        let b = request(i2v, &o, 7, (1920, 1080), Some("p"), &[None, pic.clone(), Some("data:e".into())]).unwrap();
+        assert_eq!(b["end_image_url"], "data:e");
+        let names: Vec<_> = Op::Generate { model: i2v.id.into(), seed: 1, opts: Opts::default() }
+            .ports()
+            .iter()
+            .map(|p| p.1)
+            .collect();
+        assert_eq!(names, ["prompt", "image", "end frame"]);
+
+        // Clean plate: the clip's length and rate, and its time budget.
+        let cp = m("fal/ltx-2.3-clean-plate");
+        let c = request_clip(cp, &o, 7, (1920, 1080), Some(""), &[None, vid.clone()], Some(shape)).unwrap();
+        assert_eq!((c["num_frames"].clone(), c["seed"].clone()), (json!(72), json!(7)));
+        assert_eq!((c["resolution"].clone(), c["generate_audio"].clone()), (json!("720p"), json!(false)));
+        let long = ClipShape { frames: 240, fps: 24.0 };
+        assert!(request_clip(cp, &o, 7, (1920, 1080), Some(""), &[None, vid.clone()], Some(long)).is_err());
+        assert!(request_clip(cp, &with(r#"{"resolution":"480p"}"#), 7, (1920, 1080), Some(""), &[None, vid.clone()], Some(long)).is_ok());
+
+        // Render to real: the trigger word leads, once.
+        let rr = m("fal/ltx-2.3-render-to-real");
+        let r = request_clip(rr, &o, 7, (1920, 1080), Some("rainy street"), &[None, vid.clone(), pic.clone()], Some(shape)).unwrap();
+        assert_eq!(r["prompt"], "3DREAL. rainy street");
+        assert_eq!(r["image_url"], "data:a");
+        assert_eq!(rr.dialect.instruct("3DREAL. x"), "3DREAL. x");
+
+        // Retake: pictures only, and the window must lie inside the clip.
+        let rt = m("fal/ltx-2.3-retake");
+        let k = request_clip(rt, &with(r#"{"duration":2}"#), 7, (1920, 1080), Some("p"), &[None, vid.clone()], Some(shape)).unwrap();
+        assert_eq!(k["retake_mode"], "replace_video");
+        assert!(request_clip(rt, &o, 7, (1920, 1080), Some("p"), &[None, vid.clone()], Some(shape)).is_err(), "5 s of a 3 s clip");
+
+        // The 2.5 tools read port 0 like an upscaler; the matte is its own field.
+        let up = request(m("fal/ltx-2.5-upscale"), &o, 7, (1920, 1080), None, &[vid.clone()]).unwrap();
+        assert_eq!(up, json!({"video_url": vid.clone().unwrap(), "resolution": "1080p"}));
+        let rf = request(m("fal/ltx-2.5-reframe"), &with(r#"{"placement":{"anchor":"left"}}"#), 7, (1920, 1080), None, &[vid.clone()]).unwrap();
+        assert_eq!(rf["placement"]["anchor"], "left");
+        let al = m("fal/ltx-2.5-alpha");
+        assert!(al.task.is_data() && al.task.reads_video());
+        let out = json!({"matte_video": {"url": "https://x/m.mp4"}, "cutout_video": {"url": "https://x/c.mov"}});
+        assert_eq!(service::output_video_at(&out, al.dialect.output_key(al.task)).as_deref(), Some("https://x/m.mp4"));
+    }
+
+    #[test]
+    fn an_ltx_quote_bills_the_seconds_and_size_asked_for() {
+        let v = VideoCall { seconds: 6.0, w: 1920, h: 1080, default_res: false, rate: 1.0 };
+        let q = quote_settings(m("fal/ltx-2.3-t2v"), &json!({"duration": 10, "resolution": "2160p"}), v);
+        assert_eq!((q.seconds, q.rate, q.default_res), (10.0, 4.0, true));
+        let q = quote_settings(m("fal/ltx-2.3-i2v-fast"), &json!({"duration": 6, "resolution": "1080p"}), v);
+        assert_eq!((q.seconds, q.rate), (6.0, 1.0));
+        let q = quote_settings(m("fal/ltx-2.3-extend"), &json!({"duration": 3}), VideoCall { seconds: 9.0, ..v });
+        assert_eq!(q.seconds, 3.0);
     }
 }

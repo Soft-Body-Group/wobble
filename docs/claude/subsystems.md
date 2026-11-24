@@ -1622,6 +1622,13 @@ egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
   every still's key is unchanged (no `KEY_VERSION` bump); keep it so.
   Request quirks per model live in `catalog::Dialect`, not in endpoint
   string tests.
+  `Task::reads_video()` is the one test for "has a video port" (clip
+  tasks plus VideoUpscale / VideoReframe / VideoMatte): use it, not a list.
+  A setting fal only takes in combination (LTX fast past 10 s, a clean
+  plate's length budget, a retake window) is refused in
+  `run::check_settings`, after extra is merged and before the quote: a
+  422 after upload has still billed the steps above. `Task::VideoMatte`
+  (LTX alpha) is a DATA take: its grey `matte_video` is read raw.
 - **Viewing a step inside shows what it made.** Each landed take writes
   `stages.json` beside its result (`history::save_stages`: per step, its
   name and cache key); `genai_dive_show` (once a redraw, GenAI dive only)

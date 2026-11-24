@@ -502,7 +502,7 @@ impl Op {
 /// The ports a remote model's task takes.
 pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
     match task {
-        Task::TextToImage => vec![(Pipe::Text, "prompt")],
+        Task::TextToImage | Task::TextToVideo => vec![(Pipe::Text, "prompt")],
         Task::Edit => vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")],
         Task::Inpaint => {
             vec![(Pipe::Text, "prompt"), (Pipe::Image, "image"), (Pipe::Image, "mask")]
@@ -515,7 +515,7 @@ pub fn task_ports(task: Task) -> Vec<(Pipe, &'static str)> {
         Task::VideoInpaint => {
             vec![(Pipe::Text, "prompt"), (Pipe::Video, "video"), (Pipe::Video, "mask")]
         }
-        Task::VideoUpscale => vec![(Pipe::Video, "video")],
+        Task::VideoUpscale | Task::VideoReframe | Task::VideoMatte => vec![(Pipe::Video, "video")],
         Task::Outpaint | Task::ImageTo3D | Task::Describe => {
             vec![(Pipe::Text, "prompt"), (Pipe::Image, "image")]
         }
@@ -1446,7 +1446,7 @@ mod tests {
             assert_eq!(has(true, true), ports.iter().any(|&(k, n)| k == Pipe::Video && n == "mask"), "{}", m.id);
             assert_eq!(has(false, true), ports.iter().any(|&(k, n)| k == Pipe::Video && n != "mask"), "{}", m.id);
             assert_eq!(has(false, false), ports.iter().any(|&(k, n)| k == Pipe::Image && n != "mask"), "{}", m.id);
-            assert_eq!(p.ins.iter().filter(|k| **k == InKind::Image).count() >= 2, ports.iter().any(|&(_, n)| n == "reference"), "{}", m.id);
+            assert_eq!(p.ins.iter().filter(|k| **k == InKind::Image).count() >= 2, ports.iter().any(|&(_, n)| n == "reference" || n == "end frame"), "{}", m.id);
             assert_eq!(p.ins[0], InKind::Image, "{}: the first input is the image passed through", m.id);
         }
         assert!(Pipeline::for_model("no/such-model").is_none());

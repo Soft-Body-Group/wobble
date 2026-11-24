@@ -77,6 +77,14 @@ pub enum Task {
     /// prompt (what to dwell on) + image -> the picture described, as a
     /// prompt. TEXT out, like Enhance.
     Describe,
+    /// prompt -> a VIDEO, with no picture to start from. A video take.
+    TextToVideo,
+    /// a clip -> the same clip at another ASPECT, the framing chosen by the
+    /// model. Resizes the node, like an upscaler. A video take.
+    VideoReframe,
+    /// a clip -> its foreground matte, as a grey clip of RAW values (a
+    /// data take, like Depth: no sRGB on the way in).
+    VideoMatte,
 }
 
 /// One setting of a model the panel offers (`Dialect::params`).
@@ -155,6 +163,37 @@ pub enum Dialect {
     /// regenerate), `num_frames` (9-481) and `frames_per_second` from the
     /// clip, `seed`; audio and prompt expansion off.
     LtxInpaint,
+    /// LTX 2.3 text- and image-to-video (`fast`: the cheaper endpoint,
+    /// up to 20 s). `prompt`, `duration` (whole seconds), `resolution`
+    /// (1080p/1440p/2160p), `aspect_ratio`, `fps` (an integer); `image`
+    /// adds `image_url` (port 1) and the optional `end_image_url` (port 2).
+    /// No seed; audio off.
+    Ltx23 { fast: bool, image: bool },
+    /// LTX 2.3 extend: `video_url`, `prompt` (optional), `duration` of the
+    /// new part (5 s), `mode` (grow the `end` or the `start`). No seed.
+    LtxExtend,
+    /// LTX 2.3 retake: `video_url`, `prompt`, a `start_time` + `duration`
+    /// window regenerated in place. Pictures only (`replace_video`): our
+    /// clips carry no sound to keep or replace.
+    LtxRetake,
+    /// LTX 2.3 clean plate: `video_url`, `prompt` (may be empty), 480p or
+    /// 720p, `num_frames` and `frames_per_second` from the clip, `seed`;
+    /// audio off. 720p takes about 6 s, 480p about 15 s: more is refused.
+    LtxCleanPlate,
+    /// LTX 2.3 render-to-real: `video_url`, an optional look `image_url`
+    /// (port 2), `prompt` behind the LoRA's `3DREAL.` trigger, `intensity`,
+    /// optional detail refine (twice the size, about four times the
+    /// cost), clip length and rate from the clip, `seed`; audio off.
+    LtxRenderToReal,
+    /// LTX 2.5 upscale: `video_url`, `resolution` (1080p/4k/8k). The size
+    /// is the model's choice, not a factor.
+    Ltx25Upscale,
+    /// LTX 2.5 reframe: `video_url`, `aspect_ratio`, `resolution`, an
+    /// optional `placement {anchor}`.
+    Ltx25Reframe,
+    /// LTX 2.5 alpha: `video_url` only; the grey matte is `matte_video`
+    /// (the ProRes `cutout_video` beside it is not fetched).
+    Ltx25Alpha,
     /// Wan 2.7 video edit: `prompt`, `video_url` (2-10 s), `seed`;
     /// 720p (what our clips are; 1080p bills half as much again), the
     /// input's own length (`duration` 0), its own (silent) audio.
@@ -235,6 +274,11 @@ impl Dialect {
                     format!("{instruction} {}", typed.trim())
                 }
             }
+            // The LoRA's trigger word leads, whatever is typed.
+            Dialect::LtxRenderToReal => {
+                let t = typed.trim();
+                format!("3DREAL. {}", t.strip_prefix("3DREAL.").unwrap_or(t).trim())
+            }
             _ => typed.to_string(),
         }
     }
@@ -245,7 +289,7 @@ impl Dialect {
     /// picks its own (the panel then shows no slider).
     pub fn scale_range(self) -> Option<(f32, f32)> {
         match self {
-            Dialect::Recraft => None,
+            Dialect::Recraft | Dialect::Ltx25Upscale => None,
             // How many times the canvas grows; 5000 px a side is Bria's top.
             Dialect::BriaExpand => Some((1.1, 3.0)),
             _ => Some((1.0, 4.0)),
@@ -281,7 +325,102 @@ impl Dialect {
             Param { key: "bitrate_mode", label: "bitrate", choices: &[("standard", "\"standard\""), ("high", "\"high\"")] };
         const AUDIO: Param = Param { key: "generate_audio", label: "generate audio", choices: ONOFF };
         const DRAFT: Param = Param { key: "draft", label: "draft (480p preview)", choices: ONOFF };
+        const LTX_RES: Param = Param {
+            key: "resolution",
+            label: "resolution",
+            choices: &[("1080p", "\"1080p\""), ("1440p", "\"1440p\""), ("2160p", "\"2160p\"")],
+        };
+        const LTX_FPS: Param =
+            Param { key: "fps", label: "fps", choices: &[("25", "25"), ("24", "24"), ("48", "48"), ("50", "50")] };
+        const LTX_SECS: Param =
+            Param { key: "duration", label: "duration", choices: &[("6 s", "6"), ("8 s", "8"), ("10 s", "10")] };
+        const LTX_SECS_FAST: Param = Param {
+            key: "duration",
+            label: "duration",
+            choices: &[
+                ("6 s", "6"), ("8 s", "8"), ("10 s", "10"), ("12 s", "12"), ("14 s", "14"), ("16 s", "16"),
+                ("18 s", "18"), ("20 s", "20"),
+            ],
+        };
+        const LTX_ASPECT_T2V: Param =
+            Param { key: "aspect_ratio", label: "aspect", choices: &[("comp's", "null"), ("16:9", "\"16:9\""), ("9:16", "\"9:16\"")] };
+        const LTX_ASPECT_I2V: Param =
+            Param { key: "aspect_ratio", label: "aspect", choices: &[("auto", "\"auto\""), ("16:9", "\"16:9\""), ("9:16", "\"9:16\"")] };
+        const LTX_SMALL_RES: Param =
+            Param { key: "resolution", label: "resolution", choices: &[("720p", "\"720p\""), ("480p", "\"480p\"")] };
+        const NEW_SECS: &[(&str, &str)] = &[
+            ("5 s", "5"), ("2 s", "2"), ("3 s", "3"), ("4 s", "4"), ("6 s", "6"), ("8 s", "8"), ("10 s", "10"),
+            ("15 s", "15"), ("20 s", "20"),
+        ];
         match self {
+            Dialect::Ltx23 { fast, image } => match (fast, image) {
+                (false, false) => &[LTX_SECS, LTX_RES, LTX_ASPECT_T2V, LTX_FPS, AUDIO],
+                (true, false) => &[LTX_SECS_FAST, LTX_RES, LTX_ASPECT_T2V, LTX_FPS, AUDIO],
+                (false, true) => &[LTX_SECS, LTX_RES, LTX_ASPECT_I2V, LTX_FPS, AUDIO],
+                (true, true) => &[LTX_SECS_FAST, LTX_RES, LTX_ASPECT_I2V, LTX_FPS, AUDIO],
+            },
+            Dialect::LtxExtend => &[
+                Param { key: "duration", label: "new part", choices: NEW_SECS },
+                Param { key: "mode", label: "grow", choices: &[("the end", "\"end\""), ("the start", "\"start\"")] },
+            ],
+            Dialect::LtxRetake => &[
+                Param {
+                    key: "start_time",
+                    label: "from",
+                    choices: &[
+                        ("0 s", "0"), ("1 s", "1"), ("2 s", "2"), ("3 s", "3"), ("4 s", "4"), ("5 s", "5"),
+                        ("6 s", "6"), ("8 s", "8"), ("10 s", "10"),
+                    ],
+                },
+                Param { key: "duration", label: "for", choices: NEW_SECS },
+                Param {
+                    key: "retake_mode",
+                    label: "retake",
+                    choices: &[("pictures", "\"replace_video\""), ("pictures + sound", "\"replace_audio_and_video\"")],
+                },
+            ],
+            Dialect::LtxCleanPlate => &[LTX_SMALL_RES],
+            Dialect::LtxRenderToReal => &[
+                Param {
+                    key: "intensity",
+                    label: "intensity",
+                    choices: &[("light", "\"light\""), ("strong", "\"strong\""), ("strong v2", "\"strong-v2\"")],
+                },
+                LTX_SMALL_RES,
+                Param { key: "enable_detail_refine", label: "detail refine (2x size, ~4x cost)", choices: ONOFF },
+            ],
+            Dialect::Ltx25Upscale => &[Param {
+                key: "resolution",
+                label: "resolution",
+                choices: &[("1080p", "\"1080p\""), ("4k", "\"4k\""), ("8k", "\"8k\"")],
+            }],
+            Dialect::Ltx25Reframe => &[
+                Param {
+                    key: "aspect_ratio",
+                    label: "aspect",
+                    choices: &[
+                        ("9:16", "\"9:16\""), ("1:1", "\"1:1\""), ("4:5", "\"4:5\""), ("5:4", "\"5:4\""),
+                        ("16:9", "\"16:9\""),
+                    ],
+                },
+                Param { key: "resolution", label: "resolution", choices: &[("1080p", "\"1080p\""), ("720p", "\"720p\"")] },
+                Param {
+                    key: "placement",
+                    label: "keep",
+                    choices: &[
+                        ("auto", "null"),
+                        ("centre", "{\"anchor\":\"center\"}"),
+                        ("top", "{\"anchor\":\"top\"}"),
+                        ("bottom", "{\"anchor\":\"bottom\"}"),
+                        ("left", "{\"anchor\":\"left\"}"),
+                        ("right", "{\"anchor\":\"right\"}"),
+                        ("top left", "{\"anchor\":\"top_left\"}"),
+                        ("top right", "{\"anchor\":\"top_right\"}"),
+                        ("bottom left", "{\"anchor\":\"bottom_left\"}"),
+                        ("bottom right", "{\"anchor\":\"bottom_right\"}"),
+                    ],
+                },
+            ],
             Dialect::Wan27Edit => &[
                 Param { key: "resolution", label: "resolution", choices: &[("720p", "\"720p\""), ("1080p", "\"1080p\"")] },
                 Param {
@@ -343,6 +482,8 @@ impl Dialect {
                 | Dialect::IcLight
                 | Dialect::LucyEdit
                 | Dialect::LtxInpaint
+                | Dialect::LtxCleanPlate
+                | Dialect::LtxRenderToReal
                 | Dialect::Seedance { reference: true, .. }
                 | Dialect::WanVace
                 | Dialect::Wan27Edit
@@ -375,7 +516,9 @@ impl Dialect {
                     ));
                 }
             }
-            Dialect::LtxInpaint if !(9..=481).contains(&frames) => {
+            Dialect::LtxInpaint | Dialect::LtxCleanPlate | Dialect::LtxRenderToReal
+                if !(9..=481).contains(&frames) =>
+            {
                 return Err(format!("{label} takes 9-481 frames; this clip is {frames}"));
             }
             Dialect::SeedanceEdit => {
@@ -408,6 +551,7 @@ impl Dialect {
             (Dialect::Preprocessor, Task::Normals) => Some("normal_map"),
             (Dialect::Preprocessor, Task::Depth) => Some("depth_map"),
             (Dialect::Sam3d, _) => Some("gaussian_splat"),
+            (Dialect::Ltx25Alpha, _) => Some("matte_video"),
             _ => None,
         }
     }
@@ -501,7 +645,7 @@ impl RemoteModel {
     pub fn max_refs(&self) -> usize {
         match (self.task, self.dialect) {
             (_, Dialect::Seedance { reference: true, .. }) => 8,
-            (_, Dialect::Wan27Edit) => 1,
+            (_, Dialect::Wan27Edit | Dialect::LtxRenderToReal | Dialect::Ltx23 { image: true, .. }) => 1,
             (Task::Edit, Dialect::Seedream) => 9,
             (Task::Edit, Dialect::Gemini) => 13,
             (Task::Edit, Dialect::GptImage) => 15,
@@ -527,7 +671,8 @@ impl RemoteModel {
             "reference 12", "reference 13", "reference 14", "reference 15", "reference 16",
         ];
         match self.dialect {
-            Dialect::Wan27Edit => &["reference"],
+            Dialect::Wan27Edit | Dialect::LtxRenderToReal => &["reference"],
+            Dialect::Ltx23 { image: true, .. } => &["end frame"],
             _ => &MORE[..(refs + 1).min(self.max_refs()).min(MORE.len())],
         }
     }
@@ -917,6 +1062,160 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "fill the matte's white over the input clip: object removal on video, 9-481 frames",
     },
     RemoteModel {
+        id: "fal/ltx-2.3-t2v",
+        label: "LTX 2.3 text to video",
+        short: "ltx t2v",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/text-to-video",
+        dialect: Dialect::Ltx23 { fast: false, image: false },
+        task: Task::TextToVideo,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "a clip from a prompt alone: 6-10 s at 1080p, 1440p or 2160p, 24-50 fps",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-t2v-fast",
+        label: "LTX 2.3 fast text to video",
+        short: "ltx t2v fast",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/text-to-video/fast",
+        dialect: Dialect::Ltx23 { fast: true, image: false },
+        task: Task::TextToVideo,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "the cheaper LTX 2.3 from a prompt: 6-20 s (past 10 s only at 1080p, 25 fps)",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-i2v",
+        label: "LTX 2.3 image to video",
+        short: "ltx i2v",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/image-to-video",
+        dialect: Dialect::Ltx23 { fast: false, image: true },
+        task: Task::ImageToVideo,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "animate the input from a prompt, optionally ending on a second picture: 6-10 s, up to 2160p",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-i2v-fast",
+        label: "LTX 2.3 fast image to video",
+        short: "ltx i2v fast",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/image-to-video/fast",
+        dialect: Dialect::Ltx23 { fast: true, image: true },
+        task: Task::ImageToVideo,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "the cheaper LTX 2.3 from a start frame (and an optional end frame): 6-20 s",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-extend",
+        label: "LTX 2.3 extend video",
+        short: "ltx extend",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/extend-video",
+        dialect: Dialect::LtxExtend,
+        task: Task::VideoEdit,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "continue the input clip past its end (or lead into its start) for 2-20 s; the prompt may say what happens",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-retake",
+        label: "LTX 2.3 retake",
+        short: "ltx retake",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3/retake-video",
+        dialect: Dialect::LtxRetake,
+        task: Task::VideoEdit,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "regenerate a window of the input clip (from, for) as the prompt says; the rest is kept",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-clean-plate",
+        label: "LTX 2.3 clean plate",
+        short: "ltx clean plate",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3-quality/clean-plate",
+        dialect: Dialect::LtxCleanPlate,
+        task: Task::VideoEdit,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "take the moving subjects out of the input clip and leave the background: about 6 s at 720p, 15 s at 480p, no matte needed",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.3-render-to-real",
+        label: "LTX 2.3 render to real",
+        short: "ltx render2real",
+        service: Service::Fal,
+        endpoint: "fal-ai/ltx-2.3-quality/render-to-real",
+        dialect: Dialect::LtxRenderToReal,
+        task: Task::VideoEdit,
+        // The LTX-2 community licence limits commercial use by revenue and
+        // fal states no terms of its own.
+        commercial: false,
+        licence: "Lightricks LTX-2 community licence (commercial use limited by revenue)",
+        about: "make a CG render look photographed: the input clip restyled as live action, an optional reference picture for the look; 480p/720p",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.5-upscale",
+        label: "LTX 2.5 video upscale",
+        short: "ltx upscale",
+        service: Service::Fal,
+        endpoint: "lightricks/ltx-2.5/upscale",
+        dialect: Dialect::Ltx25Upscale,
+        task: Task::VideoUpscale,
+        // Lightricks' own endpoint on fal; no commercial terms of its own
+        // are stated, so it is tagged like the open LTX-2 weights.
+        commercial: false,
+        licence: "Lightricks LTX-2.5 via fal: no commercial terms stated (LTX-2 community licence assumed)",
+        about: "upscale the input clip to 1080p, 4k or 8k",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.5-reframe",
+        label: "LTX 2.5 reframe",
+        short: "ltx reframe",
+        service: Service::Fal,
+        endpoint: "lightricks/ltx-2.5/reframe",
+        dialect: Dialect::Ltx25Reframe,
+        task: Task::VideoReframe,
+        // Lightricks' own endpoint on fal; no commercial terms of its own
+        // are stated, so it is tagged like the open LTX-2 weights.
+        commercial: false,
+        licence: "Lightricks LTX-2.5 via fal: no commercial terms stated (LTX-2 community licence assumed)",
+        about: "re-cut the input clip to another aspect (9:16, 1:1, 4:5…), the model following the action; the node takes the new shape",
+    },
+    RemoteModel {
+        id: "fal/ltx-2.5-alpha",
+        label: "LTX 2.5 video matte",
+        short: "ltx matte",
+        service: Service::Fal,
+        endpoint: "lightricks/ltx-2.5/alpha-gen",
+        dialect: Dialect::Ltx25Alpha,
+        task: Task::VideoMatte,
+        // Lightricks' own endpoint on fal; no commercial terms of its own
+        // are stated, so it is tagged like the open LTX-2 weights.
+        commercial: false,
+        licence: "Lightricks LTX-2.5 via fal: no commercial terms stated (LTX-2 community licence assumed)",
+        about: "the foreground's matte over the input clip, as a grey clip of raw values: shuffle it into alpha downstream",
+    },
+    RemoteModel {
         id: "fal/wan-2.7-video-edit",
         label: "Wan 2.7 video edit",
         short: "wan 2.7 edit",
@@ -1217,11 +1516,11 @@ impl Task {
             Task::TextToImage => "image generation",
             Task::Edit | Task::EditRef | Task::Inpaint | Task::Outpaint => "image edit",
             Task::Upscale | Task::VideoUpscale => "upscale",
-            Task::ImageToVideo => "video generation",
-            Task::VideoEdit | Task::VideoInpaint => "video edit",
+            Task::ImageToVideo | Task::TextToVideo => "video generation",
+            Task::VideoEdit | Task::VideoInpaint | Task::VideoReframe => "video edit",
             Task::Depth | Task::Normals | Task::Albedo => "depth, normals, materials",
             Task::Relight => "relight",
-            Task::Cutout => "matte",
+            Task::Cutout | Task::VideoMatte => "matte",
             Task::ImageTo3D => "3D",
             Task::Enhance | Task::Describe => "prompt tools",
         }
@@ -1247,17 +1546,37 @@ impl Task {
             Task::ImageTo3D => "image to 3D",
             Task::Enhance => "prompt enhancer",
             Task::Describe => "describe",
+            Task::TextToVideo => "text to video",
+            Task::VideoReframe => "video reframe",
+            Task::VideoMatte => "video matte",
         }
     }
 
     /// Does this task return a video rather than a picture?
     pub fn is_video(self) -> bool {
-        matches!(self, Task::ImageToVideo | Task::VideoEdit | Task::VideoInpaint | Task::VideoUpscale)
+        matches!(
+            self,
+            Task::ImageToVideo
+                | Task::TextToVideo
+                | Task::VideoEdit
+                | Task::VideoInpaint
+                | Task::VideoUpscale
+                | Task::VideoReframe
+                | Task::VideoMatte
+        )
     }
 
     /// Does this task READ a clip (the node's input over a range)?
     pub fn takes_clip(self) -> bool {
         matches!(self, Task::VideoEdit | Task::VideoInpaint)
+    }
+
+    /// Does this task read a VIDEO on a port: the captured clip (a
+    /// `takes_clip` task, which must have one) or a video step's result
+    /// (an upscaler, a reframe, a matte: no clip needed when a step feeds
+    /// it)? Such a model is offered only by a build that can send a clip.
+    pub fn reads_video(self) -> bool {
+        self.takes_clip() || matches!(self, Task::VideoUpscale | Task::VideoReframe | Task::VideoMatte)
     }
 
     /// Does this task return a 3D capture (a splat file) rather than a
@@ -1277,16 +1596,16 @@ impl Task {
     /// result's own size as its format, instead of stretching the result
     /// back over its input's.
     pub fn resizes(self) -> bool {
-        matches!(self, Task::Upscale | Task::VideoUpscale | Task::Outpaint)
+        matches!(self, Task::Upscale | Task::VideoUpscale | Task::Outpaint | Task::VideoReframe)
     }
 
     /// Does this task hand back MEASUREMENTS rather than a picture? A data
     /// take plays back as stored values, with no sRGB transform.
     pub fn is_data(self) -> bool {
-        matches!(self, Task::Depth | Task::Normals)
+        matches!(self, Task::Depth | Task::Normals | Task::VideoMatte)
     }
 
-    pub const ALL: [Task; 18] = [
+    pub const ALL: [Task; 21] = [
         Task::TextToImage,
         Task::Edit,
         Task::Inpaint,
@@ -1305,6 +1624,9 @@ impl Task {
         Task::ImageTo3D,
         Task::Enhance,
         Task::Describe,
+        Task::TextToVideo,
+        Task::VideoReframe,
+        Task::VideoMatte,
     ];
 }
 
@@ -1370,6 +1692,14 @@ mod tests {
                     | Dialect::SeedanceEdit
                     | Dialect::TopazVideo { .. }
                     | Dialect::SeedVrVideo
+                    | Dialect::Ltx23 { .. }
+                    | Dialect::LtxExtend
+                    | Dialect::LtxRetake
+                    | Dialect::LtxCleanPlate
+                    | Dialect::LtxRenderToReal
+                    | Dialect::Ltx25Upscale
+                    | Dialect::Ltx25Reframe
+                    | Dialect::Ltx25Alpha
             );
             assert_eq!(video, m.task.is_video(), "{}", m.id);
         }

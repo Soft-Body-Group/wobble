@@ -188,6 +188,14 @@ pub fn output_text(out: &Value) -> std::result::Result<String, String> {
     }
 }
 
+/// The video at `key` (`matte_video.url`), else [`output_video`].
+pub fn output_video_at(out: &Value, key: Option<&str>) -> Option<String> {
+    match key {
+        Some(k) => out.get(k).and_then(|v| v.get("url")).and_then(|u| u.as_str()).map(String::from),
+        None => output_video(out),
+    }
+}
+
 /// The video in a fal-shaped output: `video.url`, else `videos[0].url`.
 pub fn output_video(out: &Value) -> Option<String> {
     out.get("video")
