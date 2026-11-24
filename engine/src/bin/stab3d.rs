@@ -7,6 +7,7 @@
 //! ```text
 //! stab3d <shot> [--smooth FRAMES] [--neighbours 2,5] [--focal PX] [--divisor D]
 //!        [--frames N] [--sigma PX] [--edge SHARE] [--out DIR] [--eval]
+//!        [--orbit FRAME [--views N]] [--witness [--range A,B]]
 //! ```
 //!
 //! Writes `<out>/stab/f_NNNNN.png` (sRGB, straight alpha: a hole is
@@ -231,6 +232,90 @@ fn main() -> anyhow::Result<()> {
     );
     // The same rotation as picture travel, for scale.
     println!("  ({:.0} px of picture at the mean turn, {:.0} px at the worst)", dr[0].to_radians().tan() * f, dr[1].to_radians().tan() * f);
+
+    // Showcase views: the cloud seen from somewhere the camera never was.
+    let orbit = flag(&args, "--orbit").and_then(|s| s.parse::<usize>().ok());
+    let witness = args.iter().any(|a| a == "--witness");
+    if orbit.is_some() || witness {
+        use engine::camtrack::{add, m_t, m_v, scl};
+        let axes = |p: &Pose| -> ([f64; 3], [f64; 3], [f64; 3]) { (p.r[0], p.r[1], p.r[2]) };
+        if let Some(t) = orbit {
+            let t = t.min(n - 1);
+            let mut clouds = vec![stab3d::cloud(&load(t)?, scales[t], &solve.poses[t], f, &fill)];
+            for d in neighbours.iter().flat_map(|d| [-*d, *d]) {
+                let j = t as isize + d;
+                if j >= 0 && (j as usize) < n {
+                    clouds.push(stab3d::cloud(&load(j as usize)?, scales[j as usize], &solve.poses[j as usize], f, &fill));
+                }
+            }
+            let c = stab3d::merge(clouds);
+            let (x, y, z) = axes(&solve.poses[t]);
+            let eye0 = solve.poses[t].centre();
+            let depth = zmed[t].1 * scales[t];
+            let pivot = add(eye0, scl(z, depth));
+            let dir = out.join("orbit");
+            std::fs::create_dir_all(&dir)?;
+            let frames = num("--views", 144.0) as usize;
+            for i in 0..frames {
+                let u = i as f64 / frames as f64 * std::f64::consts::TAU;
+                let (yaw, pitch) = (28f64.to_radians() * u.sin(), 10f64.to_radians() * (1.0 - u.cos()) * 0.5);
+                let back = depth * (1.0 + 0.25 * (1.0 - u.cos()) * 0.5);
+                let off = add(add(scl(z, -back * yaw.cos() * pitch.cos()), scl(x, back * yaw.sin())), scl(y, -back * pitch.sin()));
+                let pose = stab3d::look_at(add(pivot, off), pivot, y);
+                let px = rend.render(&c, &pose, f, near * 0.2, far);
+                write_png(&dir.join(format!("f_{i:05}.png")), &px, w, h)?;
+                eprint!("\rorbit {}/{frames}", i + 1);
+            }
+            eprintln!();
+        }
+        if witness {
+            let (a, b) = flag(&args, "--range")
+                .and_then(|s| s.split_once(','))
+                .and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+                .unwrap_or((0, n));
+            let (a, b) = (a.min(n - 1), b.min(n));
+            // The witness rides a much calmer path, so both cameras move in its picture.
+            let calm = stab3d::smooth_path(&solve.poses, 60.0);
+            let dir = out.join("witness");
+            std::fs::create_dir_all(&dir)?;
+            let dot = scene * 0.0015;
+            let (red, cyan) = ([1.0f32, 0.04, 0.04], [0.03f32, 0.75, 1.0]);
+            let frustum = |c: &mut engine::splat::Cloud, p: &Pose, rgb: [f32; 3]| {
+                let (o, rt) = (p.centre(), m_t(&p.r));
+                let d = scene * 0.18;
+                let corner = |sx: f64, sy: f64| add(o, m_v(&rt, [sx * 0.5 * w as f64 / f * d, sy * 0.5 * h as f64 / f * d, d]));
+                let cs = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+                let mut line = |p0: [f64; 3], p1: [f64; 3]| {
+                    for k in 0..=60 {
+                        let u = k as f64 / 60.0;
+                        stab3d::marker(c, add(scl(p0, 1.0 - u), scl(p1, u)), dot, rgb);
+                    }
+                };
+                for k in 0..4 {
+                    line(o, cs[k]);
+                    line(cs[k], cs[(k + 1) % 4]);
+                }
+            };
+            for t in a..b {
+                let mut c = stab3d::cloud(&load(t)?, scales[t], &solve.poses[t], f, &fill);
+                for j in a..=t {
+                    stab3d::marker(&mut c, solve.poses[j].centre(), dot, red);
+                    stab3d::marker(&mut c, smoothed[j].centre(), dot, cyan);
+                }
+                frustum(&mut c, &solve.poses[t], red);
+                frustum(&mut c, &smoothed[t], cyan);
+                let (x, y, z) = axes(&calm[t]);
+                let o = calm[t].centre();
+                let eye = add(add(add(o, scl(z, -scene * 0.75)), scl(y, -scene * 0.3)), scl(x, scene * 0.4));
+                let pose = stab3d::look_at(eye, add(o, scl(z, scene * 0.9)), y);
+                let px = rend.render(&c, &pose, f, near * 0.2, far);
+                write_png(&dir.join(format!("f_{:05}.png", t - a)), &px, w, h)?;
+                eprint!("\rwitness {}/{}", t - a + 1, b - a);
+            }
+            eprintln!();
+        }
+        return Ok(());
+    }
 
     for d in ["stab", "own"] {
         std::fs::create_dir_all(out.join(d))?;

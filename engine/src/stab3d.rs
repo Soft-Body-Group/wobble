@@ -229,6 +229,37 @@ pub fn cloud(fr: &Frame, zscale: f64, pose: &Pose, focal_px: f64, o: &CloudOpts)
     }
 }
 
+/// One round, opaque splat of a flat colour at `p`, `sigma` world units
+/// wide: what a showcase view draws camera paths and frusta out of.
+pub fn marker(c: &mut Cloud, p: V3, sigma: f64, rgb: [f32; 3]) {
+    let ls = sigma.max(1e-12).ln() as f32;
+    c.splats.extend_from_slice(&[
+        (p[0] as f32).to_bits(),
+        (p[1] as f32).to_bits(),
+        (p[2] as f32).to_bits(),
+        h2(1.0, 0.0),
+        h2(0.0, 0.0),
+        h2(ls, ls),
+        h2(ls, 1.0),
+        h2(rgb[0], rgb[1]),
+        h2(rgb[2], 0.0),
+    ]);
+    c.count += 1;
+    c.file_count += 1;
+}
+
+/// A camera at `eye` looking at `target`, with `down` (any vector not
+/// along the view) as the picture's down. CV convention, like the solve.
+pub fn look_at(eye: V3, target: V3, down: V3) -> Pose {
+    let norm = |v: V3| scl(v, 1.0 / (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12));
+    let cross = |a: V3, b: V3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let z = norm(sub(target, eye));
+    let x = norm(cross(down, z));
+    let y = cross(z, x);
+    let r = [x, y, z];
+    Pose { r, t: scl(m_v(&r, eye), -1.0) }
+}
+
 /// Several clouds as one.
 pub fn merge(clouds: Vec<Cloud>) -> Cloud {
     let mut it = clouds.into_iter();
