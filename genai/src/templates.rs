@@ -163,7 +163,7 @@ pub const BUILTIN: &[Template] = &[
         },
     },
     Template {
-        name: "Relight",
+        name: "Relight from a prompt",
         about: "relight the plate from a prompt with IC-Light (\"warm sunset light from the left\")",
         build: || {
             let mut b = B::new();
