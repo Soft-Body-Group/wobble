@@ -653,6 +653,18 @@ pub fn request_clip(
         }),
         (Task::VideoUpscale, _) => json!({ "video_url": img(0)?, "upscale_factor": opts.scale }),
         (Task::VideoReframe | Task::VideoMatte, _) => json!({ "video_url": img(0)? }),
+        (Task::TextToVideo, Dialect::Seedance { .. }) => {
+            let (secs, res) = video_opts(m, opts).ok_or_else(|| anyhow!("{} makes no video", m.label))?;
+            json!({
+                "prompt": prompt(),
+                "duration": secs.to_string(),
+                "resolution": format!("{res}p"),
+                // No picture to take a shape from: the comp's.
+                "aspect_ratio": if comp.1 > comp.0 { "9:16" } else { "16:9" },
+                // A take is pictures; no soundtrack to pay for.
+                "generate_audio": false,
+            })
+        }
         (Task::TextToVideo, _) => json!({ "prompt": prompt(), "seed": seed }),
         (Task::VideoEdit | Task::VideoInpaint, _) => json!({
             "prompt": prompt(), "video_url": img(1)?, "seed": seed,
@@ -1839,6 +1851,17 @@ mod tests {
         assert_eq!((d.w, d.h), (853, 480));
         let e = quote_settings(m("fal/seedance-2.5-video-edit"), &json!({}), v);
         assert!((e.seconds - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn seedance_text_to_video_needs_no_picture() {
+        let sd = m("fal/seedance-2.5-t2v");
+        let opts = crate::pipeline::Opts { seconds: 40, res: 1080, ..Default::default() };
+        let v = request(sd, &opts, 7, (1080, 1920), Some("a jellyfish"), &[]).unwrap();
+        assert_eq!(v["prompt"], "a jellyfish");
+        assert_eq!((v["duration"].as_str(), v["resolution"].as_str()), (Some("30"), Some("1080p")));
+        assert_eq!(v["aspect_ratio"], "9:16");
+        assert!(v.get("image_url").is_none() && v.get("seed").is_none());
     }
 
     #[test]

@@ -998,6 +998,18 @@ pub const CATALOG: &[RemoteModel] = &[
         about: "the bigger Seedance: up to 30 s and 1080p",
     },
     RemoteModel {
+        id: "fal/seedance-2.5-t2v",
+        label: "Seedance 2.5 text to video",
+        short: "seedance t2v",
+        service: Service::Fal,
+        endpoint: "bytedance/seedance-2.5/text-to-video",
+        dialect: Dialect::Seedance { max_seconds: 30, top_res: 1080, reference: false },
+        task: Task::TextToVideo,
+        commercial: true,
+        licence: "ByteDance via fal API terms (commercial use through the API)",
+        about: "a clip from a prompt alone, no picture needed: 4-30 s up to 1080p",
+    },
+    RemoteModel {
         id: "fal/seedance-2.5-reference",
         label: "Seedance 2.5 reference",
         short: "seedance ref",
