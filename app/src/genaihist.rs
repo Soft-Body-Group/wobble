@@ -168,10 +168,111 @@ fn hover(k: usize, t: &Take) -> String {
     if !a.is_empty() {
         s.push_str(&format!(" · {a}"));
     }
+    if !t.prompt.is_empty() {
+        let p: String = t.prompt.chars().take(300).collect();
+        let more = if p.len() < t.prompt.len() { "…" } else { "" };
+        s.push_str(&format!("\n\"{p}{more}\""));
+    }
     if !t.commercial {
         s.push_str("\nmade by a model not free for commercial use");
     }
     s
+}
+
+/// What a result directory says about how it was made, read once per key.
+fn meta_of(dir: &Path, key: &str) -> Option<genai::run::Meta> {
+    static M: OnceLock<Mutex<HashMap<String, Option<genai::run::Meta>>>> = OnceLock::new();
+    let mut m = M.get_or_init(Default::default).lock().unwrap();
+    // A miss is not remembered: the run that writes it may still be landing.
+    if let Some(Some(meta)) = m.get(key) {
+        return Some(meta.clone());
+    }
+    let meta = genai::run::cached(dir, key);
+    if meta.is_some() {
+        m.insert(key.to_string(), meta.clone());
+    }
+    meta
+}
+
+/// The id of the picked take's prompt readout, for a suite.
+pub fn prompt_id(node: u64) -> egui::Id {
+    egui::Id::new(("genai-take-prompt", node))
+}
+
+/// The words that made the picked take, and the model and settings: from
+/// the take itself (it keeps the whole prompt), else its `meta.json`, else
+/// (a take from before either kept it) the recipe's typed prompt.
+pub fn take_prompt(t: &Take, dir: &Path) -> (String, &'static str) {
+    if !t.prompt.is_empty() {
+        return (t.prompt.clone(), "");
+    }
+    if let Some(p) = meta_of(dir, &t.key).and_then(|m| m.prompt).filter(|p| !p.is_empty()) {
+        return (p, "");
+    }
+    let typed = genai::history::load_recipe(dir, &t.key).and_then(|steps| {
+        steps.iter().find_map(|s| match &s.op {
+            genai::Op::Prompt { text } if !text.is_empty() => Some(text.clone()),
+            _ => None,
+        })
+    });
+    match typed {
+        Some(p) => (p, " (the typed prompt; this take is older than the record of what was sent)"),
+        None => (String::new(), ""),
+    }
+}
+
+/// The picked take's record: prompt (selectable, copyable), then model,
+/// seed and the request's settings, folded.
+fn made_with(ui: &mut Ui, node: u64, t: &Take, dir: &Path) {
+    let (prompt, note) = take_prompt(t, dir);
+    let meta = meta_of(dir, &t.key);
+    egui::CollapsingHeader::new(small("made with"))
+        .id_salt(("genai-made-with", node))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let kept = dir.join(&t.key).join(genai::run::META);
+                let r = ui.add_enabled(!prompt.is_empty(), egui::Button::new(small("copy")).small())
+                    .on_hover_text(format!(
+                        "copy this take's prompt\n\nkept beside the picture in {}\n(prompt, seed and settings; a PNG take carries them inside the file too)",
+                        kept.display()
+                    ));
+                if r.clicked() {
+                    ui.ctx().copy_text(prompt.clone());
+                }
+                let mut bits = vec![];
+                if let Some(m) = &meta {
+                    if !m.model.is_empty() {
+                        bits.push(genai::catalog::get(&m.model).map(|c| c.label.to_string()).unwrap_or(m.model.clone()));
+                    }
+                    if let Some(sd) = m.seed {
+                        bits.push(format!("seed {sd}"));
+                    }
+                    if !m.service.is_empty() {
+                        bits.push(format!("via {}", m.service));
+                    }
+                }
+                if bits.is_empty() && !t.label.is_empty() {
+                    bits.push(t.label.split(": ").next().unwrap_or_default().to_string());
+                }
+                ui.weak(small(bits.join(" · ")));
+            });
+            let shown = if prompt.is_empty() { "no prompt recorded".to_string() } else { format!("{prompt}{note}") };
+            // One line, so a long prompt cannot push the panel off its
+            // tiles; the whole of it on hover and in the fold below.
+            let r = ui.add(egui::Label::new(small(shown.clone())).truncate()).on_hover_text(&shown);
+            crate::widgets::note_rect(ui, prompt_id(node), r.rect);
+            egui::CollapsingHeader::new(small("whole prompt and settings"))
+                .id_salt(("genai-made-with-req", node))
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(small(shown)).wrap().selectable(true));
+                    if let Some(req) = meta.as_ref().and_then(|m| m.request.as_ref()) {
+                        let text = serde_json::to_string_pretty(req).unwrap_or_default();
+                        ui.add(egui::Label::new(egui::RichText::new(text).monospace().size(10.0)).wrap().selectable(true));
+                    }
+                });
+        });
 }
 
 /// The id a suite aims at: thumbnail `k` of `node`'s history.
@@ -299,6 +400,9 @@ pub(super) fn takes(ui: &mut Ui, node: u64, p: &mut GenAiParams, v: &View) -> Op
                 }
             });
         });
+        if let Some(t) = pl.picked() {
+            made_with(ui, node, t, &dir);
+        }
         if let Some(k) = sheet(ui.ctx(), node, pl, &dir) {
             pl.take = k;
             act = Some(Action::Show);

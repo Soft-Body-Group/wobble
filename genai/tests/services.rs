@@ -249,7 +249,16 @@ fn fal_runs_the_queue_downloads_the_picture_and_a_rerun_sends_nothing() {
     let job = run::start(p.clone(), plan, inputs(), svcs, dir.clone(), vec![(1, 0.04)]);
     let take = drain(&job).unwrap();
     assert!(take.path(&dir).exists());
-    assert_eq!(std::fs::read(take.path(&dir)).unwrap(), png_bytes());
+    // The model's picture, carrying what made it: the prompt rides inside
+    // the PNG, and on the take, whole.
+    let got = std::fs::read(take.path(&dir)).unwrap();
+    let text = genai::image::png_text(&got);
+    assert!(text.contains(&("Description".into(), "make it night".into())), "{text:?}");
+    assert!(got.len() > png_bytes().len());
+    assert_eq!(take.prompt, "make it night");
+    let meta = run::cached(&dir, &take.key).unwrap();
+    assert_eq!(meta.prompt.as_deref(), Some("make it night"));
+    assert!(meta.request.is_some_and(|r| r.get("prompt").is_some()));
     assert_eq!(take.tick, 1001);
     assert!(take.commercial);
     assert!(take.label.contains("kontext") && take.label.contains("make it night"), "{}", take.label);

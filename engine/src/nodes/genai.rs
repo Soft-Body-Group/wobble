@@ -215,6 +215,7 @@ mod tests {
             label: String::new(),
             when: 0,
             data: true,
+            prompt: String::new(),
         });
         p.pipeline.take = 0;
         p.loaded = true;
@@ -248,6 +249,7 @@ mod tests {
             label: String::new(),
             when: 0,
             data: false,
+            prompt: String::new(),
         });
         p.pipeline.take = 0;
         // The pipeline itself is all-commercial now; the pixels on screen
@@ -268,6 +270,7 @@ mod tests {
             label: String::new(),
             when: 0,
             data: false,
+            prompt: String::new(),
         };
         p.pipeline.takes = vec![take("result.png"), take("result.mp4")];
         p.pipeline.take = 0;

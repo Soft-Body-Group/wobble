@@ -1450,6 +1450,14 @@ the design note (relay protocol, what is next). The `genai` crate has no
 egui, no wgpu and no engine; `http.rs` is the only file that knows wasm
 (a stub transport there — the app needs no cfg of its own).
 
+- **Every generated result keeps the words that made it.** A model
+  step's `meta.json` has `prompt` (exactly as sent: after templates and
+  enhance), `seed` and `request` (the body as sent, data URIs scrubbed by
+  `run::scrub_request`); a PNG result carries the same inside the file
+  (`iTXt` `Description` = prompt, `wobble-genai` = the JSON record, via
+  `image::png_with_text` in `run::commit`; inputs are left untouched);
+  and `Take::prompt` keeps the whole prompt in the comp. The panel's
+  "made with" fold (`genaihist::made_with`) reads take → meta → recipe.
 - **A one-model node is the same `NodeKind::GenAi`, not a new kind.**
   `GenAiParams::model = Some(catalog id)` and its pipeline is
   `Pipeline::for_model` (sources → Generate → Output), fixed: no innards

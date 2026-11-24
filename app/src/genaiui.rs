@@ -4816,6 +4816,23 @@ impl Gfx {
                     {
                         fail("a schnell take is tagged non-commercial".into());
                     }
+                    // The take keeps the words that made it: on itself, in
+                    // its meta.json, and inside the PNG.
+                    let take = self.egraph.node(t.node).and_then(|n| params(&n.kind)).and_then(|p| p.pipeline.picked().cloned());
+                    let dir = genai::config::results_dir();
+                    match take {
+                        Some(tk) => {
+                            let meta = genai::run::cached(&dir, &tk.key);
+                            let inside = std::fs::read(tk.path(&dir)).map(|b| genai::image::png_text(&b)).unwrap_or_default();
+                            if tk.prompt != "an 18% grey card"
+                                || meta.and_then(|m| m.prompt).as_deref() != Some("an 18% grey card")
+                                || !inside.iter().any(|(k, v)| k == "Description" && v == "an 18% grey card")
+                            {
+                                fail(format!("the take lost its prompt: take {:?}, in the file {inside:?}", tk.prompt));
+                            }
+                        }
+                        None => fail("no take landed".into()),
+                    }
                     self.genai_action(t.node, Action::Dismiss);
                     self.genai_action(t.node, Action::Prepare);
                     next(&mut t, 7);
@@ -5419,7 +5436,7 @@ impl Gfx {
                         "GENAI TEST PASS: a local pipeline captured the plate at the playhead and \
                          played it back through the node within the 8-bit round trip; a fal \
                          pipeline with its prompt inside (no prompt input) stopped at a $0.003 quote with nothing sent, submitted exactly \
-                         once on pay & run, showed the returned grey card in the working space, \
+                         once on pay & run, showed the returned grey card in the working space (its prompt kept on the take, in meta.json and inside the PNG), \
                          and a re-run of the unchanged pipeline was a cache hit that sent nothing; \
                          one-model nodes from the add menu are named for their model, refuse to \
                          run below an un-run model, and key a typed prompt as the same request; \
@@ -5771,6 +5788,9 @@ mod tests {
                     label: "flux dev: a moth on a lamp at night, rain".into(),
                     when: 0,
                     data: false,
+                    // Long enough to wrap: the prompt readout must not
+                    // push the panel off its tiles.
+                    prompt: "a moth on a lamp at night, rain on the glass, ".repeat(8),
                 });
             }
             let quote = Ok(Quote {
@@ -5882,6 +5902,7 @@ mod tests {
                 label: "flux dev: a moth on a lamp".into(),
                 when: 0,
                 data: false,
+                prompt: String::new(),
             });
         }
         let quote = Ok(Quote {

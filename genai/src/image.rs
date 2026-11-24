@@ -161,6 +161,80 @@ pub fn ext_for(content_type: Option<&str>, url: &str) -> &'static str {
     }
 }
 
+const PNG_SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+fn crc32(parts: &[&[u8]]) -> u32 {
+    let mut c = 0xffff_ffffu32;
+    for p in parts {
+        for &b in *p {
+            c ^= b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+    }
+    !c
+}
+
+/// The same PNG with UTF-8 text chunks (`iTXt`, uncompressed) added right
+/// after its header, so what made a picture travels INSIDE the file: copy
+/// it out of the results folder and the prompt goes with it (exiftool,
+/// Preview's inspector and most image tools show the chunks). `None` when
+/// `bytes` is not a PNG; the caller keeps the file as it came.
+pub fn png_with_text(bytes: &[u8], entries: &[(&str, &str)]) -> Option<Vec<u8>> {
+    // Signature, then IHDR: length (4) + type (4) + 13 bytes + crc (4).
+    let ihdr_end = PNG_SIG.len() + 4 + 4 + 13 + 4;
+    if bytes.len() < ihdr_end || &bytes[..8] != PNG_SIG || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() + 256);
+    out.extend_from_slice(&bytes[..ihdr_end]);
+    for (key, text) in entries {
+        // keyword \0, compression flag 0, method 0, language \0, translated \0, text.
+        let mut data = Vec::with_capacity(key.len() + text.len() + 5);
+        data.extend_from_slice(key.as_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0, 0]);
+        data.extend_from_slice(text.as_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(b"iTXt");
+        out.extend_from_slice(&data);
+        out.extend_from_slice(&crc32(&[b"iTXt", &data]).to_be_bytes());
+    }
+    out.extend_from_slice(&bytes[ihdr_end..]);
+    Some(out)
+}
+
+/// The uncompressed `iTXt` / `tEXt` chunks of a PNG, as (keyword, text).
+pub fn png_text(bytes: &[u8]) -> Vec<(String, String)> {
+    let mut v = vec![];
+    if bytes.len() < 8 || &bytes[..8] != PNG_SIG {
+        return v;
+    }
+    let mut at = 8;
+    while at + 12 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        let ty = &bytes[at + 4..at + 8];
+        let Some(data) = bytes.get(at + 8..at + 8 + len) else { break };
+        let mut parts = data.splitn(2, |&b| b == 0);
+        let key = String::from_utf8_lossy(parts.next().unwrap_or(&[])).into_owned();
+        let rest = parts.next().unwrap_or(&[]);
+        match ty {
+            b"tEXt" => v.push((key, String::from_utf8_lossy(rest).into_owned())),
+            b"iTXt" if rest.len() >= 2 && rest[0] == 0 => {
+                // Skip the method byte, then language and translated keyword.
+                let mut r = rest[2..].splitn(3, |&b| b == 0);
+                let _lang = r.next();
+                let _tr = r.next();
+                v.push((key, String::from_utf8_lossy(r.next().unwrap_or(&[])).into_owned()));
+            }
+            b"IEND" => break,
+            _ => {}
+        }
+        at += 12 + len;
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +288,19 @@ mod tests {
         let a = w as f32 / h as f32;
         assert!((a - 2048.0 / 1080.0).abs() < 0.03, "{w}x{h}");
         assert!(((w * h) as f32 - 1.0e6).abs() < 0.05e6, "{w}x{h}");
+    }
+
+    #[test]
+    fn text_chunks_ride_inside_a_png_and_it_still_decodes() {
+        let png = super::png_srgb_rgb(&[0.5; 16], 2, 2).unwrap();
+        let tagged = super::png_with_text(&png, &[("Description", "a moth, at dusk — 蛾"), ("wobble-genai", "{}")]).unwrap();
+        assert_eq!(
+            super::png_text(&tagged),
+            vec![("Description".into(), "a moth, at dusk — 蛾".into()), ("wobble-genai".into(), "{}".into())]
+        );
+        let dec = png::Decoder::new(std::io::Cursor::new(&tagged));
+        let r = dec.read_info().unwrap();
+        assert_eq!(r.info().width, 2);
+        assert!(super::png_with_text(b"not a png at all, sorry", &[("a", "b")]).is_none());
     }
 }

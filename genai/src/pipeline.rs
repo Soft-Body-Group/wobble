@@ -553,6 +553,12 @@ pub struct Take {
     /// node plays the file back as stored values, with no sRGB transform.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub data: bool,
+    /// The whole prompt the model that made these pixels was sent (`label`
+    /// is cut short). Kept with the take, so it travels in the comp even
+    /// when the results folder does not; the result's `meta.json`, and the
+    /// PNG itself, keep it too, with the seed and settings.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prompt: String,
 }
 
 impl Take {
@@ -1550,6 +1556,7 @@ mod tests {
             label: String::new(),
             when: 0,
             data: false,
+            prompt: String::new(),
         };
         assert!(t("result.mp4").is_video());
         assert!(!t("result.png").is_video());
@@ -1612,7 +1619,7 @@ mod tests {
         assert!(!p.connect(g, up, 0), "a splat is not a picture");
         let t = Take {
             key: "k".into(), file: "result.ply".into(), tick: 0, commercial: true,
-            usd: None, label: String::new(), when: 0, data: false,
+            usd: None, label: String::new(), when: 0, data: false, prompt: String::new(),
         };
         assert!(t.is_splat() && !t.is_video());
     }

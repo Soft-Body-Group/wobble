@@ -479,6 +479,7 @@ mod tests {
             label: String::new(),
             when: 0,
             data: false,
+            prompt: String::new(),
         };
         p.pipeline.takes = vec![take("result.mp4"), take("result.png")];
         p.pipeline.take = 0;

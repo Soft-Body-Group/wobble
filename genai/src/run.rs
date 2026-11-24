@@ -223,6 +223,53 @@ pub struct Meta {
     pub when: u64,
     #[serde(default)]
     pub nsfw_flagged: bool,
+    /// The prompt exactly as the model was sent it (after templates and
+    /// any enhance step), so a picture never loses the words that made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    /// The request body as sent, every picture or clip in it replaced by a
+    /// note of its size ([`scrub_request`]): the model's settings, whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<serde_json::Value>,
+}
+
+/// A request body with its inlined media (data URIs) replaced by a short
+/// note, so it can be kept as a record of the settings without keeping a
+/// second copy of every input.
+pub fn scrub_request(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::String(s) if s.starts_with("data:") => {
+            let mime = s[5..].split([';', ',']).next().unwrap_or("");
+            Value::String(format!("<{mime}, {} bytes inline>", s.len()))
+        }
+        Value::Array(a) => Value::Array(a.iter().map(scrub_request).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), scrub_request(v))).collect()),
+        v => v.clone(),
+    }
+}
+
+/// The text chunks a generated PNG carries: `Description` (the prompt, a
+/// key image tools show) and `wobble-genai` (the whole record as JSON).
+fn provenance_chunks(meta: &Meta) -> Vec<(&'static str, String)> {
+    let mut v = vec![];
+    if let Some(p) = meta.prompt.as_deref().filter(|p| !p.is_empty()) {
+        v.push(("Description", p.to_string()));
+    }
+    let rec = serde_json::json!({
+        "model": meta.model,
+        "endpoint": meta.endpoint,
+        "service": meta.service,
+        "prompt": meta.prompt,
+        "seed": meta.seed,
+        "request": meta.request,
+        "when": meta.when,
+    });
+    v.push(("wobble-genai", rec.to_string()));
+    v.push(("Software", "wobble".to_string()));
+    v
 }
 
 /// Order the steps, key them, and find what is cached. Nothing leaves the
@@ -1139,7 +1186,15 @@ fn commit(dir: &Path, key: &str, file: &str, bytes: &[u8], meta: &Meta) -> Resul
             .unwrap_or(0)
     ));
     std::fs::create_dir_all(&tmp)?;
-    std::fs::write(tmp.join(file), bytes)?;
+    // A model's picture carries its own record; an input does not need one.
+    let tagged = (!meta.model.is_empty() && file.ends_with(".png"))
+        .then(|| {
+            let chunks = provenance_chunks(meta);
+            let refs: Vec<(&str, &str)> = chunks.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            image::png_with_text(bytes, &refs)
+        })
+        .flatten();
+    std::fs::write(tmp.join(file), tagged.as_deref().unwrap_or(bytes))?;
     std::fs::write(tmp.join(META), serde_json::to_vec_pretty(meta)?)?;
     let fin = dir.join(key);
     if std::fs::rename(&tmp, &fin).is_err() {
@@ -1181,6 +1236,8 @@ fn execute(
     let mut vals: Vec<Option<Val>> = vec![None; p.steps.len()];
     let mut charged: Option<f64> = None;
     let mut labels: Vec<String> = vec![];
+    // Per step, the prompt it was sent (or, cached, had been sent).
+    let mut sent: Vec<Option<String>> = vec![None; p.steps.len()];
     let get = |vals: &[Option<Val>], i: usize, port: usize| -> Option<Val> {
         p.steps[i].inputs.get(port).copied().flatten().and_then(|j| vals[j].clone())
     };
@@ -1247,6 +1304,7 @@ fn execute(
                 }
                 if let Some(meta) = cached(dir, key) {
                     let _ = tx.send(Event::Step(i, StepState::Cached));
+                    sent[i] = meta.prompt;
                     let path = dir.join(key).join(meta.file);
                     if m.task.is_text() {
                         let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -1275,6 +1333,7 @@ fn execute(
                         });
                     }
                     let clip = step_clip(p, i, inputs).filter(|_| m.task.takes_clip()).map(Clip::shape);
+                    sent[i] = prompt.clone();
                     let mut req = request_clip(m, opts, *seed, inputs.comp, prompt.as_deref(), &images, clip)?;
                     if m.dialect == Dialect::BriaExpand && opts.extra.trim().is_empty() {
                         // Now the picture is in hand, the canvas is ITS
@@ -1323,6 +1382,9 @@ fn execute(
                                 usd,
                                 when: now(),
                                 nsfw_flagged: false,
+                                prompt: prompt.clone(),
+                                seed: Some(*seed),
+                                request: Some(scrub_request(&req)),
                             },
                         )?;
                         let _ = tx.send(Event::Text(i, text.clone()));
@@ -1361,6 +1423,9 @@ fn execute(
                             usd,
                             when: now(),
                             nsfw_flagged: nsfw,
+                            prompt: prompt.clone(),
+                            seed: Some(*seed),
+                            request: Some(scrub_request(&req)),
                         },
                     )?;
                     if nsfw {
@@ -1379,6 +1444,7 @@ fn execute(
                 }
                 if let Some(meta) = cached(dir, key) {
                     let _ = tx.send(Event::Step(i, StepState::Cached));
+                    sent[i] = meta.prompt;
                     Val::Image(dir.join(key).join(meta.file))
                 } else {
                     let text = std::fs::read_to_string(crate_path(workflow))
@@ -1401,6 +1467,7 @@ fn execute(
                         image: read(1)?,
                         mask: read(2)?,
                     };
+                    sent[i] = subs.prompt.clone();
                     let _ = tx.send(Event::Step(i, StepState::Sending));
                     let txp = tx.clone();
                     let phase = move |ph: Phase| {
@@ -1426,6 +1493,8 @@ fn execute(
                             endpoint: workflow.clone(),
                             service: "comfyui".into(),
                             when: now(),
+                            prompt: subs.prompt.clone(),
+                            seed: Some(*seed),
                             ..meta0()
                         },
                     )?;
@@ -1456,7 +1525,15 @@ fn execute(
         matches!(&p.steps[i].op, Op::Generate { model, .. }
             if catalog::get(model).is_some_and(|m| m.task.is_data()))
     });
-    Ok(Take { key, file, tick: inputs.tick, commercial: plan.commercial, usd: charged, label, when: now(), data })
+    // The words behind the picture: what the step feeding Output was sent,
+    // else (an upscale after a generate) the nearest model step's.
+    let fed = p.steps[plan.target].inputs.first().copied().flatten();
+    let prompt = fed
+        .and_then(|i| sent[i].clone())
+        .or_else(|| plan.order.iter().rev().find_map(|&i| sent[i].clone()))
+        .filter(|t| !t.is_empty())
+        .unwrap_or_default();
+    Ok(Take { key, file, tick: inputs.tick, commercial: plan.commercial, usd: charged, label, when: now(), data, prompt })
 }
 
 fn meta0() -> Meta {
@@ -1468,6 +1545,9 @@ fn meta0() -> Meta {
         usd: None,
         when: 0,
         nsfw_flagged: false,
+        prompt: None,
+        seed: None,
+        request: None,
     }
 }
 
@@ -1981,5 +2061,52 @@ mod tests {
         assert_eq!((q.seconds, q.rate), (6.0, 1.0));
         let q = quote_settings(m("fal/ltx-2.3-extend"), &json!({"duration": 3}), VideoCall { seconds: 9.0, ..v });
         assert_eq!(q.seconds, 3.0);
+    }
+
+    #[test]
+    fn a_result_keeps_its_prompt_and_settings_beside_it_and_inside_its_png() {
+        let dir = std::env::temp_dir().join(format!("wobble-genai-provenance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let req = serde_json::json!({
+            "prompt": "a moth on a lamp",
+            "image_url": "data:image/png;base64,AAAA",
+            "image_urls": ["data:image/jpeg;base64,BBBBBB"],
+            "guidance_scale": 3.5,
+        });
+        let scrubbed = scrub_request(&req);
+        assert_eq!(scrubbed["guidance_scale"], 3.5);
+        assert_eq!(scrubbed["prompt"], "a moth on a lamp");
+        assert!(scrubbed["image_url"].as_str().unwrap().starts_with("<image/png,"), "{scrubbed}");
+        assert!(scrubbed["image_urls"][0].as_str().unwrap().starts_with("<image/jpeg,"));
+        let png = image::png_srgb_rgb(&[0.25; 16], 2, 2).unwrap();
+        let meta = Meta {
+            file: "result.png".into(),
+            model: "fal/flux-dev".into(),
+            endpoint: "fal-ai/flux/dev".into(),
+            service: "fal".into(),
+            when: 7,
+            prompt: Some("a moth on a lamp".into()),
+            seed: Some(42),
+            request: Some(scrubbed.clone()),
+            ..meta0()
+        };
+        let path = commit(&dir, "k", "result.png", &png, &meta).unwrap();
+        // Beside it: meta.json, whole.
+        let back = cached(&dir, "k").unwrap();
+        assert_eq!(back, meta);
+        // Inside it: the prompt under a key image tools show, and the record.
+        let text = image::png_text(&std::fs::read(&path).unwrap());
+        assert!(text.contains(&("Description".into(), "a moth on a lamp".into())), "{text:?}");
+        let rec = &text.iter().find(|(k, _)| k == "wobble-genai").unwrap().1;
+        let rec: serde_json::Value = serde_json::from_str(rec).unwrap();
+        assert_eq!(rec["seed"], 42);
+        assert_eq!(rec["request"]["guidance_scale"], 3.5);
+        // An input is the comp's own picture: left as it was.
+        let input = commit(&dir, "in", "input.png", &png, &Meta { file: "input.png".into(), ..meta0() }).unwrap();
+        assert_eq!(std::fs::read(input).unwrap(), png);
+        // A meta.json from before the record existed still reads.
+        let old: Meta = serde_json::from_str(r#"{"file":"result.png","model":"m"}"#).unwrap();
+        assert_eq!(old.prompt, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
