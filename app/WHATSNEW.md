@@ -4,6 +4,34 @@ Shown once, on the first launch of a new version (`app/src/whatsnew.rs`).
 Newest first: a `## <version>` heading over `- ` bullets, a `**bold**` lead
 drawn strong. Plain words for the people using wobble, not commit messages.
 
+## 0.1.0-alpha.14
+- **DiffusionLight** (new): an HDR latlong of the lighting, per frame, from the plate. LuxDiT as a second model on NVIDIA GPUs.
+- **Normals** (new): normals for a clip.
+- **Relight** (new): relights a plate from an environment, on the GPU.
+- **Depth**: Depth Pro 2 models, with their own AI menu entry. Research-only licence, tagged.
+- **GenAI**: LTX-2.5 runs locally on this machine's GPU, image- and text-to-video.
+- **GenAI**: LTX 2.3 text and image to video, extend, retake, clean plate, render to real. LTX 2.5 upscale, reframe and video matte.
+- **GenAI**: Seedance 2.5 text to video.
+- **GenAI**: every result keeps its prompt, seed and settings, shown under the takes.
+- **GenAI**: image edits take as many reference pictures as the model allows.
+- **GenAI Pipeline**: made from a selection, one image input per picked node. A prompt group is a resizable outline.
+- **Write**: ProRes and H.264 movie output. Proxy renders are named _prx.
+- **Shader**: paste a Matchbox shader and its XML.
+- **Quick create**: ctrl+Tab, then one key adds a node (G grade, B blur). Letters are remappable.
+- **Graph**: G on several nodes grabs all their noodles. M-swipe a matte over an image to mask it, an image over an image for a Multiply.
+- **Graph**: long menus scroll, GenAI steps grouped by what they do.
+- **Tracker**: track backward, one frame at a time either way.
+- **Transform / Corner Pin**: invert toggle.
+- **Planar Track**: matted pixels sit out the solve.
+- **Physics**: animated colliders push bodies, holes in colliders are open.
+- **Luma Key**: points stop at their neighbours, shift-click a crossfade to shape its slope.
+- **Spline**: takes the format of the picture it masks.
+- **Slip**: a positive offset now delays the clip. Old comps are converted on load.
+- **Project browser**: browse a project's folder tree and load by shot.
+- **Clip browser**: Home at the top, a Comp folder for the saved comp's folder.
+- **Scrub**: key hints fan out like Wobble's.
+- Fixed: the movie build failed against FFmpeg older than 6.
+
 ## 0.1.0-alpha.13
 - **Refract** (new): a plate or latlong through bumpy glass, from a height or normal map. IOR, dispersion, roughness.
 - **Splat** (new): Gaussian splat captures (.ply, .spz) through a Camera, with RGBA and depth out.
