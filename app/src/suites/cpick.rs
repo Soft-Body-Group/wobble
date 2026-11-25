@@ -597,6 +597,10 @@ impl Gfx {
                     ));
                 }
                 // Keep one more, for the app-wide check on another swatch.
+                // Let go of alt first: egui keeps a ModifiersChanged until
+                // the next one, so a held alt turns every later palette
+                // click into a remove.
+                raw.events.insert(0, egui::Event::ModifiersChanged(egui::Modifiers::NONE));
                 self.test.cpick_at = (g.swatch_rect(0), 0);
                 button(raw, g.swatch_rect(0).center(), true);
                 next = 45;
