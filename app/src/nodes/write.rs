@@ -469,7 +469,77 @@ pub(crate) fn panel(
     );
     ui.weak(if movie {
         "one movie file, display-referred — the image passes through untouched"
+    } else if wp.format.is_psd() {
+        "layered Photoshop file per frame — the image passes through untouched"
     } else {
         "EXR, RGBA half — the image passes through untouched"
     });
+}
+
+#[cfg(test)]
+mod shot_tests {
+    use super::*;
+
+    /// Not an assertion — a way to LOOK at it: the Render panel set to a
+    /// PSD format with its format menu open, to `target/write-psd.png`.
+    /// `cargo test -p app write_psd_shot -- --ignored`
+    #[test]
+    #[ignore]
+    fn write_psd_shot() {
+        let mut wp = engine::graph::WriteParams {
+            location: "~/renders/street".into(),
+            subfolder: false,
+            name: "street_v001".into(),
+            format: engine::graph::WriteFormat::Psd16,
+            output_default: true,
+            ..Default::default()
+        };
+        let (nc, mut browser) = (None, None);
+        let decoder: Arc<dyn ExrDecoder> = Arc::new(engine::decode::AnyDecoder::new(false));
+        let (bake, errs, status, written) = (None, HashMap::new(), None, Default::default());
+        let (mut a, mut b, mut c, mut cancel) = (None, None, None, false);
+        crate::uishot::render("write-psd", 340.0, 420.0, 3.0, 30, |ui, frame| {
+            if frame == 2 {
+                // Open the format combo the way a click would.
+                let id = ui.ctx().viewport(|vp| {
+                    let mut w: Vec<egui::WidgetRect> =
+                        vp.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).cloned().collect();
+                    w.retain(|x| x.sense.senses_click());
+                    let y = 103.0; // the format row, in points
+                    w.iter().find(|x| x.rect.min.y <= y && x.rect.max.y >= y && x.rect.min.x > 60.0).map(|x| x.id)
+                });
+                if let Some(id) = id {
+                    egui::Popup::open_id(ui.ctx(), id.with("popup"));
+                }
+            }
+            egui::Frame::new().inner_margin(8.0).fill(egui::Color32::from_gray(22)).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+                ui.style_mut().spacing.combo_height = 600.0;
+                panel(
+                    ui,
+                    Cx {
+                        wp: &mut wp,
+                        key: 6,
+                        node: 6,
+                        nc_upstream: &nc,
+                        shot_span_now: (0, 119),
+                        working: engine::color::Colorspace::ACESCG,
+                        write_data: false,
+                        write_spans: Some(((0, 119), (0, 119))),
+                        browser: &mut browser,
+                        decoder: &decoder,
+                        graph_bake: &bake,
+                        load_errors: &errs,
+                        render_status: &status,
+                        written: &written,
+                        blog_click: &mut a,
+                        make_load_click: &mut b,
+                        write_click: &mut c,
+                        graph_bake_cancel: &mut cancel,
+                        proxy: false,
+                    },
+                );
+            });
+        });
+    }
 }
