@@ -3454,6 +3454,18 @@ Movies need a `movie` build AND an encoder in its FFmpeg: ProRes is FFmpeg's
 own `prores_ks`, H.264 VideoToolbox, libx264 or OpenH264. A decode-only FFmpeg
 (the release builds') refuses in words, in the panel and on render.
 
+**PSD 8-bit / 16-bit / 32-bit float** writes one layered Photoshop file per
+frame (`name.####.psd`, `engine::psd`, our own writer: the Rust PSD crates
+only read). The render is ONE transparent layer named after the Render, with
+straight (unpremultiplied) colour, plus the merged composite, matted on white
+as Photoshop stores it. 8 and 16-bit default to sRGB (the `psd` row of the
+output defaults), 32-bit to linear Rec.709 (`psd32`), since Photoshop treats a
+32-bit document as linear light; few apps besides Photoshop open 32-bit PSDs.
+The colour transform runs AFTER unpremultiplying, so soft edges keep their
+colour. A single-channel pick is an opaque grey layer; a data render is EXR
+only; classic PSD stops at 30000 px a side. wobble does not read PSDs back,
+so **make Load** is off for them.
+
 **Under proxy** a Render renders at proxy resolution, and `_prx` goes on the
 end of the name (`comp_prx.1001.exr`, `comp_prx/` when enclosed,
 `comp_prx.mov`), so it can never land on or pass for the full-res render. The

@@ -200,6 +200,10 @@ pub(crate) fn panel(
             .on_hover_text(wp.format.hint());
     });
     let movie = wp.format.is_movie();
+    let exr = wp.format == engine::graph::WriteFormat::Exr;
+    if wp.format.is_psd() && write_data {
+        ui.colored_label(theme::error(), egui::RichText::new("data renders are EXR only").small());
+    }
     if movie {
         if write_data {
             ui.colored_label(theme::error(), egui::RichText::new("data renders are EXR only").small());
@@ -211,14 +215,14 @@ pub(crate) fn panel(
         // Data is written as data: no output space to pick.
         ui.weak("data in: one float32 channel Z per frame, no colour transform");
     } else {
-        let pattern = wp.pattern();
+        let dflt = wp.default_output(&colorui::defaults());
         colorui::output_space_row(
             ui,
             &format!("write-cs-{node}"),
             &mut wp.output,
             &mut wp.output_default,
             working,
-            &pattern,
+            dflt,
         );
         // One channel instead of rgba (a matte, a
         // luminance pass): half float, named as asked.
@@ -243,7 +247,7 @@ pub(crate) fn panel(
                 })
                 .response
                 .on_hover_text("write every channel, or just one");
-            if let Some(c) = wp.channel.filter(|_| !movie) {
+            if let Some(c) = wp.channel.filter(|_| exr) {
                 ui.label(egui::RichText::new("as").small());
                 let w = text_w(ui, 0.0).min(90.0);
                 ui.add(
@@ -257,6 +261,7 @@ pub(crate) fn panel(
     }
     // Compression: every method the EXR writer has. A movie's is its codec.
     if !movie {
+    if exr {
     ui.horizontal(|ui| {
         lab(ui, "compression");
         egui::ComboBox::from_id_salt(("write-comp", node))
@@ -281,6 +286,7 @@ pub(crate) fn panel(
             })
             .small(),
         );
+    }
     }
     // A movie has no frame numbers in its name.
     ui.horizontal(|ui| {
@@ -405,11 +411,15 @@ pub(crate) fn panel(
             *write_click = Some(wp.clone());
         }
         if ui
-            .add_enabled(wp.is_set(), egui::Button::new("make Load"))
+            .add_enabled(wp.is_set() && !wp.format.is_psd(), egui::Button::new("make Load"))
             .on_hover_text(
                 "a Load beside this node reading what it renders, over the render's frames",
             )
-            .on_disabled_hover_text("set a location first")
+            .on_disabled_hover_text(if wp.format.is_psd() {
+                "wobble does not read PSDs back"
+            } else {
+                "set a location first"
+            })
             .clicked()
         {
             *make_load_click = Some(wp.clone());

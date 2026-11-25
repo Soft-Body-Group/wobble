@@ -220,6 +220,53 @@ impl Gfx {
                     println!("WRITE TEST FAIL: no-footage render did not write {}", missing.display());
                     std::process::exit(1);
                 }
+                // Then the same Render as a 16-bit layered PSD sequence.
+                if let Some(NodeKind::Write(wp)) = self.egraph.node_mut(wid).map(|n| &mut n.kind) {
+                    wp.path.clear();
+                    wp.location = dir.to_string_lossy().into_owned();
+                    wp.name = "noise".into();
+                    wp.subfolder = false;
+                    wp.output_default = true;
+                    wp.format = engine::graph::WriteFormat::Psd16;
+                }
+                next = 7;
+            }
+            7 if frames > 10 => {
+                let Some(NodeKind::Write(wp)) = self.egraph.node(wid).map(|n| n.kind.clone()) else {
+                    return;
+                };
+                self.start_write(wid, &wp);
+                if self.graph_bake.is_none() {
+                    println!(
+                        "WRITE TEST FAIL: a PSD render did not start ({})",
+                        self.load_errors.get(&wid).map(|s| s.as_str()).unwrap_or("no reason")
+                    );
+                    std::process::exit(1);
+                }
+                next = 8;
+            }
+            8 if self.graph_bake.is_some() => {
+                frames = 0;
+            }
+            8 => {
+                if let Some(e) = self.load_errors.get(&wid) {
+                    println!("WRITE TEST FAIL: PSD render: {e}");
+                    std::process::exit(1);
+                }
+                let size = self.comp.output_size().unwrap_or((0, 0));
+                for n in 1001..=1003 {
+                    let f = dir.join(format!("noise.{n}.psd"));
+                    let head = std::fs::read(&f).unwrap_or_default();
+                    let be = |at: usize| head.get(at..at + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()));
+                    let ok = head.starts_with(b"8BPS")
+                        && be(14) == Some(size.1)
+                        && be(18) == Some(size.0)
+                        && head.get(22..24) == Some(&[0, 16]);
+                    if !ok {
+                        println!("WRITE TEST FAIL: {} is not a {}x{} 16-bit PSD", f.display(), size.0, size.1);
+                        std::process::exit(1);
+                    }
+                }
                 // Then the same Render as a movie under proxy (a movie
                 // build with a ProRes encoder; a stock build stops here).
                 let fmt = engine::graph::WriteFormat::ProRes422Hq;
@@ -239,8 +286,8 @@ impl Gfx {
                     println!(
                         "WRITE TEST PASS: wrote and read back 3 graded, moving EXRs under \
                          location/name/, made a Load of them over the render's frames, then \
-                         rendered a Noise with no footage in the comp through an old-style path \
-                         (no movie encoder in this build: movie stage skipped)"
+                         rendered a Noise with no footage in the comp through an old-style path, \
+                         and as 16-bit PSDs (no movie encoder in this build: movie stage skipped)"
                     );
                     let _ = std::fs::remove_dir_all(&dir);
                     std::process::exit(0);
@@ -292,8 +339,8 @@ impl Gfx {
                 println!(
                     "WRITE TEST PASS: wrote and read back 3 graded, moving EXRs under \
                      location/name/, made a Load of them over the render's frames, \
-                     rendered a Noise with no footage through an old-style path, then \
-                     the same as a 3-frame ProRes .mov under proxy, named _prx"
+                     rendered a Noise with no footage through an old-style path and as \
+                     16-bit PSDs, then the same as a 3-frame ProRes .mov under proxy, named _prx"
                 );
                 let _ = std::fs::remove_dir_all(&dir);
                 std::process::exit(0);

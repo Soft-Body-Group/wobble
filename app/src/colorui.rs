@@ -171,10 +171,10 @@ pub fn output_space_row(
     output: &mut Option<Colorspace>,
     follow: &mut bool,
     working: Colorspace,
-    path: &str,
+    default: Option<Colorspace>,
 ) -> bool {
     let mut changed = false;
-    let dflt_label = format!("default ({})", space_label(defaults().output_for(path), working));
+    let dflt_label = format!("default ({})", space_label(default, working));
     ui.horizontal(|ui| {
         ui.label("output");
         let label = if *follow { dflt_label.clone() } else { space_label(*output, working) };

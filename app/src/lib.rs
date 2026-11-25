@@ -7639,6 +7639,9 @@ impl Gfx {
         };
         let info = engine::decode::ImageInfo { width: w, height: h };
         let movie = params.format.is_movie();
+        if params.format.is_psd() && self.write_takes_data(node) {
+            return err(self, "data renders are EXR only: a PSD cannot hold float data");
+        }
         if movie {
             if self.write_takes_data(node) {
                 return err(self, "data renders are EXR only: a movie cannot hold float data");
@@ -8106,11 +8109,15 @@ impl Gfx {
                     Some(params.effective_output(working, &colorui::defaults()))
                 }
             };
+            // A PSD unpremultiplies before its transform, on the worker
+            // (`psd::from_premult_f16`): skip the in-place one.
+            let psd = matches!(&bake.sink, BakeSink::Write { params, data: false, .. } if params.format.is_psd());
+            let psd_tf = out_space.map(|out| engine::color::Transform::new(working, out)).filter(|t| psd && !t.is_identity());
             let chroma = match out_space {
                 None => None,
                 Some(out) => {
                     let t = engine::color::Transform::new(working, out);
-                    if !t.is_identity() {
+                    if !t.is_identity() && !psd {
                         let stride = bake.info.row_stride_f16();
                         let w = bake.info.width as usize;
                         use rayon::prelude::*;
@@ -8192,6 +8199,37 @@ impl Gfx {
                         info.row_stride_f16(),
                         &owned,
                         params.compression,
+                    )
+                } else if let (true, BakeSink::Write { params, .. }) = (psd, &sink) {
+                    // A Photoshop file: the render as one transparent layer
+                    // named after the Render, plus the composite.
+                    use engine::graph::WriteChannel;
+                    let mono = params.single_channel().map(|(ch, _)| match ch {
+                        WriteChannel::R => [1.0, 0.0, 0.0, 0.0],
+                        WriteChannel::G => [0.0, 1.0, 0.0, 0.0],
+                        WriteChannel::B => [0.0, 0.0, 1.0, 0.0],
+                        WriteChannel::A => [0.0, 0.0, 0.0, 1.0],
+                        WriteChannel::Luma => {
+                            let l = out_space.unwrap_or(working).primaries.luma_weights();
+                            [l[0], l[1], l[2], 0.0]
+                        }
+                    });
+                    let (w, h) = (info.width as usize, info.height as usize);
+                    let rgba = engine::psd::from_premult_f16(
+                        w,
+                        h,
+                        info.row_stride_f16(),
+                        &owned,
+                        psd_tf.as_ref(),
+                        mono,
+                    );
+                    let name = params.clean_name();
+                    engine::psd::write(
+                        &file,
+                        info.width,
+                        info.height,
+                        params.format.psd_depth().unwrap_or(engine::psd::Depth::U16),
+                        &[engine::psd::Layer { name: &name, rgba: &rgba }],
                     )
                 } else if let BakeSink::Write { params, .. } = &sink {
                     // A Render's picture: rgba, or the one channel it was asked

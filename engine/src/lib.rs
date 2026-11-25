@@ -59,6 +59,7 @@ pub mod planar;
 pub mod pointsolve;
 pub mod pointtrack;
 pub mod plugins;
+pub mod psd;
 pub mod rifetime;
 pub mod rife;
 pub mod safetensors;

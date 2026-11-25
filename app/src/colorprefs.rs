@@ -29,6 +29,8 @@ fn format_hover(f: &str) -> &'static str {
         "exr" => ".exr",
         "dpx" => ".dpx",
         "png" => ".png",
+        "psd" => ".psd at 8 and 16 bits",
+        "psd32" => ".psd at 32-bit float",
         _ => "",
     }
 }
@@ -353,7 +355,8 @@ mod tests {
             let mut out = None;
             let mut follow = true;
             colorui::input_space_row(ui, "r", &mut input, Colorspace::ACESCG, "p/sh010.####.png");
-            colorui::output_space_row(ui, "w", &mut out, &mut follow, Colorspace::ACESCG, "o/c.####.exr");
+            let dflt = colorui::defaults().output_for("o/c.####.exr");
+            colorui::output_space_row(ui, "w", &mut out, &mut follow, Colorspace::ACESCG, dflt);
         })
         .expect("headless shot");
     }

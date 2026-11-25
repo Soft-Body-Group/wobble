@@ -1632,10 +1632,14 @@ pub enum WriteFormat {
     ProRes4444,
     ProRes4444Xq,
     H264,
+    /// A layered Photoshop file per frame (`psd.rs`), at 8, 16 or 32 bits.
+    Psd8,
+    Psd16,
+    Psd32,
 }
 
 impl WriteFormat {
-    pub const ALL: [WriteFormat; 8] = [
+    pub const ALL: [WriteFormat; 11] = [
         WriteFormat::Exr,
         WriteFormat::ProRes422Hq,
         WriteFormat::ProRes422,
@@ -1644,6 +1648,9 @@ impl WriteFormat {
         WriteFormat::ProRes4444,
         WriteFormat::ProRes4444Xq,
         WriteFormat::H264,
+        WriteFormat::Psd8,
+        WriteFormat::Psd16,
+        WriteFormat::Psd32,
     ];
 
     pub fn label(self) -> &'static str {
@@ -1656,6 +1663,9 @@ impl WriteFormat {
             WriteFormat::ProRes4444 => "ProRes 4444",
             WriteFormat::ProRes4444Xq => "ProRes 4444 XQ",
             WriteFormat::H264 => "H.264",
+            WriteFormat::Psd8 => "PSD 8-bit",
+            WriteFormat::Psd16 => "PSD 16-bit",
+            WriteFormat::Psd32 => "PSD 32-bit float",
         }
     }
 
@@ -1669,12 +1679,40 @@ impl WriteFormat {
             WriteFormat::ProRes4444 => "one .mov, 4:4:4 with alpha",
             WriteFormat::ProRes4444Xq => "one .mov, 4:4:4 with alpha, highest data rate",
             WriteFormat::H264 => "one .mp4, 8-bit 4:2:0: small, plays anywhere, for review",
+            WriteFormat::Psd8 => "one Photoshop file per frame, 8-bit, the render as a transparent layer: sRGB by default",
+            WriteFormat::Psd16 => "one Photoshop file per frame, 16-bit, the render as a transparent layer: sRGB by default",
+            WriteFormat::Psd32 => "one Photoshop file per frame, 32-bit float, linear: few apps besides Photoshop open these",
         }
     }
 
     /// One file for the whole render, not a file per frame.
     pub fn is_movie(self) -> bool {
-        self != WriteFormat::Exr
+        !matches!(self, WriteFormat::Exr) && !self.is_psd()
+    }
+
+    /// A Photoshop file per frame.
+    pub fn is_psd(self) -> bool {
+        matches!(self, WriteFormat::Psd8 | WriteFormat::Psd16 | WriteFormat::Psd32)
+    }
+
+    /// The bit depth of a PSD format.
+    pub fn psd_depth(self) -> Option<crate::psd::Depth> {
+        match self {
+            WriteFormat::Psd8 => Some(crate::psd::Depth::U8),
+            WriteFormat::Psd16 => Some(crate::psd::Depth::U16),
+            WriteFormat::Psd32 => Some(crate::psd::Depth::F32),
+            _ => None,
+        }
+    }
+
+    /// The output-defaults row (`color::OUTPUT_FORMATS`) this format follows.
+    pub fn defaults_row(self) -> &'static str {
+        match self {
+            WriteFormat::Exr => "exr",
+            WriteFormat::Psd8 | WriteFormat::Psd16 => "psd",
+            WriteFormat::Psd32 => "psd32",
+            _ => "movie",
+        }
     }
 
     /// The file extension, without the dot.
@@ -1682,6 +1720,7 @@ impl WriteFormat {
         match self {
             WriteFormat::Exr => "exr",
             WriteFormat::H264 => "mp4",
+            WriteFormat::Psd8 | WriteFormat::Psd16 | WriteFormat::Psd32 => "psd",
             _ => "mov",
         }
     }
@@ -1701,7 +1740,7 @@ impl WriteFormat {
 
     /// Does the file carry alpha?
     pub fn has_alpha(self) -> bool {
-        matches!(self, WriteFormat::Exr | WriteFormat::ProRes4444 | WriteFormat::ProRes4444Xq)
+        matches!(self, WriteFormat::Exr | WriteFormat::ProRes4444 | WriteFormat::ProRes4444Xq) || self.is_psd()
     }
 
     /// Chroma subsampling across x / y: a movie of an odd size loses its
@@ -1709,9 +1748,19 @@ impl WriteFormat {
     pub fn subsampled(self) -> (bool, bool) {
         match self {
             WriteFormat::Exr | WriteFormat::ProRes4444 | WriteFormat::ProRes4444Xq => (false, false),
+            WriteFormat::Psd8 | WriteFormat::Psd16 | WriteFormat::Psd32 => (false, false),
             WriteFormat::H264 => (true, true),
             _ => (true, false),
         }
+    }
+}
+
+/// A legacy EXR path or pattern with its extension swapped for `.psd`.
+fn psd_ext(p: &str) -> String {
+    let t = p.trim();
+    match t.len().checked_sub(4).filter(|&i| t.is_char_boundary(i) && t[i..].eq_ignore_ascii_case(".exr")) {
+        Some(i) => format!("{}.psd", &t[..i]),
+        None => t.to_string(),
     }
 }
 
@@ -1965,8 +2014,21 @@ impl WriteParams {
         working: crate::color::Colorspace,
         defaults: &crate::color::FormatDefaults,
     ) -> crate::color::Colorspace {
-        let out = if self.output_default { defaults.output_for(&self.pattern()) } else { self.output };
+        let out = if self.output_default { self.default_output(defaults) } else { self.output };
         out.unwrap_or(working)
+    }
+
+    /// What "default" means for this Write: its format's row of the table
+    /// (a legacy EXR path is read by its extension, as before).
+    pub fn default_output(
+        &self,
+        defaults: &crate::color::FormatDefaults,
+    ) -> Option<crate::color::Colorspace> {
+        if self.format.is_psd() {
+            defaults.output_for_format(self.format.defaults_row())
+        } else {
+            defaults.output_for(&self.pattern())
+        }
     }
 
     /// Is there anywhere to write? (A legacy path, or a location.)
@@ -2004,13 +2066,17 @@ impl WriteParams {
             return dir.join(format!("{}.{}", self.clean_name(), self.format.ext())).to_string_lossy().into_owned();
         }
         if !self.path.trim().is_empty() && !self.format.is_movie() {
+            // A legacy path is an EXR pattern: a PSD swaps the extension.
+            if self.format.is_psd() {
+                return psd_ext(&self.path);
+            }
             return self.path.clone();
         }
         let name = self.clean_name();
         let file = if self.format.is_movie() {
             format!("{name}.{}", self.format.ext())
         } else {
-            format!("{name}.{}.exr", "#".repeat(self.padding.clamp(1, 12) as usize))
+            format!("{name}.{}.{}", "#".repeat(self.padding.clamp(1, 12) as usize), self.format.ext())
         };
         let mut p = std::path::PathBuf::from(self.location.trim());
         if self.subfolder {
@@ -2075,6 +2141,11 @@ impl WriteParams {
         // A movie is one file, whichever frame.
         if self.format.is_movie() {
             return expanded;
+        }
+        // A legacy path names EXRs: resolve as one, then swap the extension.
+        if self.format.is_psd() && !self.path.trim().is_empty() {
+            let exr = WriteParams { format: WriteFormat::Exr, ..self.clone() };
+            return std::path::PathBuf::from(psd_ext(&exr.resolve_frame(i).to_string_lossy()));
         }
         let p = expanded.to_string_lossy();
         let p = p.as_ref();

@@ -891,12 +891,24 @@ pub struct FormatDefaults {
 /// The formats a Read can decode, as rows of the defaults table.
 pub const INPUT_FORMATS: [&str; 5] = ["exr", "dpx", "png", "jpg", "movie"];
 /// The formats a Write can encode.
-pub const OUTPUT_FORMATS: [&str; 2] = ["exr", "movie"];
+pub const OUTPUT_FORMATS: [&str; 4] = ["exr", "movie", "psd", "psd32"];
 
 /// A movie Write's built-in output space: display-referred Rec.709 (BT.1886,
 /// a 2.4 power), what a ProRes or H.264 review file is expected to hold. A
 /// movie in the scene-linear working space would play back far too dark.
 pub const MOVIE_OUTPUT: Colorspace = Colorspace::REC709_BT1886;
+
+/// The built-in output default for a row: movies and 8/16-bit PSDs are
+/// display-referred, a 32-bit PSD is linear light (Photoshop's 32-bit
+/// convention), an EXR is the working space.
+fn builtin_output(format: &str) -> Option<Colorspace> {
+    match format {
+        "movie" => Some(MOVIE_OUTPUT),
+        "psd" => Some(Colorspace::SRGB),
+        "psd32" => Some(Colorspace::LINEAR_REC709),
+        _ => None,
+    }
+}
 
 /// The defaults-table row a file extension belongs to.
 pub fn format_key(ext: &str) -> Option<&'static str> {
@@ -906,6 +918,7 @@ pub fn format_key(ext: &str) -> Option<&'static str> {
         "png" => Some("png"),
         "jpg" | "jpeg" => Some("jpg"),
         "mov" | "mp4" | "m4v" | "mxf" | "avi" | "mkv" => Some("movie"),
+        "psd" => Some("psd"),
         _ => None,
     }
 }
@@ -932,7 +945,7 @@ impl Default for FormatDefaults {
             .collect();
         let output = OUTPUT_FORMATS
             .iter()
-            .map(|f| (f.to_string(), (*f == "movie").then_some(MOVIE_OUTPUT)))
+            .map(|f| (f.to_string(), builtin_output(f)))
             .collect();
         Self { input, output }
     }
@@ -958,8 +971,7 @@ impl FormatDefaults {
             Some(v) => *v,
             // Prefs saved before movies were written have no row: the
             // built-in default, not the working space.
-            None if format == "movie" => Some(MOVIE_OUTPUT),
-            None => None,
+            None => builtin_output(format),
         }
     }
 
