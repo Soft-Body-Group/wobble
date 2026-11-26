@@ -17,7 +17,7 @@ png.workspace = true
 base64 = "0.22"
 ab_glyph = "0.2"
 # The clip browser (seq_manip on imfram); the `clips` feature.
-seq = { git = "https://github.com/Soft-Body-Group/seq_manip.git", rev = "ae2841c99760db35d4efdff92055ea4c62b4f511", optional = true }
+seq = { git = "https://github.com/Soft-Body-Group/seq_manip.git", rev = "838874c2bc953eb3948afafa7fddf6ba42ce77db", optional = true }
 imfram.workspace = true
 # No default features: wobble's default `commerce` (accounts, payments) must
 # never ride into a Scrub build, and release builds turn `fold` on.

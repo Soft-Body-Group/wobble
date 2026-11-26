@@ -4153,7 +4153,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 [[package]]
 name = "seq"
 version = "0.1.0"
-source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ae2841c99760db35d4efdff92055ea4c62b4f511#ae2841c99760db35d4efdff92055ea4c62b4f511"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=838874c2bc953eb3948afafa7fddf6ba42ce77db#838874c2bc953eb3948afafa7fddf6ba42ce77db"
 dependencies = [
  "base64 0.22.1",
  "egui",
@@ -4171,7 +4171,7 @@ dependencies = [
 [[package]]
 name = "seq-core"
 version = "0.1.0"
-source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ae2841c99760db35d4efdff92055ea4c62b4f511#ae2841c99760db35d4efdff92055ea4c62b4f511"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=838874c2bc953eb3948afafa7fddf6ba42ce77db#838874c2bc953eb3948afafa7fddf6ba42ce77db"
 dependencies = [
  "base64 0.22.1",
  "dunce",
@@ -4555,7 +4555,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 [[package]]
 name = "tauri-shim"
 version = "0.1.0"
-source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ae2841c99760db35d4efdff92055ea4c62b4f511#ae2841c99760db35d4efdff92055ea4c62b4f511"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=838874c2bc953eb3948afafa7fddf6ba42ce77db#838874c2bc953eb3948afafa7fddf6ba42ce77db"
 dependencies = [
  "pollster 0.4.0",
  "tauri-shim-macros",
@@ -4565,7 +4565,7 @@ dependencies = [
 [[package]]
 name = "tauri-shim-macros"
 version = "0.1.0"
-source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=ae2841c99760db35d4efdff92055ea4c62b4f511#ae2841c99760db35d4efdff92055ea4c62b4f511"
+source = "git+https://github.com/Soft-Body-Group/seq_manip.git?rev=838874c2bc953eb3948afafa7fddf6ba42ce77db#838874c2bc953eb3948afafa7fddf6ba42ce77db"
 
 [[package]]
 name = "tempfile"
