@@ -226,6 +226,17 @@ impl Scrub {
         };
         let n = info.frames.max(1);
         let f = ((frac.clamp(0.0, 1.0) * (n - 1) as f32).round() as u64).min(n - 1);
+        self.at(path, f)
+    }
+
+    /// Frame index `f` of `path` (a subclip's tile maps the pointer into
+    /// its in..out): as `hover`, the exact frame when it is here, else the
+    /// nearest one held (the exact one asked for on an intra clip).
+    pub fn at(&mut self, path: &Path, f: u64) -> (Option<u64>, Option<TextureHandle>, bool) {
+        let Some(info) = self.info(path) else {
+            return (None, self.poster(path), false);
+        };
+        let f = f.min(info.frames.max(1) - 1);
         if !self.strips_asked.contains(path) {
             self.strips_asked.insert(path.to_path_buf());
             let j = Job { path: path.to_path_buf(), pos: Pos::Strip, asked: Instant::now(), hover: false };

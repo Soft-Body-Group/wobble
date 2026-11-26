@@ -133,6 +133,16 @@ pub struct Summary {
     pub speeds: Vec<(usize, i64, f64)>,
 }
 
+/// The window's two modes: EDIT (bin, two-up, timeline) and SELECTS
+/// (one viewer, the clips listed with their verdicts, the selects bin of
+/// subclips under it). ` (backtick) or the menubar switches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Mode {
+    #[default]
+    Edit,
+    Selects,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     Bin,
@@ -150,6 +160,9 @@ pub(crate) struct SourceClip {
     pub(crate) original: PathBuf,
     pub(crate) optimised: bool,
     pub(crate) shown: Option<u64>,
+    /// Marks put on by a drop, an append or a subclip load: while they are
+    /// still these, leaving the clip does not remember them as its own.
+    pub(crate) set_marks: Option<Marks>,
 }
 
 pub(crate) struct Record {
@@ -317,6 +330,10 @@ pub struct Editor {
     pub(crate) tour: crate::tour::Tour,
     /// "request a feature" (the menubar's red button).
     pub(crate) feedback: crate::feedback::Feedback,
+    /// Edit or selects (`selects.rs`).
+    pub(crate) mode: Mode,
+    /// Which clips selects mode lists.
+    pub(crate) filter: crate::bin::Filter,
 }
 
 impl Editor {
@@ -407,6 +424,8 @@ impl Editor {
             hold_chord: false,
             tour: crate::tour::Tour::new(crate::panes::Panes::load(headless).tour_seen, headless),
             feedback: crate::feedback::Feedback::default(),
+            mode: Mode::Edit,
+            filter: Default::default(),
         }
     }
 
@@ -425,7 +444,10 @@ impl Editor {
                 // The transport owns the clock; the timeline only scrubs.
                 scrub.fps = 0.0;
                 let detail = format!("{}x{} {} fr", info.width, info.height, info.frames);
+                // The clip leaving keeps its marks (put back next time).
+                self.remember_source_marks();
                 self.bin.add(path, detail);
+                let marks = self.bin.clip(path).map(|i| self.bin.items[i].marks).unwrap_or_default();
                 if let Some(d) = path.parent() {
                     if self.bin.items.len() == 1 {
                         self.bin.go(d.to_path_buf());
@@ -435,11 +457,12 @@ impl Editor {
                     server,
                     transport: Transport::new(info.frames, info.fps()),
                     scrub,
-                    marks: Marks::default(),
+                    marks,
                     info,
                     original: path.to_path_buf(),
                     optimised: optimised.is_some(),
                     shown: None,
+                    set_marks: None,
                 });
                 self.error = None;
                 self.focus = Focus::Source;
@@ -997,7 +1020,10 @@ impl Editor {
         // Panes: Q alone / back, W hide / show, shift+W all back, H key hints.
         // (Q is the dock's: its solo key.)
         let ptr = ui.input(|i| i.pointer.hover_pos());
-        if take(ui, none, Key::W, false) {
+        if take(ui, none, Key::Backtick, false) {
+            self.toggle_mode();
+        }
+        if self.mode == Mode::Edit && take(ui, none, Key::W, false) {
             if let Some((p, _)) = ptr.and_then(|q| self.panes.at(q)) {
                 self.set_pane_open(p, false);
             }
@@ -1022,7 +1048,7 @@ impl Editor {
             self.rec.view.fit();
             self.say("timeline fitted (R)");
         }
-        if let Some(i) = viewer {
+        if let Some(i) = viewer.filter(|_| self.mode == Mode::Edit) {
             if take(ui, none, Key::R, false) {
                 self.views[i].fit();
             }
@@ -1085,6 +1111,12 @@ impl Editor {
                 }
             }
         }
+        if self.mode == Mode::Selects {
+            self.selects_keys(ui);
+            self.mark_keys(ui);
+            self.transport_keys(ui);
+            return;
+        }
         if take(ui, none, Key::Comma, false) {
             self.edit(true);
         }
@@ -1092,7 +1124,12 @@ impl Editor {
             self.edit(false);
         }
         if take(ui, none, Key::M, false) {
-            self.append();
+            // With the bin focused: its chosen clips and subclips, in order.
+            if self.focus == Focus::Bin {
+                self.append_chosen();
+            } else {
+                self.append();
+            }
         }
         for (k, t) in [
             (Key::Num1, model::V1),
@@ -1296,8 +1333,9 @@ impl Editor {
         }
 
         if self.focus == Focus::Bin {
-            if let bin::Action::Load(p) = self.bin.keys(ui) {
-                self.open(&p);
+            if let bin::Action::Load(p, r) = self.bin.keys(ui) {
+                self.load_item(&p, r);
+                self.focus = Focus::Bin;
             }
         } else {
             // Edit points walk the record playhead from anywhere but the bin.
@@ -1313,6 +1351,14 @@ impl Editor {
             }
         }
 
+        self.mark_keys(ui);
+        self.transport_keys(ui);
+    }
+
+    /// I O and friends: the side under the pointer (the source viewer, or
+    /// the record viewer / timeline), else the focused one.
+    fn mark_keys(&mut self, ui: &mut egui::Ui) {
+        let (none, shift, alt) = (Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT);
         // Marks: the side under the pointer (the source viewer, or the
         // record viewer / timeline), else the focused one.
         let mark_side = match self.key_target(ui) {
@@ -1355,7 +1401,6 @@ impl Editor {
                 marks.clear();
             }
         }
-        self.transport_keys(ui);
     }
 
     /// J K L, space, steps, home / end: the active viewer.
@@ -1922,7 +1967,7 @@ impl Editor {
         // The marked clip goes onto the timeline by its handle in the title
         // bar, or a SHIFT-drag on the picture (a plain drag scrubs).
         let handle = Rect::from_min_max(pos2(title.max.x - 124.0 - 8.0 - 150.0, title.min.y + 1.0), pos2(title.max.x - 124.0 - 8.0, title.max.y - 1.0));
-        let grab = self.source.is_some().then(|| {
+        let grab = (self.source.is_some() && self.mode == Mode::Edit).then(|| {
             ui.put(handle, egui::Button::new(egui::RichText::new("\u{23f7} drag clip to timeline").size(11.0)).sense(Sense::click_and_drag()))
                 .on_hover_text("drag the marked clip onto the timeline (cmd at the drop: insert) — or shift-drag the picture")
         });
@@ -2515,6 +2560,13 @@ impl Editor {
                 }
                 None => {}
             }
+            // The mode switch (` toggles).
+            ui.separator();
+            for (m, label) in [(Mode::Edit, "edit"), (Mode::Selects, "selects")] {
+                if ui.selectable_label(self.mode == m, label).on_hover_text("` (backtick) switches edit / selects").clicked() && self.mode != m {
+                    self.toggle_mode();
+                }
+            }
             // Feedback, in red at the far right (as wobble has it).
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.feedback.button(ui));
         });
@@ -2719,6 +2771,15 @@ impl imfram::shell::UiApp for Editor {
         // The panels: the dock in the room under the menubar.
         self.panes.begin_host(crate::panes::MAIN);
         match self.docks.take() {
+            // Selects mode lays the main window out itself (the dock's
+            // layout is left as it was, for edit mode).
+            Some(d) if self.mode == Mode::Selects => {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| self.selects_body(ui, body));
+                self.docks = Some(d);
+            }
+            None if self.mode == Mode::Selects => {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| self.selects_body(ui, body));
+            }
             Some(mut d) => {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| d.draw_external(crate::panes::MAIN, ui, self));
                 let released = ui.input(|i| i.pointer.any_released());
@@ -2750,6 +2811,8 @@ impl imfram::shell::UiApp for Editor {
                     crate::timelineui::Payload::Source { len } => format!("source clip, {len} frames"),
                     crate::timelineui::Payload::File(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
                     crate::timelineui::Payload::Files(v) => format!("{} clips, laid down in order", v.len()),
+                    crate::timelineui::Payload::Clips(v) if v.len() == 1 => "subclip".into(),
+                    crate::timelineui::Payload::Clips(v) => format!("{} clips, laid down in order", v.len()),
                     crate::timelineui::Payload::Dissolve => "cross dissolve: onto a cut".into(),
                     crate::timelineui::Payload::Text => "text: onto a video track".into(),
                 };
@@ -3038,8 +3101,8 @@ impl Editor {
                 if let bin::Action::Browse = act {
                     self.import();
                 }
-                if let bin::Action::Load(p) = act {
-                    self.open(&p);
+                if let bin::Action::Load(p, r) = act {
+                    self.load_item(&p, r);
                 }
             }
             Pane::Timeline => {
@@ -3139,8 +3202,9 @@ impl Editor {
         // This viewer's share of the keys, wrapped into as many rows as its
         // width needs.
         let n = views.len().clamp(1, 2);
-        let per = KEYS.len().div_ceil(n);
-        let mine = &KEYS[(me * per).min(KEYS.len())..((me + 1) * per).min(KEYS.len())];
+        let keys = if self.mode == Mode::Selects { crate::selects::KEYS } else { KEYS };
+        let per = keys.len().div_ceil(n);
+        let mine = &keys[(me * per).min(keys.len())..((me + 1) * per).min(keys.len())];
         let area = Rect::from_min_max(pos2(rect.min.x, rect.min.y + TITLE_H), rect.max);
         let painter = ui.painter_at(area);
         let items = hudkeys::items(ui, mine);

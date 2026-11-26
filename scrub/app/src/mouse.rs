@@ -360,6 +360,17 @@ impl Editor {
                 }
                 self.say(format!("{} clips laid down from {}", ps.len(), crate::editor::timecode(frame as u64, self.rec.seq.fps.as_f64())));
             }
+            Payload::Clips(cs) => {
+                let mut at = frame;
+                for (p, r) in cs {
+                    match self.drop_clip(p, *r, at, track, insert) {
+                        Some(len) => at += len,
+                        None => break,
+                    }
+                }
+                let what = if cs.len() == 1 { "subclip".to_string() } else { format!("{} clips", cs.len()) };
+                self.say(format!("{what} laid down from {}", crate::editor::timecode(frame as u64, self.rec.seq.fps.as_f64())));
+            }
         }
     }
 
@@ -367,13 +378,19 @@ impl Editor {
     /// and edited in. The record frames it took, or `None` if it would not
     /// load.
     fn drop_file(&mut self, p: &std::path::Path, frame: i64, track: Option<usize>, insert: bool) -> Option<i64> {
+        self.drop_clip(p, None, frame, track, insert)
+    }
+
+    /// A file dropped at `frame`, the whole clip or (`range`) a subclip's
+    /// in..out: loaded into the source with those marks and edited in.
+    fn drop_clip(&mut self, p: &std::path::Path, range: Option<(i64, i64)>, frame: i64, track: Option<usize>, insert: bool) -> Option<i64> {
         self.open(p);
         if !self.source.as_ref().is_some_and(|c| c.original == p) {
             return None;
         }
         if let Some(c) = &mut self.source {
-            c.marks = model::Marks::default();
-            c.transport.seek(0);
+            c.marks = range.map_or(model::Marks::default(), |(a, b)| model::Marks { inp: Some(a), out: Some(b) });
+            c.transport.seek(range.map_or(0, |(a, _)| a.max(0) as u64));
         }
         let t = track?;
         self.drop_edit(frame, Some(t), insert);

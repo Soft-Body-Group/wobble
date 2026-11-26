@@ -21,13 +21,72 @@ use std::path::{Path, PathBuf};
 
 const ROW_H: f32 = 20.0;
 
+#[derive(Clone, Default)]
 pub struct Item {
     pub path: PathBuf,
     pub name: String,
     pub detail: String,
     /// The bin it is in: "" for clips brought in by hand, "post: …" for a
-    /// post's own rushes, "rushes/2026-11-11" for the rushes folders.
+    /// post's own rushes, "rushes/2026-11-11" for the rushes folders,
+    /// `SELECTS` for subclips marked in selects mode.
     pub group: String,
+    /// A SUBCLIP: the source frames in..out (both included, frame indices
+    /// as the source marks count them). `None`: the whole file.
+    pub range: Option<(i64, i64)>,
+    /// Selects mode's verdict on a whole clip (subclips have none).
+    pub rating: Option<Rating>,
+    /// The in / out the clip last had in the source viewer, put back when
+    /// it is loaded again (whole clips only).
+    pub marks: model::Marks,
+}
+
+/// A clip's verdict in selects mode: S selects, R rejects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Rating {
+    Select,
+    Reject,
+}
+
+/// Which clips selects mode lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Filter {
+    #[default]
+    All,
+    Selects,
+    Unmarked,
+    Rejects,
+}
+
+impl Filter {
+    pub const ALL: [Filter; 4] = [Filter::All, Filter::Selects, Filter::Unmarked, Filter::Rejects];
+    pub fn name(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Selects => "selects",
+            Filter::Unmarked => "unmarked",
+            Filter::Rejects => "rejects",
+        }
+    }
+    pub fn keeps(self, r: Option<Rating>) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Selects => r == Some(Rating::Select),
+            Filter::Unmarked => r.is_none(),
+            Filter::Rejects => r == Some(Rating::Reject),
+        }
+    }
+}
+
+/// The bin subclips marked in selects mode go in (M there).
+pub const SELECTS: &str = "selects";
+
+/// What tells bin items apart: the file, and a subclip's range.
+pub type ItemKey = (PathBuf, Option<(i64, i64)>);
+
+impl Item {
+    pub fn key(&self) -> ItemKey {
+        (self.path.clone(), self.range)
+    }
 }
 
 /// Past this many items the rushes bins open folded.
@@ -95,7 +154,7 @@ pub fn scan_tree(root: &Path, label_base: &Path, label: &str, depth: usize, out:
                     Kind::Sequence => e.src.seq.as_ref().map_or(String::new(), |s| format!("{}-{}", s.first(), s.last())),
                     _ => files::size_text(e.size),
                 };
-                out.push(Item { path: e.src.frame_path(0), name: e.name, detail, group: group.clone() });
+                out.push(Item { path: e.src.frame_path(0), name: e.name, detail, group: group.clone(), ..Default::default() });
             }
             _ => {}
         }
@@ -118,7 +177,7 @@ pub struct Bin {
     /// `tiles` / `tile` were read from ui.json.
     pub prefs_in: bool,
     /// Selected clips (click, cmd click, shift click); `sel` is the last.
-    pub chosen: std::collections::HashSet<PathBuf>,
+    pub chosen: std::collections::HashSet<ItemKey>,
     /// Hover-scrub frames (made on first use).
     pub scrub: Option<crate::binthumbs::Scrub>,
     /// Last frame's tiles on screen (tests, drags).
@@ -128,8 +187,9 @@ pub struct Bin {
 /// What the panel asks the editor to do.
 pub enum Action {
     None,
-    /// Load this file (a movie, or a sequence's first frame) into the source viewer.
-    Load(PathBuf),
+    /// Load this file (a movie, or a sequence's first frame) into the
+    /// source viewer; a subclip with its range as the marks.
+    Load(PathBuf, Option<(i64, i64)>),
     /// Open the clip browser (the "browse…" button).
     Browse,
 }
@@ -156,46 +216,94 @@ impl Bin {
         self.add_to(path, detail, "");
     }
 
+    /// The whole-clip item of `path` (not a subclip of it).
+    pub fn clip(&self, path: &Path) -> Option<usize> {
+        self.items.iter().position(|it| it.range.is_none() && it.path == path)
+    }
+
+    pub fn clip_mut(&mut self, path: &Path) -> Option<&mut Item> {
+        self.items.iter_mut().find(|it| it.range.is_none() && it.path == path)
+    }
+
+    /// The display name of a file (a sequence as `name.#.exr`).
+    pub fn name_of(path: &Path) -> String {
+        match media::sequence::Pattern::of(path) {
+            Some((p, _)) if media::sequence::is_image(path) => format!("{}#{}", p.prefix, p.suffix),
+            _ => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        }
+    }
+
+    /// A subclip of `path`, frames `inp..=out`, into the selects bin (as
+    /// often as asked for the same clip; the very same range twice is
+    /// refused). Its name numbers it among that clip's subclips. Returns
+    /// the name, or `None` for a repeat.
+    pub fn add_subclip(&mut self, path: &Path, inp: i64, out: i64, detail: String) -> Option<String> {
+        let (inp, out) = (inp.min(out), inp.max(out));
+        if self.items.iter().any(|it| it.path == path && it.range == Some((inp, out))) {
+            return None;
+        }
+        let n = self.items.iter().filter(|it| it.path == path && it.range.is_some()).count() + 1;
+        let name = format!("{} #{n}", Self::name_of(path));
+        self.items.push(Item { path: path.to_path_buf(), name: name.clone(), detail, group: SELECTS.into(), range: Some((inp, out)), ..Default::default() });
+        self.sort();
+        self.sel = self.items.iter().position(|it| it.path == path && it.range == Some((inp, out))).unwrap_or(0);
+        Some(name)
+    }
+
+    /// Whole clips (subclips left out) that `f` keeps, as item indices in
+    /// the bin's order.
+    pub fn listed(&self, f: Filter) -> Vec<usize> {
+        (0..self.items.len()).filter(|&i| self.items[i].range.is_none() && f.keeps(self.items[i].rating)).collect()
+    }
+
+    /// The selects bin's items (subclips), as a range of item indices.
+    pub fn selects_range(&self) -> std::ops::Range<usize> {
+        let a = self.items.iter().position(|it| it.group == SELECTS).unwrap_or(self.items.len());
+        let n = self.items[a..].iter().take_while(|it| it.group == SELECTS).count();
+        a..a + n
+    }
+
     /// Add to a bin (once per path: an item already in a bin stays there)
     /// and select it.
     pub fn add_to(&mut self, path: &Path, detail: String, group: &str) {
-        if let Some(i) = self.items.iter().position(|it| it.path == path) {
+        if let Some(i) = self.clip(path) {
             // A post's own rush moves into the post's bin.
             if group.starts_with(POST_PREFIX) && self.items[i].group != group {
                 self.items[i].group = group.to_string();
                 self.sort();
             }
-            self.sel = self.items.iter().position(|it| it.path == path).unwrap_or(0);
+            self.sel = self.clip(path).unwrap_or(0);
             return;
         }
-        let name = match media::sequence::Pattern::of(path) {
-            Some((p, _)) if media::sequence::is_image(path) => format!("{}#{}", p.prefix, p.suffix),
-            _ => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-        };
-        self.items.push(Item { path: path.to_path_buf(), name, detail, group: group.to_string() });
+        let name = Self::name_of(path);
+        self.items.push(Item { path: path.to_path_buf(), name, detail, group: group.to_string(), ..Default::default() });
         self.sort();
-        self.sel = self.items.iter().position(|it| it.path == path).unwrap_or(0);
+        self.sel = self.clip(path).unwrap_or(0);
     }
 
-    /// Bins in order: the post's own first, the rushes newest first, then
-    /// clips brought in by hand; items by name within a bin, except the
+    /// Bins in order: the selects (subclips, in the order they were
+    /// marked), the post's own, the rushes newest first, then clips
+    /// brought in by hand; items by name within a bin, except the
     /// hand-brought ones, which keep the order they came in (an import of
     /// several clips lands in the tray's order).
     fn sort(&mut self) {
         fn rank(g: &str) -> u8 {
-            if g.starts_with(POST_PREFIX) {
+            if g == SELECTS {
                 0
-            } else if g.is_empty() {
-                2
-            } else {
+            } else if g.starts_with(POST_PREFIX) {
                 1
+            } else if g.is_empty() {
+                3
+            } else {
+                2
             }
         }
+        let arrival = |g: &str| g.is_empty() || g == SELECTS;
         self.items.sort_by(|a, b| {
             rank(&a.group)
                 .cmp(&rank(&b.group))
-                .then_with(|| if rank(&a.group) == 1 { b.group.cmp(&a.group) } else { a.group.cmp(&b.group) })
-                .then_with(|| if a.group.is_empty() { std::cmp::Ordering::Equal } else { files::natural(&a.name, &b.name) })
+                .then_with(|| if rank(&a.group) == 2 { b.group.cmp(&a.group) } else { a.group.cmp(&b.group) })
+                .then_with(|| if arrival(&a.group) { std::cmp::Ordering::Equal } else { files::natural(&a.name, &b.name) })
         });
     }
 
@@ -224,11 +332,19 @@ impl Bin {
         let Some(rx) = &self.scan else { return false };
         let Ok(found) = rx.try_recv() else { return false };
         self.scan = None;
-        let keep = |g: &str| g.is_empty() || g.starts_with(POST_PREFIX);
-        let cur = self.items.get(self.sel).map(|i| i.path.clone());
+        let keep = |g: &str| g.is_empty() || g == SELECTS || g.starts_with(POST_PREFIX);
+        let cur = self.items.get(self.sel).map(|i| i.key());
+        // A rush's verdict and remembered marks survive a re-listing.
+        let mut was: std::collections::HashMap<PathBuf, (Option<Rating>, model::Marks)> = Default::default();
+        for it in self.items.iter().filter(|i| i.range.is_none() && !keep(&i.group)) {
+            was.insert(it.path.clone(), (it.rating, it.marks));
+        }
         self.items.retain(|i| keep(&i.group));
-        for it in found {
-            if !self.items.iter().any(|x| x.path == it.path) {
+        for mut it in found {
+            if self.clip(&it.path).is_none() {
+                if let Some((r, m)) = was.get(&it.path) {
+                    (it.rating, it.marks) = (*r, *m);
+                }
                 self.items.push(it);
             }
         }
@@ -236,13 +352,13 @@ impl Bin {
         // A big library opens folded but for the newest day, so the panel
         // never lays out thousands of rows (a bin opens with a click).
         if self.items.len() > FOLD_OVER {
-            let mut groups: Vec<String> = self.items.iter().map(|i| i.group.clone()).filter(|g| !g.is_empty() && !g.starts_with(POST_PREFIX)).collect();
+            let mut groups: Vec<String> = self.items.iter().map(|i| i.group.clone()).filter(|g| !g.is_empty() && g != SELECTS && !g.starts_with(POST_PREFIX)).collect();
             groups.dedup();
             for g in groups.into_iter().skip(1) {
                 self.folded.insert(g);
             }
         }
-        self.sel = cur.and_then(|c| self.items.iter().position(|i| i.path == c)).unwrap_or(0);
+        self.sel = cur.and_then(|c| self.items.iter().position(|i| i.key() == c)).unwrap_or(0);
         true
     }
 
@@ -263,7 +379,7 @@ impl Bin {
             self.sel -= 1;
         }
         if take(ui, Key::Enter) {
-            return self.items.get(self.sel).map_or(Action::None, |it| Action::Load(it.path.clone()));
+            return self.items.get(self.sel).map_or(Action::None, |it| Action::Load(it.path.clone(), it.range));
         }
         if take(ui, Key::Backspace) && self.sel < self.items.len() {
             self.items.remove(self.sel);
@@ -313,10 +429,7 @@ impl Bin {
             ui.separator();
             self.tile_rects.clear();
             if self.tiles {
-                let ctx = ui.ctx().clone();
-                if self.scrub.get_or_insert_with(crate::binthumbs::Scrub::new).poll(&ctx) {
-                    ctx.request_repaint();
-                }
+                self.poll_scrub(&ui.ctx().clone());
             }
             egui::ScrollArea::vertical().id_salt("bin-items").auto_shrink([false, false]).show(ui, |ui| {
                 let mut i = 0;
@@ -324,7 +437,7 @@ impl Bin {
                     let g = self.items[i].group.clone();
                     let n = self.items[i..].iter().take_while(|x| x.group == g).count();
                     let shut = self.folded.contains(&g);
-                    let title = if g.is_empty() { "clips".to_string() } else { g.clone() };
+                    let title = if g.is_empty() { "clips".to_string() } else if g == SELECTS { "selects (subclips: M in selects mode)".to_string() } else { g.clone() };
                     let head = format!("{} {title}  ({n})", if shut { "+" } else { "-" });
                     let col = if g.starts_with(POST_PREFIX) { imfram::theme::highlight() } else { ui.visuals().strong_text_color() };
                     if ui.add(egui::Label::new(egui::RichText::new(head).color(col).small()).sense(Sense::click())).clicked() {
@@ -336,13 +449,16 @@ impl Bin {
                     }
                     if !shut {
                         if self.tiles {
-                            self.tiles_ui(ui, i, n, focused, &mut act);
+                            self.tiles_ui(ui, i, n, focused, &mut act, false);
                         } else {
                             for k in i..i + n {
                                 let (name, detail) = (self.items[k].name.clone(), self.items[k].detail.clone());
-                                let on = k == self.sel || self.chosen.contains(&self.items[k].path);
+                                let on = k == self.sel || self.chosen.contains(&self.items[k].key());
                                 let r = row(ui, &name, &detail, on, focused, false);
-                                self.interact(ui, &r, k, &mut act);
+                                if let Some(rt) = self.items[k].rating {
+                                    rating_badge(ui.painter(), egui::pos2(r.rect.right() - 12.0, r.rect.center().y), rt);
+                                }
+                                self.interact(ui, &r, k, &mut act, false);
                             }
                         }
                     }
@@ -354,42 +470,84 @@ impl Bin {
 }
 
 impl Bin {
+    /// What a drag of the chosen items carries: plain files as before;
+    /// with a subclip among them, every item with its range.
+    pub fn payload(&self) -> Option<crate::timelineui::Payload> {
+        use crate::timelineui::Payload;
+        let many: Vec<ItemKey> = self.items.iter().filter(|it| self.chosen.contains(&it.key())).map(|it| it.key()).collect();
+        Some(match many.as_slice() {
+            [] => return None,
+            [(p, None)] => Payload::File(p.clone()),
+            _ if many.iter().all(|(_, r)| r.is_none()) => Payload::Files(many.into_iter().map(|(p, _)| p).collect()),
+            _ => Payload::Clips(many),
+        })
+    }
+
     /// Click, cmd click (toggle), shift click (range), drag, double-click.
-    fn interact(&mut self, ui: &Ui, r: &egui::Response, k: usize, act: &mut Action) {
-        let p = self.items[k].path.clone();
+    /// `click_loads`: a single click loads it too (selects mode).
+    fn interact(&mut self, ui: &Ui, r: &egui::Response, k: usize, act: &mut Action, click_loads: bool) {
+        let key = self.items[k].key();
         if r.clicked() {
             // The click's own modifiers (the release event carries them).
             let m = ui.input(|i| i.events.iter().rev().find_map(|e| if let egui::Event::PointerButton { modifiers, .. } = e { Some(*modifiers) } else { None }).unwrap_or(i.modifiers));
             if m.command {
-                if !self.chosen.remove(&p) {
-                    self.chosen.insert(p.clone());
+                if !self.chosen.remove(&key) {
+                    self.chosen.insert(key.clone());
                 }
             } else if m.shift {
                 let (a, b) = (self.sel.min(k), self.sel.max(k));
                 for it in &self.items[a..=b.min(self.items.len() - 1)] {
-                    self.chosen.insert(it.path.clone());
+                    self.chosen.insert(it.key());
                 }
             } else {
-                self.chosen = [p.clone()].into();
+                self.chosen = [key.clone()].into();
+                if click_loads {
+                    *act = Action::Load(key.0.clone(), key.1);
+                }
             }
             self.sel = k;
         }
         if r.drag_started() {
-            if !self.chosen.contains(&p) {
-                self.chosen = [p.clone()].into();
+            if !self.chosen.contains(&key) {
+                self.chosen = [key.clone()].into();
             }
             self.sel = k;
-            let many: Vec<PathBuf> = self.items.iter().filter(|it| self.chosen.contains(&it.path)).map(|it| it.path.clone()).collect();
-            let pl = if many.len() > 1 { crate::timelineui::Payload::Files(many) } else { crate::timelineui::Payload::File(p.clone()) };
-            egui::DragAndDrop::set_payload(ui.ctx(), pl);
+            if let Some(pl) = self.payload() {
+                egui::DragAndDrop::set_payload(ui.ctx(), pl);
+            }
         }
         if r.double_clicked() {
-            *act = Action::Load(p);
+            *act = Action::Load(key.0, key.1);
         }
     }
 
-    /// Items `i..i+n` as tiles, wrapped to the panel's width.
-    fn tiles_ui(&mut self, ui: &mut Ui, i: usize, n: usize, focused: bool, act: &mut Action) {
+    /// Hover-scrub frames: made on first use, polled once a frame.
+    pub fn poll_scrub(&mut self, ctx: &egui::Context) {
+        if self.scrub.get_or_insert_with(crate::binthumbs::Scrub::new).poll(ctx) {
+            ctx.request_repaint();
+        }
+    }
+
+    /// The selects bin alone, as tiles (selects mode's strip under the
+    /// viewer): a single click loads a subclip with its marks.
+    pub fn selects_ui(&mut self, ui: &mut Ui, focused: bool) -> Action {
+        let mut act = Action::None;
+        self.poll_scrub(&ui.ctx().clone());
+        self.tile_rects.clear();
+        let r = self.selects_range();
+        if r.is_empty() {
+            ui.weak("no subclips yet: mark in / out on a clip and press M (as often as you like per clip)");
+            return act;
+        }
+        egui::ScrollArea::vertical().id_salt("selects-items").auto_shrink([false, false]).show(ui, |ui| {
+            self.tiles_ui(ui, r.start, r.len(), focused, &mut act, true);
+        });
+        act
+    }
+
+    /// Items `i..i+n` as tiles, wrapped to the panel's width. A subclip's
+    /// tile shows its in frame and scrubs only its in..out.
+    fn tiles_ui(&mut self, ui: &mut Ui, i: usize, n: usize, focused: bool, act: &mut Action, click_loads: bool) {
         let w = self.tile.clamp(60.0, 400.0);
         let pic_h = (w * 9.0 / 16.0).round();
         let size = egui::vec2(w, pic_h + 18.0);
@@ -401,17 +559,26 @@ impl Bin {
                     continue;
                 }
                 let path = self.items[k].path.clone();
+                let range = self.items[k].range;
+                let key = self.items[k].key();
                 self.tile_rects.push((path.clone(), rect));
                 let pic = egui::Rect::from_min_size(rect.min, egui::vec2(w, pic_h));
                 let v = ui.visuals().clone();
                 let p = ui.painter_at(rect);
                 p.rect_filled(pic, 3.0, Color32::from_gray(12));
                 let Some(scrub) = self.scrub.as_mut() else { break };
-                // Hovered: scrub to the pointer; else the poster.
+                // Hovered: scrub to the pointer; else the poster (a
+                // subclip's: its in frame).
                 let hover = r.hover_pos().filter(|q| pic.contains(*q) && !ui.input(|i| i.pointer.any_down()));
-                let (frame, tex, exact) = match hover {
-                    Some(q) => scrub.hover(&path, (q.x - pic.left()) / pic.width().max(1.0)),
-                    None => (None, scrub.poster(&path), true),
+                let frac = hover.map(|q| (q.x - pic.left()) / pic.width().max(1.0));
+                let (frame, tex, exact) = match (range, frac) {
+                    (Some((a, b)), Some(x)) => scrub.at(&path, (a as f32 + x.clamp(0.0, 1.0) * (b - a) as f32).round().max(0.0) as u64),
+                    (Some((a, _)), None) => {
+                        let (_, t, _) = scrub.at(&path, a.max(0) as u64);
+                        (None, t, true)
+                    }
+                    (None, Some(x)) => scrub.hover(&path, x),
+                    (None, None) => (None, scrub.poster(&path), true),
                 };
                 if hover.is_some() && !exact {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(8));
@@ -428,17 +595,30 @@ impl Bin {
                 let info = scrub.info(&path);
                 if let (Some(q), Some(f), Some(inf)) = (hover, frame, info) {
                     p.line_segment([egui::pos2(q.x, pic.top()), egui::pos2(q.x, pic.bottom())], egui::Stroke::new(1.5, imfram::theme::highlight()));
-                    let tc = format!("{f}/{}", inf.frames);
+                    let tc = match range {
+                        Some((a, b)) => format!("{}/{}", f as i64 - a + 1, b - a + 1),
+                        None => format!("{f}/{}", inf.frames),
+                    };
                     let at = egui::pos2(pic.right() - 4.0, pic.bottom() - 3.0);
                     let g = p.layout_no_wrap(tc, FontId::monospace(10.0), Color32::WHITE);
                     p.rect_filled(egui::Rect::from_min_size(at - g.size() - egui::vec2(3.0, 1.0), g.size() + egui::vec2(6.0, 2.0)), 2.0, Color32::from_black_alpha(160));
                     p.galley(at - g.size(), g, Color32::WHITE);
                 }
+                // A whole clip's verdict, in its corner.
+                if let Some(rt) = self.items[k].rating {
+                    rating_badge(&p, pic.left_top() + egui::vec2(9.0, 9.0), rt);
+                }
                 // Name and duration under the picture.
-                let on = k == self.sel || self.chosen.contains(&path);
+                let on = k == self.sel || self.chosen.contains(&key);
                 let col = if on && focused { v.strong_text_color() } else { v.text_color() };
                 let name_y = pic.bottom() + 9.0;
-                let dur = info.map(|i| if i.frames <= 1 { "still".to_string() } else { format!("{:.1}s", i.frames as f64 / i.fps.max(1.0)) }).unwrap_or_default();
+                let dur = info
+                    .map(|i| match range {
+                        Some((a, b)) => format!("{:.1}s", (b - a + 1) as f64 / i.fps.max(1.0)),
+                        None if i.frames <= 1 => "still".to_string(),
+                        None => format!("{:.1}s", i.frames as f64 / i.fps.max(1.0)),
+                    })
+                    .unwrap_or_default();
                 let dg = p.layout_no_wrap(dur, FontId::proportional(10.0), v.weak_text_color());
                 let dw = dg.size().x;
                 p.galley(egui::pos2(rect.right() - dw - 2.0, name_y - dg.size().y / 2.0), dg, v.weak_text_color());
@@ -451,9 +631,28 @@ impl Bin {
                 } else if r.hovered() {
                     p.rect_stroke(pic, 3.0, egui::Stroke::new(1.0, v.widgets.hovered.bg_stroke.color), egui::StrokeKind::Inside);
                 }
-                self.interact(ui, &r, k, act);
+                self.interact(ui, &r, k, act, click_loads);
             }
         });
+    }
+}
+
+/// A select (green tick) or reject (red cross) mark, centred on `c`,
+/// drawn as strokes (egui's fonts have no tick glyph).
+pub fn rating_badge(p: &egui::Painter, c: egui::Pos2, r: Rating) {
+    let w = egui::Stroke::new(1.6, Color32::WHITE);
+    let v = |x: f32, y: f32| c + egui::vec2(x, y);
+    match r {
+        Rating::Select => {
+            p.circle_filled(c, 7.0, Color32::from_rgb(46, 160, 67));
+            p.line_segment([v(-3.5, 0.0), v(-1.0, 2.8)], w);
+            p.line_segment([v(-1.0, 2.8), v(3.8, -2.8)], w);
+        }
+        Rating::Reject => {
+            p.circle_filled(c, 7.0, Color32::from_rgb(200, 55, 55));
+            p.line_segment([v(-3.0, -3.0), v(3.0, 3.0)], w);
+            p.line_segment([v(-3.0, 3.0), v(3.0, -3.0)], w);
+        }
     }
 }
 

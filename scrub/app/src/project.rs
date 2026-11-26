@@ -26,7 +26,10 @@ use std::time::{Instant, SystemTime};
 /// target names a track); a version 1 file loads with them empty.
 /// 3: text clips and named text styles; older files simply have none.
 /// 4: Wobble clips (experimental); older files have none.
-pub const VERSION: u32 = 4;
+/// 5: selects mode: subclips in the bin (a range), clips' select / reject
+/// verdicts and remembered marks. An older Scrub would read a subclip as
+/// its whole clip, so it is refused there in words.
+pub const VERSION: u32 = 5;
 pub const EXT: &str = "scrub";
 /// What projects were saved as before the rename; still opened.
 pub const OLD_EXT: &str = "edify";
@@ -45,6 +48,19 @@ pub struct BinEntry {
     /// The bin it is in ("" = clips; see `bin::Item::group`).
     #[serde(default)]
     pub group: String,
+    /// A subclip's source in..out (5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<(i64, i64)>,
+    /// Selects mode's verdict (5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rating: Option<crate::bin::Rating>,
+    /// The marks the clip last had in the source viewer (5).
+    #[serde(default, skip_serializing_if = "no_marks")]
+    pub marks: Marks,
+}
+
+fn no_marks(m: &Marks) -> bool {
+    *m == Marks::default()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -276,7 +292,16 @@ impl Editor {
             .bin
             .items
             .iter()
-            .map(|it| BinEntry { path: it.path.clone(), rel: rel(&it.path), name: it.name.clone(), detail: it.detail.clone(), group: it.group.clone() })
+            .map(|it| BinEntry {
+                path: it.path.clone(),
+                rel: rel(&it.path),
+                name: it.name.clone(),
+                detail: it.detail.clone(),
+                group: it.group.clone(),
+                range: it.range,
+                rating: it.rating,
+                marks: self.remembered_marks(it),
+            })
             .collect();
         let source = self.source.as_ref().map(|c| SourceState {
             path: c.original.clone(),
@@ -463,7 +488,7 @@ impl Editor {
         self.bin.items = doc
             .bin
             .into_iter()
-            .map(|b| crate::bin::Item { path: b.path, name: b.name, detail: b.detail, group: b.group })
+            .map(|b| crate::bin::Item { path: b.path, name: b.name, detail: b.detail, group: b.group, range: b.range, rating: b.rating, marks: b.marks })
             .collect();
         self.bin.sel = 0;
         self.source = None;

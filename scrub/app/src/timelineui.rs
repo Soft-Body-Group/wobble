@@ -90,6 +90,9 @@ pub enum Payload {
     /// after another, in order.
     #[cfg_attr(not(feature = "clips"), allow(dead_code))]
     Files(Vec<std::path::PathBuf>),
+    /// Bin items with a subclip among them: each file with its in..out
+    /// (`None`: the whole clip), laid down one after another, in order.
+    Clips(Vec<(std::path::PathBuf, Option<(i64, i64)>)>),
     /// The cross dissolve, for a cut.
     Dissolve,
     /// A new text clip (the bin's generator).

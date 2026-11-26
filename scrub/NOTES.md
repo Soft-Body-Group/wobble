@@ -32,6 +32,14 @@ hints over the viewers list most of these (H hides them).
 | shift H | the viewers' readouts (frame, decode, cache…) on / off; also view menu |
 | drag a divider | resize panels; the layout (and torn-off windows) is saved in `ui.json`; window > reset layout |
 | shift 1 / 2 / 3 | focus bin / source / record |
+| ` (backtick) | edit / selects mode (also the menubar's edit · selects) |
+| **selects mode** (see "Selects mode") | |
+| click a clip (list) | view it in the one viewer |
+| S / R / U | select / reject (again: clear) / clear the verdict |
+| 1 2 3 4 | list all / selects / unmarked / rejects |
+| up / down | previous / next clip in the list |
+| M | the source in..out into the selects bin as a subclip (repeatable per clip) |
+| F | fit the viewer (R is reject here) |
 | **transport** | |
 | J K L | shuttle back / stop / forward (again: faster) |
 | space | play / stop |
@@ -48,7 +56,7 @@ hints over the viewers list most of these (H hides them).
 | 4 5 6 7 | target A1 A2 A3 M (again: off) |
 | **tools** (strip at the timeline's top left) | |
 | V | select: click, drag to move, drag edges to trim, drag a lane for a marquee |
-| M | append: the source in..out (whole clip with no marks) after the last clip, targeted tracks + linked sound, one undo; playhead to the new end |
+| M | append: the source in..out (whole clip with no marks) after the last clip, targeted tracks + linked sound, one undo; playhead to the new end. With the bin focused: its chosen clips / subclips, in bin order |
 | X | razor: click cuts (with the clip's sound), shift-click cuts every track (was R) |
 | R (over the timeline) | fit the timeline to the whole sequence |
 | N | roll: drag a cut, one clip longer and the other shorter |
@@ -114,6 +122,39 @@ hints over the viewers list most of these (H hides them).
 | cmd T | optimise the source |
 | cmd Z / cmd shift Z | undo / redo |
 | cmd Q | quit |
+
+## Selects mode
+
+`app/src/selects.rs`. ` (backtick) or the menubar's "edit · selects"
+switches. The main window drops the dock for its own layout: the bin's
+clips listed down the left (verdict badge, "n sub" / "in/out" on the
+right), the source viewer big, and the SELECTS bin of subclips along the
+bottom as hover-scrub tiles. Torn-off dock windows stay as they are, and
+the dock layout comes back untouched in edit mode.
+
+- A single click on a clip views it. S selects, R rejects (again: clears),
+  U clears; 1-4 filter the list; up / down walk it (and load).
+- I / O then M: a subclip of that range into the selects bin (no marks:
+  the whole clip). As many per clip as you like; the exact same range twice
+  is refused. A clip with no verdict becomes a select with its first
+  subclip. Subclips are named `clip #n`.
+- Every clip remembers its own in / out (both modes): leaving a clip keeps
+  its marks on its bin item, loading it puts them back. Marks put on by a
+  drop, an append or a subclip load are not remembered as the clip's own
+  (`SourceClip::set_marks`).
+- Edit mode: the selects bin is the bin's first group. A subclip tile shows
+  its in frame and scrubs only its in..out (long-GOP H.264 scrubs from the
+  240-frame strip, so a short subclip of a long H.264 is coarse until the
+  exact frames arrive; intra clips are exact). Double-click / Enter loads it
+  into the source with its range as the marks (then , . or M). A drag lays
+  it down (several chosen: one after another, `Payload::Clips`). M with
+  the bin focused (shift 1) appends the chosen items in bin order.
+- Keys that mean something else in edit mode: R (fit viewer -> reject; F
+  fits instead), M (append -> add subclip), S (slip hold, timeline only),
+  1-4 (targets -> filters).
+- Saved with the project: format 5 (`BinEntry.range / rating / marks`); an
+  older Scrub refuses a format 5 file instead of reading subclips as whole
+  clips.
 
 ## Clip browser (the load-clip UI)
 

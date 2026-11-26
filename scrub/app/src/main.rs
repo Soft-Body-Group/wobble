@@ -39,6 +39,7 @@ mod organisicator;
 mod program;
 mod recorder;
 mod project;
+mod selects;
 mod render;
 mod testapi;
 mod text;
@@ -1053,6 +1054,17 @@ impl ApplicationHandler for App {
                 self.editor.bin_add(&p);
             }
             self.editor.bin_set_tiles(true);
+            if let (Some(gpu), Some(win)) = (&self.gpu, &mut self.win) {
+                for _ in 0..200 {
+                    let _ = win.offscreen(gpu, &mut self.editor);
+                    std::thread::sleep(std::time::Duration::from_millis(15));
+                }
+            }
+        }
+        // SCRUB_SHOT_SELECTS=1: the shot in selects mode, the clip selected
+        // and two subclips of it in the selects bin (their tiles given time).
+        if media::sys::var_os("SHOT_SELECTS").filter(|_| self.shot.is_some()).is_some() {
+            self.editor.shot_selects();
             if let (Some(gpu), Some(win)) = (&self.gpu, &mut self.win) {
                 for _ in 0..200 {
                     let _ = win.offscreen(gpu, &mut self.editor);
