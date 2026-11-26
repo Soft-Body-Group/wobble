@@ -52,6 +52,7 @@ mod tour;
 mod transport;
 mod viewer;
 mod viewnav;
+mod wake;
 #[cfg(feature = "wobble")]
 mod testwobble;
 #[cfg(feature = "wobble")]
@@ -61,7 +62,7 @@ use imfram::shell::{Gpu, UiWindow};
 use std::path::PathBuf;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
 struct App {
@@ -90,6 +91,10 @@ struct App {
     title: String,
     /// `--play SECS [--speed S]`: play offscreen at a paced 60 Hz, report.
     play: Option<(f64, f64)>,
+    /// Wakes the idle loop for repaints asked from other threads or for
+    /// later (wake.rs), and for scripting calls.
+    wake: wake::Wake,
+    proxy: EventLoopProxy<()>,
 }
 
 impl App {
@@ -1004,6 +1009,16 @@ impl ApplicationHandler for App {
         }
         editor::style(win.ctx());
         self.editor.attach_window(win.window.clone(), win.ctx().clone(), headless);
+        self.wake.install(win.ctx(), self.proxy.clone());
+        if let Some(host) = &self.editor.api {
+            // A call wakes the loop straight through its proxy, and
+            // about_to_wait answers it: not through egui, whose repaint
+            // bookkeeping stands still while an occluded window skips frames.
+            let proxy = self.proxy.clone();
+            host.set_waker(move || {
+                let _ = proxy.send_event(());
+            });
+        }
         self.editor.device = Some(gpu.device.clone());
         self.gpu = Some(gpu);
         self.win = Some(win);
@@ -1169,10 +1184,21 @@ impl ApplicationHandler for App {
         }
         #[cfg(feature = "fold")]
         self.editor.fold_between(el);
+        let mut next = None;
         if let Some(win) = &mut self.win {
+            // Scripting calls are answered here, not only in a drawn frame:
+            // an occluded or minimized window may not be asked to draw.
+            if self.editor.api_drain() {
+                win.request_repaint();
+            }
+            let (due, at) = self.wake.due(std::time::Instant::now());
+            if due {
+                win.request_repaint();
+            }
+            next = at;
             win.poll();
         }
-        el.set_control_flow(ControlFlow::Wait);
+        el.set_control_flow(next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 }
 
@@ -1309,7 +1335,8 @@ fn main() {
         }
     }
     let el = EventLoop::new().expect("event loop");
-    let mut app = App { gpu: None, win: None, editor, shot, test_optimise: test_opt, test_keys, test_mouse, test_tools, test_api, test_wobble, test_project, test_colour, test_record, test_realtime, title: String::new(), play: play.map(|p| (p, speed)) };
+    let proxy = el.create_proxy();
+    let mut app = App { gpu: None, win: None, editor, shot, test_optimise: test_opt, test_keys, test_mouse, test_tools, test_api, test_wobble, test_project, test_colour, test_record, test_realtime, title: String::new(), play: play.map(|p| (p, speed)), wake: wake::Wake::default(), proxy };
     el.run_app(&mut app).expect("run");
 }
 

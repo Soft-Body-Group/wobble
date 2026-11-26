@@ -100,11 +100,14 @@ impl Editor {
         Ok(p)
     }
 
-    /// Answer every call that arrived since the last UI pass.
-    pub(crate) fn api_drain(&mut self) {
-        let Some(host) = self.api.take() else { return };
+    /// Answer every call that arrived since the last look; whether any did.
+    /// Called at the top of each UI pass and between events (main.rs), so
+    /// a call is answered even while the window is not drawing.
+    pub(crate) fn api_drain(&mut self) -> bool {
+        let Some(host) = self.api.take() else { return false };
         let calls: Vec<Call> = host.rx.try_iter().collect();
         self.api = Some(host);
+        let any = !calls.is_empty();
         for call in calls {
             if call.method == "viewer_capture" {
                 self.api_capture(call);
@@ -113,6 +116,7 @@ impl Editor {
             let r = self.api_recorded(&call.method, &call.params);
             call.answer(r);
         }
+        any
     }
 
     /// One call as one undo step: the history is left alone while it runs,
