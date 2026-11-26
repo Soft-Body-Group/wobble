@@ -394,7 +394,9 @@ impl Editor {
         }
         let t = track?;
         self.drop_edit(frame, Some(t), insert);
-        self.rec.seq.tracks[t].clips.iter().find(|c| c.start == frame).map(|c| c.len)
+        // A sound file dropped on a video row lands on its paired audio track.
+        let on = if model::VIDEO_TRACKS.contains(&t) && self.source.as_ref().is_some_and(|c| c.info.audio_only) { model::audio_of(t) } else { t };
+        self.rec.seq.tracks[on].clips.iter().find(|c| c.start == frame).map(|c| c.len)
     }
 
     /// Insert / overwrite the source at `frame` on the dropped-on row:

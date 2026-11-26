@@ -141,7 +141,7 @@ impl Sequence {
         if let Some(i) = self.media.iter().position(|m| m.generated) {
             return i;
         }
-        self.media.push(Media { path: PathBuf::new(), name: "text".into(), frames: i64::MAX / 4, fps: self.fps, has_audio: false, width: 0, height: 0, generated: true });
+        self.media.push(Media { path: PathBuf::new(), name: "text".into(), frames: i64::MAX / 4, fps: self.fps, has_audio: false, width: 0, height: 0, generated: true, audio_only: false });
         self.media.len() - 1
     }
 

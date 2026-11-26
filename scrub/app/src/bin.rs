@@ -7,6 +7,14 @@
 //! Keys while the panel has focus: up / down move the selection, enter
 //! loads the item into the source viewer, backspace takes it out of the bin.
 //!
+//! BINS YOU MAKE: N (or "+ bin") makes one, holding the chosen clips if
+//! any, and names it straight away (type, Enter; Esc keeps the default
+//! name). F2 renames the selected clip's bin. Drag clips onto a bin's
+//! header to move them there (from the clip browser too: they come in
+//! there). Right-click a header to rename or delete a bin (its clips go
+//! back to "clips"), a clip to move it. They save with the project, empty
+//! ones too, and sit after the selects and the post's own bin.
+//!
 //! Two views, kept in ui.json: a LIST, or TILES (a size slider beside the
 //! switch). A tile shows the clip's poster; moving the pointer across it
 //! scrubs the clip (Premiere / Resolve style) with a thin playhead line,
@@ -28,7 +36,8 @@ pub struct Item {
     pub detail: String,
     /// The bin it is in: "" for clips brought in by hand, "post: …" for a
     /// post's own rushes, "rushes/2026-11-11" for the rushes folders,
-    /// `SELECTS` for subclips marked in selects mode.
+    /// `SELECTS` for subclips marked in selects mode, or the name of a bin
+    /// the user made (`Bin::bins`).
     pub group: String,
     /// A SUBCLIP: the source frames in..out (both included, frame indices
     /// as the source marks count them). `None`: the whole file.
@@ -182,6 +191,15 @@ pub struct Bin {
     pub scrub: Option<crate::binthumbs::Scrub>,
     /// Last frame's tiles on screen (tests, drags).
     pub tile_rects: Vec<(PathBuf, egui::Rect)>,
+    /// Bins the user made, in the order they were made (an item's `group`
+    /// names one). Kept even when empty.
+    pub bins: Vec<String>,
+    /// A bin being named: (its name now, the text typed so far).
+    pub naming: Option<(String, String)>,
+    /// Last frame's bin headers on screen: (group, rect), for drops.
+    pub header_rects: Vec<(String, egui::Rect)>,
+    /// Something to say in the HUD (a refused name, a move).
+    pub note: Option<String>,
 }
 
 /// What the panel asks the editor to do.
@@ -197,13 +215,29 @@ pub enum Action {
 fn is_media(e: &files::Entry) -> bool {
     match e.src.kind {
         Kind::Dir | Kind::Movie | Kind::Sequence => true,
-        Kind::File => media::sequence::is_image(&e.src.path),
+        Kind::File => media::sequence::is_image(&e.src.path) || media::audiofile::is_audio(&e.src.path),
     }
 }
 
 impl Bin {
     pub fn new(dir: PathBuf) -> Self {
-        Self { items: Vec::new(), sel: 0, dir, scan: None, folded: Default::default(), tiles: false, tile: 160.0, prefs_in: false, chosen: Default::default(), scrub: None, tile_rects: Vec::new() }
+        Self {
+            items: Vec::new(),
+            sel: 0,
+            dir,
+            scan: None,
+            folded: Default::default(),
+            tiles: false,
+            tile: 160.0,
+            prefs_in: false,
+            chosen: Default::default(),
+            scrub: None,
+            tile_rects: Vec::new(),
+            bins: Vec::new(),
+            naming: None,
+            header_rects: Vec::new(),
+            note: None,
+        }
     }
 
     /// Where the next browse starts.
@@ -281,30 +315,186 @@ impl Bin {
         self.sel = self.clip(path).unwrap_or(0);
     }
 
+    /// Where bin `g` sorts: (rank, then the made bins' own order).
+    fn rank(&self, g: &str) -> (u8, usize) {
+        if g == SELECTS {
+            (0, 0)
+        } else if g.starts_with(POST_PREFIX) {
+            (1, 0)
+        } else if let Some(i) = self.bins.iter().position(|b| b == g) {
+            (2, i)
+        } else if g.is_empty() {
+            (4, 0)
+        } else {
+            (3, 0)
+        }
+    }
+
     /// Bins in order: the selects (subclips, in the order they were
-    /// marked), the post's own, the rushes newest first, then clips
-    /// brought in by hand; items by name within a bin, except the
-    /// hand-brought ones, which keep the order they came in (an import of
-    /// several clips lands in the tray's order).
+    /// marked), the post's own, the bins the user made (in the order they
+    /// were made), the rushes newest first, then clips brought in by hand;
+    /// items by name within a bin, except the hand-brought, selects and
+    /// made bins, which keep the order they came in (an import of several
+    /// clips lands in the tray's order).
     fn sort(&mut self) {
-        fn rank(g: &str) -> u8 {
-            if g == SELECTS {
-                0
-            } else if g.starts_with(POST_PREFIX) {
-                1
-            } else if g.is_empty() {
-                3
-            } else {
-                2
+        let mut items = std::mem::take(&mut self.items);
+        let arrival = |r: (u8, usize)| matches!(r.0, 0 | 2 | 4);
+        items.sort_by(|a, b| {
+            let (ra, rb) = (self.rank(&a.group), self.rank(&b.group));
+            ra.cmp(&rb)
+                .then_with(|| if ra.0 == 3 { b.group.cmp(&a.group) } else { a.group.cmp(&b.group) })
+                .then_with(|| if arrival(ra) { std::cmp::Ordering::Equal } else { files::natural(&a.name, &b.name) })
+        });
+        self.items = items;
+    }
+
+    // --- bins the user makes ------------------------------------------------
+
+    /// A bin can be called `name`: something, not a name another bin has
+    /// (made, rushes, post, selects), and not the "clips" bin's.
+    fn name_ok(&self, name: &str, but: Option<&str>) -> Result<(), String> {
+        let n = name.trim();
+        if n.is_empty() {
+            return Err("a bin needs a name".into());
+        }
+        if n == SELECTS || n == "clips" || n.starts_with(POST_PREFIX.trim_end()) {
+            return Err(format!("\"{n}\" is a bin Scrub keeps; pick another name"));
+        }
+        let taken = self.bins.iter().any(|b| b == n && Some(b.as_str()) != but) || self.items.iter().any(|it| it.group == n && Some(it.group.as_str()) != but);
+        if taken {
+            return Err(format!("there is already a bin called \"{n}\""));
+        }
+        Ok(())
+    }
+
+    /// Make a bin ("bin 1", "bin 2"…), holding the chosen items if there
+    /// are any, and start naming it. Returns its name.
+    pub fn new_bin(&mut self) -> String {
+        let name = (1..).map(|i| format!("bin {i}")).find(|n| self.name_ok(n, None).is_ok()).expect("a free name");
+        self.bins.push(name.clone());
+        self.folded.remove(&name);
+        let keys: Vec<ItemKey> = self.items.iter().filter(|it| self.chosen.contains(&it.key())).map(|it| it.key()).collect();
+        if !keys.is_empty() {
+            self.move_to(&keys, &name);
+        }
+        self.naming = Some((name.clone(), name.clone()));
+        name
+    }
+
+    /// Rename a made bin; its items go with it.
+    pub fn rename_bin(&mut self, old: &str, new: &str) -> Result<(), String> {
+        let new = new.trim().to_string();
+        if old == new {
+            return Ok(());
+        }
+        let Some(i) = self.bins.iter().position(|b| b == old) else { return Err(format!("\"{old}\" is not a bin you made")) };
+        self.name_ok(&new, Some(old))?;
+        self.bins[i] = new.clone();
+        for it in self.items.iter_mut().filter(|it| it.group == old) {
+            it.group = new.clone();
+        }
+        if self.folded.remove(old) {
+            self.folded.insert(new);
+        }
+        Ok(())
+    }
+
+    /// Delete a made bin: its items go back to "clips" (nothing leaves the
+    /// project). Returns how many moved.
+    pub fn delete_bin(&mut self, name: &str) -> usize {
+        let Some(i) = self.bins.iter().position(|b| b == name) else { return 0 };
+        let cur = self.items.get(self.sel).map(|it| it.key());
+        self.bins.remove(i);
+        self.folded.remove(name);
+        let mut n = 0;
+        for it in self.items.iter_mut().filter(|it| it.group == name) {
+            it.group.clear();
+            n += 1;
+        }
+        self.sort();
+        self.sel = cur.and_then(|c| self.items.iter().position(|it| it.key() == c)).unwrap_or(0);
+        n
+    }
+
+    /// Bins items can be moved into: "clips" ("") and the made bins.
+    pub fn takes_moves(&self, g: &str) -> bool {
+        g.is_empty() || self.bins.iter().any(|b| b == g)
+    }
+
+    /// Move items into bin `g` ("" = clips, or a made bin). The selection
+    /// follows them.
+    pub fn move_to(&mut self, keys: &[ItemKey], g: &str) -> usize {
+        if !self.takes_moves(g) {
+            return 0;
+        }
+        let cur = self.items.get(self.sel).map(|it| it.key());
+        let mut n = 0;
+        for it in self.items.iter_mut().filter(|it| keys.contains(&it.key())) {
+            if it.group != g {
+                it.group = g.to_string();
+                n += 1;
             }
         }
-        let arrival = |g: &str| g.is_empty() || g == SELECTS;
-        self.items.sort_by(|a, b| {
-            rank(&a.group)
-                .cmp(&rank(&b.group))
-                .then_with(|| if rank(&a.group) == 2 { b.group.cmp(&a.group) } else { a.group.cmp(&b.group) })
-                .then_with(|| if arrival(&a.group) { std::cmp::Ordering::Equal } else { files::natural(&a.name, &b.name) })
-        });
+        self.folded.remove(g);
+        self.sort();
+        self.sel = cur.and_then(|c| self.items.iter().position(|it| it.key() == c)).unwrap_or(0);
+        n
+    }
+
+    /// Files and subclips dropped on bin `g`'s header: those already in the
+    /// bin move there, new files come in there.
+    pub fn drop_into(&mut self, keys: &[ItemKey], g: &str) -> usize {
+        if !self.takes_moves(g) {
+            return 0;
+        }
+        for (p, r) in keys {
+            if r.is_none() && self.clip(p).is_none() {
+                let name = Self::name_of(p);
+                self.items.push(Item { path: p.clone(), name, group: g.to_string(), ..Default::default() });
+            }
+        }
+        self.move_to(keys, g);
+        keys.len()
+    }
+
+    /// The made bins, put back from a project (empty ones included).
+    pub fn set_bins(&mut self, bins: Vec<String>) {
+        self.bins = bins;
+        self.naming = None;
+        self.sort();
+    }
+
+    /// Bins on screen in order: (group, first item, items), the made bins
+    /// listed even when empty.
+    pub fn sections(&self) -> Vec<(String, usize, usize)> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < self.items.len() {
+            let g = self.items[i].group.clone();
+            let n = self.items[i..].iter().take_while(|x| x.group == g).count();
+            out.push((g, i, n));
+            i += n;
+        }
+        for b in &self.bins {
+            if !out.iter().any(|(g, _, _)| g == b) {
+                // An empty bin sits where its items would.
+                let at = self.items.iter().position(|it| self.rank(&it.group) > self.rank(b)).unwrap_or(self.items.len());
+                out.push((b.clone(), at, 0));
+            }
+        }
+        out.sort_by_key(|(g, at, _)| (self.rank(g), *at));
+        // Rushes bins keep their newest-first order (the sort put them so).
+        out
+    }
+
+    /// Commit the name being typed (Enter, or the field let go).
+    fn finish_naming(&mut self) {
+        let Some((old, typed)) = self.naming.take() else { return };
+        match self.rename_bin(&old, &typed) {
+            Ok(()) if old != typed.trim() => self.note = Some(format!("bin renamed \"{}\"", typed.trim())),
+            Ok(()) => {}
+            Err(e) => self.note = Some(e),
+        }
     }
 
     /// List rushes folders in the background; their bins replace the rushes
@@ -332,7 +522,8 @@ impl Bin {
         let Some(rx) = &self.scan else { return false };
         let Ok(found) = rx.try_recv() else { return false };
         self.scan = None;
-        let keep = |g: &str| g.is_empty() || g == SELECTS || g.starts_with(POST_PREFIX);
+        let bins = self.bins.clone();
+        let keep = |g: &str| g.is_empty() || g == SELECTS || g.starts_with(POST_PREFIX) || bins.iter().any(|b| b == g);
         let cur = self.items.get(self.sel).map(|i| i.key());
         // A rush's verdict and remembered marks survive a re-listing.
         let mut was: std::collections::HashMap<PathBuf, (Option<Rating>, model::Marks)> = Default::default();
@@ -352,7 +543,7 @@ impl Bin {
         // A big library opens folded but for the newest day, so the panel
         // never lays out thousands of rows (a bin opens with a click).
         if self.items.len() > FOLD_OVER {
-            let mut groups: Vec<String> = self.items.iter().map(|i| i.group.clone()).filter(|g| !g.is_empty() && g != SELECTS && !g.starts_with(POST_PREFIX)).collect();
+            let mut groups: Vec<String> = self.items.iter().map(|i| i.group.clone()).filter(|g| !keep(g)).collect();
             groups.dedup();
             for g in groups.into_iter().skip(1) {
                 self.folded.insert(g);
@@ -385,6 +576,17 @@ impl Bin {
             self.items.remove(self.sel);
             self.sel = self.sel.min(self.items.len().saturating_sub(1));
         }
+        if take(ui, Key::N) {
+            let name = self.new_bin();
+            let n = self.items.iter().filter(|it| it.group == name).count();
+            self.note = Some(if n > 0 { format!("{name}: {n} clip(s) moved in; type a name, Enter") } else { format!("{name} made; type a name, Enter") });
+        }
+        if take(ui, Key::F2) {
+            match self.items.get(self.sel).map(|it| it.group.clone()).filter(|g| self.bins.contains(g)) {
+                Some(g) => self.naming = Some((g.clone(), g)),
+                None => self.note = Some("F2 renames a bin you made (select a clip in one)".into()),
+            }
+        }
         Action::None
     }
 
@@ -396,6 +598,10 @@ impl Bin {
             let b = ui.button("browse…  (cmd I)").on_hover_text("the clip browser (seq_manip's): Enter loads a clip into the source and the bin");
             if b.clicked() {
                 act = Action::Browse;
+            }
+            let nb = ui.button("+ bin").on_hover_text("a new bin, holding the chosen clips (N with the bin focused); drag clips onto a bin's name to move them");
+            if nb.clicked() {
+                self.new_bin();
             }
         });
         ui.horizontal(|ui| {
@@ -432,20 +638,56 @@ impl Bin {
                 self.poll_scrub(&ui.ctx().clone());
             }
             egui::ScrollArea::vertical().id_salt("bin-items").auto_shrink([false, false]).show(ui, |ui| {
-                let mut i = 0;
-                while i < self.items.len() {
-                    let g = self.items[i].group.clone();
-                    let n = self.items[i..].iter().take_while(|x| x.group == g).count();
+                self.header_rects.clear();
+                let dragging = egui::DragAndDrop::has_payload_of_type::<crate::timelineui::Payload>(ui.ctx());
+                for (g, i, n) in self.sections() {
                     let shut = self.folded.contains(&g);
-                    let title = if g.is_empty() { "clips".to_string() } else if g == SELECTS { "selects (subclips: M in selects mode)".to_string() } else { g.clone() };
-                    let head = format!("{} {title}  ({n})", if shut { "+" } else { "-" });
-                    let col = if g.starts_with(POST_PREFIX) { imfram::theme::highlight() } else { ui.visuals().strong_text_color() };
-                    if ui.add(egui::Label::new(egui::RichText::new(head).color(col).small()).sense(Sense::click())).clicked() {
-                        if shut {
-                            self.folded.remove(&g);
-                        } else {
-                            self.folded.insert(g.clone());
+                    let made = self.bins.contains(&g);
+                    if self.naming.as_ref().is_some_and(|(b, _)| *b == g) {
+                        let r = self.naming_ui(ui);
+                        self.header_rects.push((g.clone(), r));
+                    } else {
+                        let title = if g.is_empty() { "clips".to_string() } else if g == SELECTS { "selects (subclips: M in selects mode)".to_string() } else { g.clone() };
+                        let head = format!("{} {title}  ({n})", if shut { "+" } else { "-" });
+                        let col = if g.starts_with(POST_PREFIX) { imfram::theme::highlight() } else { ui.visuals().strong_text_color() };
+                        let hr = ui.add(egui::Label::new(egui::RichText::new(head).color(col).small()).sense(Sense::click()));
+                        // Where a drag of clips would land.
+                        let row = egui::Rect::from_min_max(hr.rect.min, egui::pos2(ui.max_rect().right(), hr.rect.max.y));
+                        if dragging && self.takes_moves(&g) && ui.rect_contains_pointer(row) {
+                            ui.painter().rect_stroke(row.expand(1.0), 2.0, egui::Stroke::new(1.5, imfram::theme::highlight()), egui::StrokeKind::Outside);
                         }
+                        self.header_rects.push((g.clone(), row));
+                        if hr.clicked() {
+                            if shut {
+                                self.folded.remove(&g);
+                            } else {
+                                self.folded.insert(g.clone());
+                            }
+                        }
+                        if made && hr.double_clicked() {
+                            self.naming = Some((g.clone(), g.clone()));
+                        }
+                        hr.context_menu(|ui| {
+                            if made {
+                                if ui.button("rename  (F2)").clicked() {
+                                    self.naming = Some((g.clone(), g.clone()));
+                                    ui.close();
+                                }
+                                if ui.button("delete bin (its clips go to clips)").clicked() {
+                                    let k = self.delete_bin(&g);
+                                    self.note = Some(format!("bin \"{g}\" deleted; {k} clip(s) back in clips"));
+                                    ui.close();
+                                }
+                                ui.separator();
+                            }
+                            if ui.button("new bin  (N)").clicked() {
+                                self.new_bin();
+                                ui.close();
+                            }
+                        });
+                    }
+                    if n == 0 && !shut && made {
+                        ui.weak("  empty: drag clips onto its name");
                     }
                     if !shut {
                         if self.tiles {
@@ -462,10 +704,34 @@ impl Bin {
                             }
                         }
                     }
-                    i += n;
                 }
             });
         act
+    }
+
+    /// The name field of the bin being named: Enter or a click away keeps
+    /// what was typed, Esc the name it had.
+    fn naming_ui(&mut self, ui: &mut Ui) -> egui::Rect {
+        let Some((_, typed)) = &mut self.naming else { return egui::Rect::NOTHING };
+        let id = ui.id().with("bin-naming");
+        let r = ui.add(egui::TextEdit::singleline(typed).id(id).desired_width(ui.available_width().min(220.0)).font(egui::TextStyle::Small));
+        if !r.has_focus() && !r.lost_focus() {
+            r.request_focus();
+            // Select it all, so typing replaces the default name.
+            if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
+                let n = typed.chars().count();
+                st.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(n))));
+                st.store(ui.ctx(), id);
+            }
+        }
+        if r.lost_focus() {
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                self.naming = None;
+            } else {
+                self.finish_naming();
+            }
+        }
+        r.rect
     }
 }
 
@@ -517,8 +783,30 @@ impl Bin {
             }
         }
         if r.double_clicked() {
-            *act = Action::Load(key.0, key.1);
+            *act = Action::Load(key.0.clone(), key.1);
         }
+        r.context_menu(|ui| {
+            // The chosen clips when this is one of them, else this one.
+            let keys: Vec<ItemKey> = if self.chosen.contains(&key) { self.items.iter().filter(|it| self.chosen.contains(&it.key())).map(|it| it.key()).collect() } else { vec![key.clone()] };
+            ui.label(egui::RichText::new(if keys.len() == 1 { "move to".to_string() } else { format!("move {} to", keys.len()) }).small().weak());
+            let mut to = None;
+            for g in std::iter::once(String::new()).chain(self.bins.iter().cloned()) {
+                let here = keys.iter().all(|k| self.items.iter().any(|it| it.key() == *k && it.group == g));
+                if ui.add_enabled(!here, egui::Button::new(if g.is_empty() { "clips".to_string() } else { g.clone() })).clicked() {
+                    to = Some(g);
+                }
+            }
+            if ui.button("new bin…").clicked() {
+                self.chosen = keys.iter().cloned().collect();
+                self.new_bin();
+                ui.close();
+            }
+            if let Some(g) = to {
+                let n = self.move_to(&keys, &g);
+                self.note = Some(format!("{n} clip(s) moved to {}", if g.is_empty() { "clips" } else { &g }));
+                ui.close();
+            }
+        });
     }
 
     /// Hover-scrub frames: made on first use, polled once a frame.
@@ -722,5 +1010,92 @@ mod tests {
         b.add_to(Path::new("/m/rushes/2026-11-10/a.mp4"), String::new(), "post: Teaser");
         let groups: Vec<&str> = b.items.iter().map(|i| i.group.as_str()).collect();
         assert_eq!(groups, ["post: Teaser", "rushes/2026-11-12", ""]);
+    }
+
+    fn three() -> Bin {
+        let mut b = Bin::new(PathBuf::from("/"));
+        b.add_to(Path::new("/m/rushes/2026-11-10/a.mp4"), String::new(), "rushes/2026-11-10");
+        b.add(Path::new("/x/c.mov"), String::new());
+        b.add(Path::new("/x/song.mp3"), String::new());
+        b
+    }
+
+    fn groups(b: &Bin) -> Vec<(String, usize)> {
+        b.sections().into_iter().map(|(g, _, n)| (g, n)).collect()
+    }
+
+    #[test]
+    fn a_new_bin_takes_the_chosen_clips_and_sits_after_the_post() {
+        let mut b = three();
+        b.add_to(Path::new("/m/rushes/2026-11-10/p.mp4"), String::new(), "post: Teaser");
+        b.chosen = [(PathBuf::from("/x/song.mp3"), None)].into();
+        let name = b.new_bin();
+        assert_eq!(name, "bin 1");
+        assert_eq!(b.naming, Some(("bin 1".into(), "bin 1".into())));
+        let g = groups(&b);
+        assert_eq!(g, [("post: Teaser".into(), 1), ("bin 1".into(), 1), ("rushes/2026-11-10".into(), 1), ("".into(), 1)]);
+        // An empty one is listed too, after the first.
+        b.chosen.clear();
+        assert_eq!(b.new_bin(), "bin 2");
+        assert_eq!(groups(&b)[2], ("bin 2".into(), 0));
+    }
+
+    #[test]
+    fn renaming_a_bin_takes_its_clips_and_refuses_a_taken_name() {
+        let mut b = three();
+        b.chosen = [(PathBuf::from("/x/c.mov"), None)].into();
+        b.new_bin();
+        b.rename_bin("bin 1", "  music ").unwrap();
+        assert_eq!(b.items.iter().find(|i| i.path == Path::new("/x/c.mov")).unwrap().group, "music");
+        assert!(b.rename_bin("music", "rushes/2026-11-10").is_err(), "a rushes bin's name");
+        assert!(b.rename_bin("music", SELECTS).is_err());
+        assert!(b.rename_bin("music", "").is_err());
+        b.chosen.clear();
+        b.new_bin();
+        assert!(b.rename_bin("bin 1", "music").is_err(), "two bins one name");
+        // Typed into the field: Enter commits, a refusal is said.
+        b.naming = Some(("bin 1".into(), "music".into()));
+        b.finish_naming();
+        assert!(b.note.take().unwrap().contains("already"));
+        assert!(b.bins.contains(&"bin 1".to_string()));
+    }
+
+    #[test]
+    fn deleting_a_bin_puts_its_clips_back_in_clips() {
+        let mut b = three();
+        b.chosen = [(PathBuf::from("/x/c.mov"), None), (PathBuf::from("/x/song.mp3"), None)].into();
+        b.new_bin();
+        assert_eq!(b.delete_bin("bin 1"), 2);
+        assert!(b.bins.is_empty());
+        assert_eq!(b.items.len(), 3, "nothing leaves the project");
+        assert!(b.items.iter().filter(|i| i.path.starts_with("/x")).all(|i| i.group.is_empty()));
+    }
+
+    #[test]
+    fn a_drop_on_a_bin_moves_clips_in_and_brings_new_ones() {
+        let mut b = three();
+        b.chosen.clear();
+        let g = b.new_bin();
+        let n = b.drop_into(&[(PathBuf::from("/x/c.mov"), None), (PathBuf::from("/new/vo.wav"), None)], &g);
+        assert_eq!(n, 2);
+        assert_eq!(groups(&b)[0], (g.clone(), 2));
+        // Not into a rushes bin (a re-listing would drop it).
+        assert_eq!(b.drop_into(&[(PathBuf::from("/x/c.mov"), None)], "rushes/2026-11-10"), 0);
+        // Back to clips.
+        b.move_to(&[(PathBuf::from("/x/c.mov"), None)], "");
+        assert_eq!(b.items.iter().find(|i| i.path == Path::new("/x/c.mov")).unwrap().group, "");
+    }
+
+    #[test]
+    fn a_rushes_relisting_keeps_made_bins() {
+        let mut b = three();
+        b.chosen = [(PathBuf::from("/m/rushes/2026-11-10/a.mp4"), None)].into();
+        let g = b.new_bin();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(vec![Item { path: "/m/rushes/2026-11-10/a.mp4".into(), name: "a.mp4".into(), group: "rushes/2026-11-10".into(), ..Default::default() }]).unwrap();
+        b.scan = Some(rx);
+        assert!(b.poll_scan());
+        assert_eq!(b.items.iter().filter(|i| i.path == Path::new("/m/rushes/2026-11-10/a.mp4")).count(), 1);
+        assert_eq!(b.items.iter().find(|i| i.path == Path::new("/m/rushes/2026-11-10/a.mp4")).unwrap().group, g);
     }
 }

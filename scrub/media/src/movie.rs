@@ -218,6 +218,7 @@ impl Movie {
             has_alpha,
             has_audio: ictx.streams().best(ff::media::Type::Audio).is_some(),
             intra,
+            audio_only: false,
         };
         Ok(Self { threads, catchup: if intra { 0 } else { MAX_CATCHUP }, info, idle: Mutex::new(Vec::new()) })
     }

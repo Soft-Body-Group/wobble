@@ -5,7 +5,7 @@ const F24: Fps = Fps::new(24, 1);
 fn seq() -> Sequence {
     let mut s = Sequence::new(F24);
     for (i, audio) in [(0, true), (1, false)] {
-        s.add_media(Media { path: format!("/m{i}.mov").into(), name: format!("m{i}"), frames: 1000, fps: F24, has_audio: audio, width: 64, height: 36, generated: false });
+        s.add_media(Media { path: format!("/m{i}.mov").into(), name: format!("m{i}"), frames: 1000, fps: F24, has_audio: audio, width: 64, height: 36, generated: false, audio_only: false });
     }
     s
 }
@@ -64,7 +64,7 @@ fn edit_points_step_through_every_cut() {
 #[test]
 fn a_source_at_another_rate_plays_at_its_own_speed() {
     let mut s = seq();
-    let m = s.add_media(Media { path: "/pal.mov".into(), name: "pal".into(), frames: 1000, fps: Fps::new(25, 1), has_audio: false, width: 64, height: 36, generated: false });
+    let m = s.add_media(Media { path: "/pal.mov".into(), name: "pal".into(), frames: 1000, fps: Fps::new(25, 1), has_audio: false, width: 64, height: 36, generated: false, audio_only: false });
     s.overwrite(Source::new(m, 0, 48), 0, Targets::default());
     assert_eq!(s.video_at(24).unwrap().1, 25, "one second in is source frame 25");
 }
@@ -644,7 +644,7 @@ fn speed_about_a_point_keeps_that_point_still() {
 fn a_wobble_clip_plays_its_active_render_with_the_same_source_frames() {
     let mut s = seq();
     s.overwrite(Source::new(0, 100, 20), 0, Targets { video: Some(V1), audio: None });
-    let r1 = s.add_media(Media { path: "/w/v1/out.0080.exr".into(), name: "v1".into(), frames: 60, fps: F24, has_audio: false, width: 64, height: 36, generated: false });
+    let r1 = s.add_media(Media { path: "/w/v1/out.0080.exr".into(), name: "v1".into(), frames: 60, fps: F24, has_audio: false, width: 64, height: 36, generated: false, audio_only: false });
     s.tracks[V1].clips[0].wobble = Some(WobbleRef { uid: "u".into(), versions: vec![1, 2], active: 0, source: 0, first: 80, len: 60, renders: vec![WobbleRender { version: 1, media: r1, first: 80 }] });
     assert!(s.wobble_activate(V1, 0, 1));
     let c = &s.tracks[V1].clips[0];
@@ -664,7 +664,7 @@ fn a_wobble_clip_plays_its_active_render_with_the_same_source_frames() {
 /// A 30 fps clip (media 2) in the 24 fps sequence.
 fn seq_with_30() -> Sequence {
     let mut s = seq();
-    s.add_media(Media { path: "/m30.mov".into(), name: "m30".into(), frames: 1000, fps: Fps::new(30, 1), has_audio: true, width: 64, height: 36, generated: false });
+    s.add_media(Media { path: "/m30.mov".into(), name: "m30".into(), frames: 1000, fps: Fps::new(30, 1), has_audio: true, width: 64, height: 36, generated: false, audio_only: false });
     s
 }
 
@@ -709,4 +709,20 @@ fn a_conformed_sequence_fits_source_frames_one_to_one() {
     assert!(f.conform && (f.speed - 1.0).abs() < 1e-12);
     s.overwrite(f, 0, Targets::default());
     assert_eq!((0..50).map(|t| s.video_at(t).unwrap().1).collect::<Vec<_>>(), (0..50).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_sound_file_lands_on_the_audio_track_alone() {
+    let mut s = seq();
+    let m = s.add_media(Media { path: "/song.mp3".into(), name: "song.mp3".into(), frames: 500, fps: F24, has_audio: true, width: 960, height: 540, generated: false, audio_only: true });
+    s.overwrite(Source::new(0, 0, 100), 0, Targets::default());
+    s.overwrite(Source::new(m, 0, 50), 20, Targets::default());
+    // V1 keeps m0's picture right through; A1 takes the song over 20..70.
+    assert_eq!(spans(&s, V1), vec![(0, 100, 0, 0)]);
+    assert_eq!(spans(&s, A1), vec![(0, 20, 0, 0), (20, 50, m, 0), (70, 30, 0, 70)]);
+    // Onto the music track with no video target at all.
+    s.insert(Source::new(m, 100, 24), 0, Targets { video: None, audio: Some(M) });
+    assert_eq!(spans(&s, M), vec![(0, 24, m, 100)]);
+    assert!(s.tracks[V1].clips.iter().all(|c| c.media != m));
+    assert!(s.is_consistent());
 }

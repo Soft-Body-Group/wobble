@@ -518,7 +518,7 @@ impl Editor {
     fn wobble_landed(&mut self, uid: &str, v: u32, file: &Path, first: i64, len: i64) {
         let Some(w) = self.rec.seq.tracks.iter().flat_map(|t| &t.clips).filter_map(|c| c.wobble.as_ref()).find(|w| w.uid == uid).cloned() else { return };
         let src = self.rec.seq.media[w.source].clone();
-        let mi = self.rec.seq.add_media(Media { path: file.to_path_buf(), name: format!("{} wobble v{v:03}", src.name), frames: len, fps: src.fps, has_audio: false, width: src.width, height: src.height, generated: false });
+        let mi = self.rec.seq.add_media(Media { path: file.to_path_buf(), name: format!("{} wobble v{v:03}", src.name), frames: len, fps: src.fps, has_audio: false, width: src.width, height: src.height, generated: false, audio_only: false });
         let places: Vec<(usize, usize)> = self.rec.seq.tracks.iter().enumerate().flat_map(|(t, tr)| tr.clips.iter().enumerate().filter(|(_, c)| c.wobble.as_ref().is_some_and(|x| x.uid == uid)).map(move |(i, _)| (t, i))).collect();
         for (t, i) in places {
             if let Some(x) = self.rec.seq.tracks[t].clips[i].wobble.as_mut() {

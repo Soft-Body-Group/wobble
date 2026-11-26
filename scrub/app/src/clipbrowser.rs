@@ -216,11 +216,29 @@ impl Editor {
             return;
         }
         let Some(pl) = egui::DragAndDrop::take_payload::<Payload>(ui.ctx()) else { return };
-        let paths: Vec<PathBuf> = match &*pl {
-            Payload::File(p) => vec![p.clone()],
-            Payload::Files(v) => v.clone(),
+        let keys: Vec<crate::bin::ItemKey> = match &*pl {
+            Payload::File(p) => vec![(p.clone(), None)],
+            Payload::Files(v) => v.iter().map(|p| (p.clone(), None)).collect(),
+            Payload::Clips(v) => v.clone(),
             _ => return,
         };
+        // Onto a bin's name: into that bin (moved there if already in).
+        let q = ui.input(|i| i.pointer.hover_pos());
+        let head = q.and_then(|q| self.bin.header_rects.iter().find(|(_, r)| r.contains(q)).map(|(g, _)| g.clone()));
+        if let Some(g) = head {
+            if self.bin.takes_moves(&g) {
+                let n = self.bin.drop_into(&keys, &g);
+                self.say(format!("{n} clip(s) into {}", if g.is_empty() { "clips" } else { &g }));
+            } else {
+                self.say("drop clips onto \"clips\" or a bin you made (N makes one)");
+            }
+            return;
+        }
+        // A drag that started in the bin and ended in it: nothing to add.
+        if keys.iter().all(|(p, r)| r.is_some() || self.bin.clip(p).is_some()) {
+            return;
+        }
+        let paths: Vec<PathBuf> = keys.into_iter().filter(|(_, r)| r.is_none()).map(|(p, _)| p).collect();
         for p in &paths {
             self.bin.add(p, String::new());
         }

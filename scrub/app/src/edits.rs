@@ -491,8 +491,9 @@ impl Editor {
     pub(crate) fn media_of_source(&mut self) -> usize {
         let c = self.source.as_ref().expect("checked by callers");
         let fps = model::Fps::new(c.info.fps_num, c.info.fps_den);
-        if self.rec.seq.is_empty() {
-            // The first edit sets the rate, and the raster unless chosen.
+        if self.rec.seq.is_empty() && !c.info.audio_only {
+            // The first edit sets the rate, and the raster unless chosen
+            // (a sound file has neither).
             self.rec.seq.fps = fps;
             if self.rec.seq.raster.is_none() {
                 self.rec.seq.raster = Some((c.info.width, c.info.height));
@@ -508,6 +509,7 @@ impl Editor {
             width: c.info.width,
             height: c.info.height,
             generated: false,
+            audio_only: c.info.audio_only,
         })
     }
 }

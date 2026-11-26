@@ -138,6 +138,7 @@ impl Sequence {
             has_alpha,
             has_audio: false,
             intra: true,
+            audio_only: false,
         };
         let (pat, single, first) = (pattern.clone(), sample.to_path_buf(), info.first);
         let fetch = crate::fetch::Fetcher::new(info.frames, probe.clone(), move |i| match &pat {

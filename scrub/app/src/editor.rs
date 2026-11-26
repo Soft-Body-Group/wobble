@@ -51,6 +51,7 @@ pub const KEYS: &[HudKey] = &[
     hudkeys::key("up down", "previous / next edit", Key::ArrowUp),
     hudkeys::chord("1-3  4-7", "target V1-V3 / A1 A2 A3 M"),
     hudkeys::chord("shift 1 2 3", "focus bin / source / record"),
+    hudkeys::chord("bin: N  F2", "new bin (holds the chosen) / rename"),
     hudkeys::chord("= - \\", "zoom timeline / fit"),
     hudkeys::chord("cmd Z", "undo (shift: redo)"),
     hudkeys::chord("cmd T", "optimise source"),
@@ -436,14 +437,20 @@ impl Editor {
     pub fn open(&mut self, path: &Path) {
         let optimised = media::optimise::find(path, &self.opt.settings);
         let read = optimised.as_deref().unwrap_or(path);
-        match media::open(read) {
+        // A sound file counts frames at the sequence's rate.
+        let fps = self.rec.seq.fps;
+        match media::open_at(read, fps.num, fps.den) {
             Ok(source) => {
                 let info = source.info().clone();
                 let server = FrameServer::new(source, self.cache.clone());
                 let mut scrub = Timeline::new(info.first, info.first + info.frames as i64 - 1);
                 // The transport owns the clock; the timeline only scrubs.
                 scrub.fps = 0.0;
-                let detail = format!("{}x{} {} fr", info.width, info.height, info.frames);
+                let detail = if info.audio_only {
+                    format!("audio {:.1}s", info.frames as f64 / info.fps().max(1.0))
+                } else {
+                    format!("{}x{} {} fr", info.width, info.height, info.frames)
+                };
                 // The clip leaving keeps its marks (put back next time).
                 self.remember_source_marks();
                 self.bin.add(path, detail);
@@ -897,7 +904,11 @@ impl Editor {
         let fps = Fps::new(c.info.fps_num, c.info.fps_den);
         // Conforming: a source frame is a record frame, so the marks
         // resolve as if the two rates were the same.
-        let conform = r.seq.conform && !fps.same(r.seq.fps);
+        let conform = r.seq.conform && !fps.same(r.seq.fps) && !c.info.audio_only;
+        if c.info.audio_only && r.targets.audio.is_none() {
+            self.error = Some("a sound file goes on an audio track: target one (4-7)".into());
+            return;
+        }
         let Some(res) = model::resolve(
             c.marks,
             c.transport.frame() as i64,
@@ -1336,6 +1347,9 @@ impl Editor {
             if let bin::Action::Load(p, r) = self.bin.keys(ui) {
                 self.load_item(&p, r);
                 self.focus = Focus::Bin;
+            }
+            if let Some(n) = self.bin.note.take() {
+                self.say(n);
             }
         } else {
             // Edit points walk the record playhead from anywhere but the bin.
@@ -3103,6 +3117,9 @@ impl Editor {
                 }
                 if let bin::Action::Load(p, r) = act {
                     self.load_item(&p, r);
+                if let Some(n) = self.bin.note.take() {
+                    self.say(n);
+                }
                 }
             }
             Pane::Timeline => {

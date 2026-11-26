@@ -99,6 +99,10 @@ pub struct ProjectFile {
     pub media_rel: Vec<Option<PathBuf>>,
     #[serde(default)]
     pub bin: Vec<BinEntry>,
+    /// The bins the user made, in order (empty ones too); an entry's
+    /// `group` names one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bins: Vec<String>,
     pub record: RecordState,
     #[serde(default)]
     pub source: Option<SourceState>,
@@ -319,6 +323,7 @@ impl Editor {
             sequence: seq,
             media_rel,
             bin,
+            bins: self.bin.bins.clone(),
             record: RecordState {
                 marks: self.rec.marks,
                 playhead: self.rec.transport.frame(),
@@ -460,6 +465,7 @@ impl Editor {
         r.shown = None;
         r.view.fit();
         self.bin.items.clear();
+        self.bin.set_bins(Vec::new());
         self.bin.sel = 0;
         self.source = None;
         self.project.path = path;
@@ -490,6 +496,9 @@ impl Editor {
             .into_iter()
             .map(|b| crate::bin::Item { path: b.path, name: b.name, detail: b.detail, group: b.group, range: b.range, rating: b.rating, marks: b.marks })
             .collect();
+        // Bins made before the list was kept (none yet) or named in an
+        // entry but missing from it stay as plain groups.
+        self.bin.set_bins(doc.bins);
         self.bin.sel = 0;
         self.source = None;
         if let Some(s) = doc.source {
@@ -701,6 +710,7 @@ mod tests {
             width: 64,
             height: 36,
             generated: false,
+            audio_only: false,
         });
         s.overwrite(model::Source::new(m, 0, 10), 0, Targets::default());
         ProjectFile {
@@ -708,6 +718,7 @@ mod tests {
             sequence: s,
             media_rel: vec![Some(PathBuf::from("media/c.mov"))],
             bin: vec![],
+            bins: vec![],
             record: RecordState { marks: Marks { inp: Some(2), out: None }, playhead: 5, targets: Targets::default(), ripple: true },
             source: None,
             optimised: vec![],

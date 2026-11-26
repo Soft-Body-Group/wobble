@@ -812,7 +812,7 @@ impl Editor {
             let fps = model::Fps::new(c.info.fps_num, c.info.fps_den);
             let mut seq = model::Sequence::new(fps);
             seq.raster = Some((c.info.width, c.info.height));
-            let m = seq.add_media(model::Media { path: c.original.clone(), name: String::new(), frames: c.info.frames as i64, fps, has_audio: false, width: c.info.width, height: c.info.height, generated: false });
+            let m = seq.add_media(model::Media { path: c.original.clone(), name: String::new(), frames: c.info.frames as i64, fps, has_audio: false, width: c.info.width, height: c.info.height, generated: false, audio_only: false });
             seq.overwrite(model::Source::new(m, 0, c.info.frames as i64), 0, model::Targets { video: Some(model::V1), audio: None });
             let read = vec![c.server.source().info().path.clone()];
             let t = int(&p, "frame").unwrap_or(c.transport.frame() as i64);
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn a_call_is_one_undo_step_and_a_failure_none() {
         let mut ed = Editor::new(true);
-        let m = ed.rec.seq.add_media(model::Media { path: "/x.mov".into(), name: "x".into(), frames: 500, fps: model::Fps::new(24, 1), has_audio: true, width: 64, height: 36, generated: false });
+        let m = ed.rec.seq.add_media(model::Media { path: "/x.mov".into(), name: "x".into(), frames: 500, fps: model::Fps::new(24, 1), has_audio: true, width: 64, height: 36, generated: false, audio_only: false });
         ed.rec.seq.overwrite(model::Source::new(m, 0, 20), 0, model::Targets::default());
         ed.rec.history.reset(&ed.rec.seq);
         let r = ed.api_recorded("batch", &json!({ "calls": [

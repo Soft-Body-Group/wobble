@@ -26,6 +26,9 @@ pub struct SourceInfo {
     /// long-GOP codec (H.264) is not: a frame needs the ones before it, so
     /// frames are decoded in runs, one decoder streaming forward.
     pub intra: bool,
+    /// A sound file: no picture of its own (`audiofile`); its frames are a
+    /// made waveform, and an edit puts it on audio tracks only.
+    pub audio_only: bool,
 }
 
 impl SourceInfo {
@@ -76,11 +79,27 @@ pub trait Source: Send + Sync {
 
 pub type SourceRef = Arc<dyn Source>;
 
-/// Open a movie, or the image sequence a sample file belongs to.
+/// Open a movie, the image sequence a sample file belongs to, or a sound
+/// file (counted at 24 fps; `open_at` gives it a rate). A movie with sound
+/// but no picture opens as a sound file.
 pub fn open(path: &Path) -> Result<SourceRef> {
+    open_at(path, 24, 1)
+}
+
+/// `open`, with the frame rate a sound file is counted at (the editor
+/// passes the sequence's, so its marks fall on record frames).
+pub fn open_at(path: &Path, fps_num: i64, fps_den: i64) -> Result<SourceRef> {
     if crate::sequence::is_image(path) {
         Ok(Arc::new(crate::sequence::Sequence::open(path)?))
+    } else if crate::audiofile::is_audio(path) {
+        Ok(Arc::new(crate::audiofile::AudioFile::open(path, fps_num, fps_den)?))
     } else {
-        Ok(Arc::new(crate::movie::Movie::open(path)?))
+        match crate::movie::Movie::open(path) {
+            Ok(m) => Ok(Arc::new(m)),
+            Err(e) => match crate::audiofile::AudioFile::open(path, fps_num, fps_den) {
+                Ok(a) => Ok(Arc::new(a)),
+                Err(_) => Err(e),
+            },
+        }
     }
 }

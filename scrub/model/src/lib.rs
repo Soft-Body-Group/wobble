@@ -84,6 +84,10 @@ pub struct Media {
     /// Made by Scrub, no file (the text clips' item).
     #[serde(default)]
     pub generated: bool,
+    /// A sound file (WAV, MP3…): no picture, so an edit puts it on the
+    /// targeted audio track only, never a video track.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -666,7 +670,8 @@ impl Sequence {
         self.next_link += 1;
         let clip = Clip { media: src.media, src_in: src.src_in, start: at, len: src.len, link, speed: src.speed, conform: src.conform, reframe: Reframe::default(), text: None, wobble: None, wob: None };
         let mut v = Vec::new();
-        if let Some(vt) = targets.video {
+        // A sound file has no picture: its audio clip alone.
+        if let Some(vt) = targets.video.filter(|_| !self.media[src.media].audio_only) {
             v.push((vt, clip.clone()));
         }
         if let Some(at) = targets.audio.filter(|_| self.media[src.media].has_audio) {
