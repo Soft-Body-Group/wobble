@@ -10,10 +10,13 @@
 //! plays, the playhead is placed from it, so picture follows sound and a
 //! stall in the feed holds the picture rather than letting them drift.
 //!
-//! Only 1x forward plays sound. Shuttling, reverse and speed-changed clips
-//! are silent for now (no resampling of the speed, no scrub snippets).
+//! Forward play at any speed sounds: a clip whose speed is not 1, and
+//! forward shuttle (2x, 4x), are time-stretched by `stretch::Stretch`,
+//! which keeps the pitch. Reverse (clips and shuttle) is silent, and there
+//! are no scrub snippets.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crate::stretch::Stretch;
 use media::audio::{AudioReader, CHANNELS};
 use model::Fps;
 use std::collections::{HashMap, VecDeque};
@@ -45,7 +48,13 @@ pub struct PlanClip {
 pub struct Plan {
     pub clips: Vec<PlanClip>,
     pub fps: Fps,
+    /// The transport's speed: timeline seconds per second of sound (1, or
+    /// 2 and 4 shuttling forward). Every clip is stretched by it too.
+    pub play: f64,
 }
+
+/// The fastest forward shuttle that still sounds.
+pub const MAX_PLAY: f64 = 4.0;
 
 /// A sequence's sound as a mixer plan: the clips of every audible track
 /// with that track's gain. `read` gives the file each media item is read
@@ -64,7 +73,7 @@ pub fn plan_of(seq: &model::Sequence, read: &dyn Fn(usize) -> Option<PathBuf>) -
                 src_in: c.src_in,
                 src_fps: seq.media[c.media].fps,
                 // Against real time: a conformed clip at another rate is
-                // retimed, and retimed sound is not played.
+                // retimed, and its sound stretched to match.
                 speed: c.realtime_speed(seq.fps, seq.media[c.media].fps),
                 gain,
                 lane: t,
@@ -72,7 +81,7 @@ pub fn plan_of(seq: &model::Sequence, read: &dyn Fn(usize) -> Option<PathBuf>) -
         }
     }
     clips.sort_by_key(|c| c.start);
-    Plan { clips, fps: seq.fps }
+    Plan { clips, fps: seq.fps, play: 1.0 }
 }
 
 /// One device callback: drop the sound owed for time already counted,
@@ -243,9 +252,9 @@ impl Audio {
 
     /// The record frame the sound has reached (the clock playback follows).
     pub fn clock(&self, fps: Fps) -> Option<f64> {
-        let (_, from) = self.playing.as_ref()?;
+        let (plan, from) = self.playing.as_ref()?;
         let secs = self.shared.played.load(Ordering::Acquire) as f64 / self.rate as f64;
-        Some(from + secs * fps.as_f64())
+        Some(from + secs * plan.play * fps.as_f64())
     }
 }
 
@@ -264,22 +273,29 @@ pub struct Mixer {
     /// One reader per (track, file): two tracks playing one file at once
     /// must not fight over a single read position.
     readers: HashMap<(usize, PathBuf), Option<AudioReader>>,
+    /// Each speed-changed clip's stretch (by clip index), with the output
+    /// sample it continues from and the source sample it reads next.
+    stretches: HashMap<usize, (Stretch, f64, i64)>,
     scratch: Vec<f32>,
 }
 
 impl Mixer {
     pub fn new(plan: Plan, rate: u32) -> Self {
-        Self { plan, rate, readers: HashMap::new(), scratch: Vec::new() }
+        Self { plan, rate, readers: HashMap::new(), stretches: HashMap::new(), scratch: Vec::new() }
     }
 
     /// Fill `out` (interleaved stereo) with the sound from `t0` seconds of
-    /// timeline time on: every clip under that stretch, times its track's
-    /// gain, summed. Speed-changed clips and gaps are silent.
+    /// timeline time on (each output sample `plan.play / rate` seconds of
+    /// it): every clip under that stretch, times its track's gain, summed.
+    /// Clips not at 1x (after the transport's speed) are time-stretched with
+    /// their pitch kept; reversed clips and gaps are silent.
     pub fn fill(&mut self, t0: f64, out: &mut [f32]) {
         out.fill(0.0);
         let frames = out.len() / CHANNELS;
         let (fps, rate) = (self.plan.fps.as_f64(), self.rate as f64);
-        let t1 = t0 + frames as f64 / rate;
+        let play = self.plan.play;
+        let step = play / rate;
+        let t1 = t0 + frames as f64 * step;
         // Clips are sorted by start: stop at the first that starts after.
         for k in 0..self.plan.clips.len() {
             let c = &self.plan.clips[k];
@@ -287,27 +303,56 @@ impl Mixer {
             if cs >= t1 {
                 break;
             }
-            if ce <= t0 || c.speed != 1.0 || c.gain <= 0.0 {
+            let speed = c.speed * play;
+            if ce <= t0 || speed <= 0.0 || c.gain <= 0.0 {
                 continue;
             }
             // Output samples [a, b) of this buffer lie inside the clip.
-            let a = (((cs - t0) * rate).ceil().max(0.0) as usize).min(frames);
-            let b = (((ce - t0) * rate).ceil().max(0.0) as usize).min(frames);
+            let a = (((cs - t0) / step).ceil().max(0.0) as usize).min(frames);
+            let b = (((ce - t0) / step).ceil().max(0.0) as usize).min(frames);
             if a >= b {
                 continue;
             }
-            let t = t0 + a as f64 / rate;
-            let src_secs = c.src_in as f64 / c.src_fps.as_f64() + (t - cs);
+            let t = t0 + a as f64 * step;
+            let src_secs = c.src_in as f64 / c.src_fps.as_f64() + (t - cs) * c.speed;
             let sample = (src_secs * rate).round() as i64;
             let (gain, key) = (c.gain, (c.lane, c.path.clone()));
             let reader = self.readers.entry(key.clone()).or_insert_with(|| AudioReader::open(&key.1, self.rate).ok().flatten());
             let Some(r) = reader else { continue };
-            if r.position() != Some(sample) {
-                r.seek(sample);
-            }
             self.scratch.clear();
             self.scratch.resize((b - a) * CHANNELS, 0.0);
-            r.read(&mut self.scratch);
+            if (speed - 1.0).abs() < 1e-9 {
+                if r.position() != Some(sample) {
+                    r.seek(sample);
+                }
+                r.read(&mut self.scratch);
+            } else {
+                // Carry on the stretch this clip had if this buffer follows
+                // the last one; otherwise (a start, a seek) begin afresh.
+                let at = t0 / step + a as f64;
+                let fresh = self.stretches.get(&k).is_none_or(|(_, next, _)| (next - at).abs() > 0.5);
+                if fresh {
+                    let st = Stretch::new(speed, self.rate);
+                    let from = sample - st.lead() as i64;
+                    self.stretches.insert(k, (st, at, from));
+                }
+                let (st, next, src_next) = self.stretches.get_mut(&k).expect("inserted above");
+                st.process(&mut self.scratch, &mut |buf: &mut [f32]| {
+                    let n = buf.len() / CHANNELS;
+                    // Before the file starts: silence.
+                    let z = ((-*src_next).max(0) as usize).min(n);
+                    buf[..z * CHANNELS].fill(0.0);
+                    *src_next += z as i64;
+                    if z < n {
+                        if r.position() != Some(*src_next) {
+                            r.seek(*src_next);
+                        }
+                        r.read(&mut buf[z * CHANNELS..]);
+                        *src_next += (n - z) as i64;
+                    }
+                });
+                *next = at + (b - a) as f64;
+            }
             for (o, x) in out[a * CHANNELS..b * CHANNELS].iter_mut().zip(&self.scratch) {
                 *o += x * gain;
             }
@@ -318,6 +363,7 @@ impl Mixer {
 /// Render the plan from frame `from` into the ring until the generation moves on.
 fn feed(sh: Arc<Shared>, gen: u64, rate: u32, plan: Plan, from: f64) {
     let from_secs = from / plan.fps.as_f64();
+    let play = plan.play;
     let mut mixer = Mixer::new(plan, rate);
     let mut done: u64 = 0; // timeline samples rendered
     let mut buf = vec![0f32; CHUNK * CHANNELS];
@@ -337,7 +383,7 @@ fn feed(sh: Arc<Shared>, gen: u64, rate: u32, plan: Plan, from: f64) {
         if let Some(ms) = starve {
             std::thread::sleep(std::time::Duration::from_millis(ms));
         }
-        mixer.fill(from_secs + done as f64 / rate as f64, &mut buf);
+        mixer.fill(from_secs + done as f64 * play / rate as f64, &mut buf);
         done += CHUNK as u64;
         sh.ring.lock().unwrap().extend(buf.iter().copied());
     }

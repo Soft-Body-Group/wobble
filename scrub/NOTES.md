@@ -703,8 +703,13 @@ the source clip's own sound, through the default device (cpal / CoreAudio).
 FFmpeg decodes and resamples to stereo f32 at the device rate; a feeder
 thread renders 0.3 s ahead; the device callback counts what it played, and
 that count is the clock: while sound plays, the playhead is placed from it.
-Only 1x forward is heard: shuttle, reverse and speed-changed clips are
-silent (not resampled). No crossfade on A1 through a dissolve. If the device
+Forward play is heard at any speed: speed-changed clips (and conformed
+clips at another rate) and forward shuttle up to 4x are time-stretched
+with the pitch kept (`app/src/stretch.rs`, WSOLA: 43 ms Hann grains every
+21 ms, each nudged up to 10 ms to line up with what followed the last, a
+coarse-then-fine search on a mono sum; ~170x real time per clip on one
+core). Playback and render share it, so they sound the same. Reverse
+(clips and shuttle) and 8x shuttle are silent. No crossfade on A1 through a dissolve. If the device
 stops taking samples for 300 ms the picture carries on by the wall clock,
 silent, with a notice. `EDIFY_MUTE=1` keeps the clock but sends silence
 (the headless checks use it).
@@ -1061,8 +1066,8 @@ No redraw went over 16.7 ms. (At 4x the source runs at 96 fps against a
   in the dialog (HUD line only).
 - Reframe: static per clip (no keyframes / moves over time yet); no safe
   area guides in the viewer for platform UI overlays.
-- Sound: 1x forward only; speed-changed clips are silent (not resampled);
-  no scrub audio; no audio crossfade through a dissolve; track gain but no
+- Sound: forward only (speed-changed clips and 2x/4x shuttle are
+  time-stretched, pitch kept; reverse is silent); no scrub audio; no audio crossfade through a dissolve; track gain but no
   clip levels, pan or meters. In one headless run in four the device took no samples at
   first (the test blocks the main thread while CoreAudio starts); the stall
   watchdog now plays on silently instead of freezing the picture.

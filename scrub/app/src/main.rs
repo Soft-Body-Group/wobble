@@ -40,6 +40,7 @@ mod program;
 mod recorder;
 mod project;
 mod selects;
+mod stretch;
 mod render;
 mod testapi;
 mod text;

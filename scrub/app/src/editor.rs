@@ -1454,7 +1454,8 @@ impl Editor {
 
     // --- sound --------------------------------------------------------------------
 
-    /// What should be sounding now: the playing viewer's audio at 1x. Starts,
+    /// What should be sounding now: the playing viewer's audio, forward at
+    /// up to `audio::MAX_PLAY` (faster than 1x is stretched, pitch kept). Starts,
     /// restarts (an edit, a loop) and stops the output to match, and while
     /// it plays puts that viewer's playhead on the audio clock. Returns the
     /// viewer the clock is driving.
@@ -1463,16 +1464,17 @@ impl Editor {
         let want: Option<(Plan, f64, Fps, Focus)> = match self.monitor {
             Focus::Record => {
                 let t = &self.rec.transport;
-                (t.speed == 1.0 && !t.prerolling()).then(|| {
+                (t.speed > 0.0 && t.speed <= crate::audio::MAX_PLAY && !t.prerolling()).then(|| {
                     let seq = &self.rec.seq;
                     let prog = &self.rec.program;
-                    let plan = crate::audio::plan_of(seq, &|m| prog.read_path(&seq.media[m].path).map(|p| p.to_path_buf()));
+                    let mut plan = crate::audio::plan_of(seq, &|m| prog.read_path(&seq.media[m].path).map(|p| p.to_path_buf()));
+                    plan.play = t.speed;
                     (plan, t.pos, seq.fps, Focus::Record)
                 })
             }
             _ => self.source.as_ref().and_then(|c| {
                 let t = &c.transport;
-                (t.speed == 1.0 && !t.prerolling() && c.info.has_audio).then(|| {
+                (t.speed > 0.0 && t.speed <= crate::audio::MAX_PLAY && !t.prerolling() && c.info.has_audio).then(|| {
                     let fps = Fps::new(c.info.fps_num, c.info.fps_den);
                     let clip = PlanClip {
                         path: c.server.source().info().path.clone(),
@@ -1484,11 +1486,11 @@ impl Editor {
                         gain: 1.0,
                         lane: 0,
                     };
-                    (Plan { clips: vec![clip], fps }, t.pos, fps, Focus::Source)
+                    (Plan { clips: vec![clip], fps, play: t.speed }, t.pos, fps, Focus::Source)
                 })
             }),
         };
-        let want = want.filter(|w| w.0.clips.iter().any(|c| c.speed == 1.0));
+        let want = want.filter(|w| w.0.clips.iter().any(|c| c.speed > 0.0));
         let Some((plan, from, fps, who)) = want else {
             if let Some(Ok(a)) = &mut self.audio {
                 if a.is_playing() {
@@ -3115,11 +3117,11 @@ impl Editor {
                 if let bin::Action::Browse = act {
                     self.import();
                 }
-                if let bin::Action::Load(p, r) = act {
-                    self.load_item(&p, r);
                 if let Some(n) = self.bin.note.take() {
                     self.say(n);
                 }
+                if let bin::Action::Load(p, r) = act {
+                    self.load_item(&p, r);
                 }
             }
             Pane::Timeline => {
