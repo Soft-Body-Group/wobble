@@ -177,7 +177,7 @@ mod tests {
         for name in ["tone.wav", "tone.mp3"] {
             let path = dir.join(name);
             let ok = std::process::Command::new("ffmpeg")
-                .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=2:sample_rate=44100"])
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=2:sample_rate=44100", "-ac", "2"])
                 .arg(&path)
                 .status()
                 .is_ok_and(|s| s.success());

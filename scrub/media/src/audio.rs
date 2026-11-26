@@ -121,6 +121,7 @@ impl AudioReader {
         let mut got = false;
         while self.decoder.receive_frame(&mut frame).is_ok() {
             got = true;
+            plain_layout(&mut frame);
             self.take(&frame)?;
         }
         if !fed && !got {
@@ -178,6 +179,21 @@ impl AudioReader {
     }
 }
 
+/// A decoder may leave the channel order UNSPECIFIED (a stereo WAV's PCM
+/// does): swresample then refuses every frame as "input changed" against
+/// the layout it was built with, and the file plays as silence. Such a
+/// frame gets the default layout for its channel count.
+fn plain_layout(frame: &mut ff::frame::Audio) {
+    unsafe {
+        let l = &mut (*frame.as_mut_ptr()).ch_layout;
+        if l.order == ff::ffi::AVChannelOrder::AV_CHANNEL_ORDER_UNSPEC {
+            let n = l.nb_channels.max(1);
+            ff::ffi::av_channel_layout_uninit(l);
+            ff::ffi::av_channel_layout_default(l, n);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +225,30 @@ mod tests {
         b.read(&mut seeked);
         let err = seeked.iter().zip(&straight[30000 * CHANNELS..]).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
         assert!(err < 0.02, "a seek to 30000 differs from reading to it by {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A stereo WAV (its PCM decodes with no channel order) plays: it used
+    /// to read as silence, every frame refused by the resampler.
+    #[test]
+    fn a_stereo_wav_is_not_silent() {
+        let dir = std::env::temp_dir().join(format!("scrub-audio-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stereo.wav");
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=2:sample_rate=44100", "-ac", "2"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("skipped: no ffmpeg CLI");
+            return;
+        }
+        let mut a = AudioReader::open(&path, 48000).unwrap().unwrap();
+        let mut b = vec![0f32; 48000 * CHANNELS];
+        assert_eq!(a.read(&mut b), 48000);
+        let peak = b.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.05, "silence where a tone should be ({peak})");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
