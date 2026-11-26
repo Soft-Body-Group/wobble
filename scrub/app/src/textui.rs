@@ -114,9 +114,9 @@ impl Editor {
             self.textv.tex.clear();
         }
         for (l, draw) in todo {
-            let k = crate::text::key(&l.text, &l.style, size);
+            let k = crate::text::layer_key(&l, size);
             let entry = self.textv.tex.entry(k).or_insert_with(|| {
-                crate::text::rasterize(&l.text, &l.style, size).map(|b| {
+                crate::text::rasterize_layer(&l, size).map(|b| {
                     let img = egui::ColorImage::from_rgba_premultiplied([b.w as usize, b.h as usize], &b.rgba);
                     let tex = ui.ctx().load_texture(format!("text-{k}"), img, egui::TextureOptions::LINEAR);
                     (tex, crate::text::Bitmap { rgba: Vec::new(), ..b })

@@ -274,7 +274,7 @@ fn reframe_fits_fills_zooms_and_moves() {
 fn a_reframe_rides_the_picture_and_the_linked_group_and_saves() {
     let mut s = seq();
     s.overwrite(Source::new(0, 0, 10), 0, Targets::default());
-    let r = Reframe { fill: true, zoom: 1.2, x: -0.1, y: 0.05 };
+    let r = Reframe { fill: true, zoom: 1.2, x: -0.1, y: 0.05, ..Default::default() };
     s.set_reframe(V1, 0, r);
     assert_eq!(s.tracks[A1].clips[0].reframe, r);
     match s.picture_at(3) {
@@ -725,4 +725,34 @@ fn a_sound_file_lands_on_the_audio_track_alone() {
     assert_eq!(spans(&s, M), vec![(0, 24, m, 100)]);
     assert!(s.tracks[V1].clips.iter().all(|c| c.media != m));
     assert!(s.is_consistent());
+}
+
+#[test]
+fn a_grade_and_a_rotation_ride_the_picture_and_save_and_old_files_load() {
+    let mut s = seq();
+    s.overwrite(Source::new(0, 0, 10), 0, Targets::default());
+    let g = Grade { exposure: 1.0, saturation: 0.5, ..Default::default() };
+    s.set_grade(V1, 0, Some(g));
+    let mut r = s.tracks[V1].clips[0].reframe;
+    r.rotate = 90.0;
+    r.flip_x = true;
+    s.set_reframe(V1, 0, r);
+    match s.picture_at(0) {
+        Picture::One(l) => {
+            assert_eq!(l.grade, Some(g));
+            assert_eq!(l.reframe.rotate, 90.0);
+        }
+        p => panic!("{p:?}"),
+    }
+    let back: Sequence = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(back.tracks[V1].clips[0].grade, Some(g));
+    assert!(back.tracks[V1].clips[0].reframe.flip_x);
+    // A reframe saved before rotation existed still loads.
+    let old: Reframe = serde_json::from_str(r#"{"fill":true,"zoom":1.5,"x":0.1,"y":0.0}"#).unwrap();
+    assert_eq!(old.rotate, 0.0);
+    assert!(old.fill);
+    // Neutral or off: the shader skips it.
+    assert_eq!(Grade::default().gpu()[7], 0.0);
+    assert_eq!(Grade { off: true, ..g }.gpu()[7], 0.0);
+    assert_eq!(g.gpu()[7], 1.0);
 }

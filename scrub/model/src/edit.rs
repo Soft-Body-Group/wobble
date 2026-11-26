@@ -400,6 +400,14 @@ impl Sequence {
         }
     }
 
+    /// Set (or, with `None`, remove) a clip's colour correction (its whole
+    /// group, as a reframe).
+    pub fn set_grade(&mut self, track: usize, idx: usize, g: Option<crate::Grade>) {
+        for (t, i) in self.group(track, idx) {
+            self.tracks[t].clips[i].grade = g;
+        }
+    }
+
     /// Put a dissolve of `len` frames on the cut at `at` (centred), clamped
     /// to the handles both clips have. Returns it, or why there is none.
     pub fn add_dissolve(&mut self, track: usize, at: i64, len: i64) -> Result<Dissolve, TrimError> {

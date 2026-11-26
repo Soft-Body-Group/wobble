@@ -179,8 +179,9 @@ pub(crate) struct Record {
     pub(crate) dims: (u32, u32),
     /// The selected clip or edit point.
     pub(crate) sel: crate::timelineui::Selection,
-    /// The reframe of the picture on screen (kept while a frame decodes).
-    pub(crate) shown_reframe: model::Reframe,
+    /// The look (reframe, grade) of the picture on screen (kept while a
+    /// frame decodes).
+    pub(crate) shown_reframe: model::Look,
     /// The input transform of the picture on screen (kept with it).
     pub(crate) shown_idt: Option<Arc<crate::viewer::Idt>>,
     /// Dragged edges snap (T).
@@ -360,7 +361,7 @@ impl Editor {
                 shown: None,
                 dims: (1920, 1080),
                 sel: crate::timelineui::Selection::None,
-                shown_reframe: model::Reframe::default(),
+                shown_reframe: model::Look::default(),
                 shown_idt: None,
                 snap: true,
                 peek: None,
@@ -1874,7 +1875,7 @@ impl Editor {
         let scale = (rect.width() / w).min(rect.height() / h) * view.zoom;
         let img = view.apply(rect, Rect::from_center_size(rect.center(), vec2(w, h) * (scale / view.zoom)));
         let nearest = scale * ui.ctx().pixels_per_point() > 1.0;
-        painter.add(egui_wgpu::Callback::new_paint_callback(img, ViewerPaint { slot, frame, idt, view: vs, black, nearest, xf: [0.0, 0.0, 1.0, 1.0], mix: None, ext: None }));
+        painter.add(egui_wgpu::Callback::new_paint_callback(img, ViewerPaint { slot, frame, idt, view: vs, black, nearest, xf: [0.0, 0.0, 1.0, 1.0], fx: model::PLAIN_GPU, mix: None, ext: None }));
     }
 
     /// The record picture: drawn over the whole raster rect, each picture
@@ -1883,11 +1884,11 @@ impl Editor {
         ui: &egui::Ui,
         raster_rect: Rect,
         raster: (u32, u32),
-        a: Option<((u64, media::FrameRef), model::Reframe)>,
+        a: Option<(u64, media::FrameRef)>,
         dims: (u32, u32),
-        reframe: model::Reframe,
+        look: model::Look,
         black: bool,
-        mix: Option<(u64, media::FrameRef, f32, model::Reframe, Arc<crate::viewer::Idt>)>,
+        mix: Option<(u64, media::FrameRef, f32, model::Look, Arc<crate::viewer::Idt>)>,
         idt: Arc<crate::viewer::Idt>,
         vs: colour::viewtf::ViewSettings,
         ext: Option<(wgpu::TextureView, (u32, u32), Arc<crate::viewer::Idt>)>,
@@ -1904,17 +1905,18 @@ impl Editor {
             let (rw, rh) = (raster.0.max(1) as f64, raster.1.max(1) as f64);
             [(x / rw) as f32, (y / rh) as f32, (w / rw) as f32, (h / rh) as f32]
         };
-        let (x, _, w, _) = reframe.place(dims, raster);
-        let _ = x;
+        let reframe = look.reframe;
+        let (_, _, w, _) = reframe.place(dims, raster);
         let px_per_src = raster_rect.width() as f64 / raster.0.max(1) as f64 * w / dims.0.max(1) as f64;
         let nearest = px_per_src * ui.ctx().pixels_per_point() as f64 > 1.0;
         let xa = xf(reframe, dims);
-        let frame = a.map(|(f, _)| f);
-        let mix = mix.map(|(k, f, m, r, bi)| {
+        let frame = a;
+        let mix = mix.map(|(k, f, m, l, bi)| {
             let d = (f.width, f.height);
-            (2usize, k, f, bi, m, xf(r, d))
+            (2usize, k, f, bi, m, xf(l.reframe, d), l.gpu(raster))
         });
-        painter.add(egui_wgpu::Callback::new_paint_callback(raster_rect, ViewerPaint { slot: 1, frame, idt, view: vs, black, nearest, xf: xa, mix, ext }));
+        let fx = look.gpu(raster);
+        painter.add(egui_wgpu::Callback::new_paint_callback(raster_rect, ViewerPaint { slot: 1, frame, idt, view: vs, black, nearest, xf: xa, fx, mix, ext }));
     }
 
     /// Network storage that cannot keep up, said in words over the picture
@@ -2132,16 +2134,16 @@ impl Editor {
         let t = r.peek.unwrap_or(r.transport.frame() as i64);
         let mut mix = None;
         let mut medias = (None, None);
-        let mut reframe = r.shown_reframe;
+        let mut look = r.shown_reframe;
         let (frame, black, exact) = match r.program.pick(&r.seq, t, r.shown) {
             Pick::Black => {
                 r.shown = Some(t);
                 (None, true, true)
             }
-            Pick::Frame { key, at, frame, exact, reframe: rf, media, mix: m } => {
+            Pick::Frame { key, at, frame, exact, look: rf, media, mix: m } => {
                 medias = (Some(media), m.as_ref().map(|x| x.4));
                 mix = m;
-                reframe = rf;
+                look = rf;
                 r.shown_reframe = rf;
                 if r.shown != Some(at) {
                     self.meters[1].shown();
@@ -2163,7 +2165,7 @@ impl Editor {
             let sc = (pic.width() / w).min(pic.height() / h);
             self.views[1].apply(pic, Rect::from_center_size(pic.center(), vec2(w, h) * sc))
         };
-        let a = frame.map(|f| (f, reframe));
+        let a = frame;
         let path_of = |m: usize| self.rec.seq.media.get(m).map(|x| x.path.clone()).unwrap_or_default();
         if let Some(m) = medias.0 {
             idt = self.idt_for(&path_of(m));
@@ -2177,7 +2179,7 @@ impl Editor {
         let ext = self.fold_ext();
         #[cfg(not(feature = "fold"))]
         let ext = None;
-        Self::raster_picture(ui, raster_rect, raster, a, r.dims, reframe, black, mix, idt, vs, ext);
+        Self::raster_picture(ui, raster_rect, raster, a, r.dims, look, black, mix, idt, vs, ext);
         self.text_overlay(ui, raster_rect, raster, t, &hand, navigated);
         let r = &mut self.rec;
         let (decoded, busy, ms) = r.program.stats();
@@ -2378,7 +2380,11 @@ impl Editor {
                 for p in crate::panes::ALL {
                     let mut on = self.panes.open.contains(&p);
                     if ui.checkbox(&mut on, format!("{}  (W over it closes it)", p.name())).changed() {
-                        self.set_pane_open(p, on);
+                        if on && p == crate::panes::Pane::Controls {
+                            self.fold_open_controls();
+                        } else {
+                            self.set_pane_open(p, on);
+                        }
                     }
                 }
                 if ui.button("show every panel  (shift W)").clicked() {
@@ -2441,7 +2447,7 @@ impl Editor {
                     self.fold_own_window();
                 }
                 let shown = self.panes.open.contains(&crate::panes::Pane::Controls);
-                if ui.button(if shown { "hide wob controls" } else { "show wob controls" }).clicked() {
+                if ui.button(if shown { "hide controls" } else { "show controls" }).clicked() {
                     if shown {
                         self.set_pane_open(crate::panes::Pane::Controls, false);
                     } else {
@@ -3175,9 +3181,8 @@ impl Editor {
                 let gw = ui
                     .scope_builder(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(2.0, 0.0))), |ui| ui.horizontal_centered(|ui| imfram::dock::grip(ui)).response.rect.width())
                     .inner;
-                ui.painter().text(bar.left_center() + vec2(8.0 + gw, 0.0), Align2::LEFT_CENTER, "wob controls", FontId::proportional(12.0), v.text_color());
-                #[cfg(feature = "fold")]
-                self.fold_controls(ui, Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max).shrink(4.0));
+                ui.painter().text(bar.left_center() + vec2(8.0 + gw, 0.0), Align2::LEFT_CENTER, "controls", FontId::proportional(12.0), v.text_color());
+                self.controls_panel(ui, Rect::from_min_max(pos2(rect.min.x, bar.max.y), rect.max).shrink(4.0));
             }
             Pane::Source | Pane::Record => {
                 if pane == Pane::Source {
@@ -3363,9 +3368,8 @@ impl Editor {
         self.fold_layout();
     }
 
-    /// The wob controls panel open: the first time, a column down the left
+    /// The controls panel open: the first time, a column down the left
     /// of the main window (drag its grip to put it elsewhere).
-    #[cfg(feature = "fold")]
     pub(crate) fn fold_open_controls(&mut self) {
         use crate::panes::{Pane, MAIN};
         let Some(d) = &mut self.docks else { return };

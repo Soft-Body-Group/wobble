@@ -36,12 +36,13 @@ pub enum Pane {
     Timeline,
     /// EXPERIMENT (the `fold` feature): wobble itself, hosted (fold.rs).
     Wobble,
-    /// EXPERIMENT (fold): the controls of the wob clip under the playhead.
+    /// The selected clip's controls: speed, transform, colour correction
+    /// (and, with `fold`, a wob clip's own controls).
     Controls,
 }
 
 #[cfg(not(feature = "fold"))]
-pub const ALL: [Pane; 4] = [Pane::Bin, Pane::Source, Pane::Record, Pane::Timeline];
+pub const ALL: [Pane; 5] = [Pane::Bin, Pane::Source, Pane::Record, Pane::Timeline, Pane::Controls];
 #[cfg(feature = "fold")]
 pub const ALL: [Pane; 6] = [Pane::Bin, Pane::Source, Pane::Record, Pane::Timeline, Pane::Wobble, Pane::Controls];
 
@@ -53,7 +54,7 @@ impl Pane {
             Pane::Record => "record",
             Pane::Timeline => "timeline",
             Pane::Wobble => "wobble",
-            Pane::Controls => "wob controls",
+            Pane::Controls => "controls",
         }
     }
 }
@@ -79,7 +80,7 @@ impl dock::Tab for Pane {
             Pane::Record => "the record viewer: the sequence",
             Pane::Timeline => "the sequence's tracks",
             Pane::Wobble => "wobble, hosted: the comp of the wob clip under the playhead",
-            Pane::Controls => "the controls the wob clip under the playhead publishes",
+            Pane::Controls => "the selected clip's controls: speed, transform, colour (and a wob clip's own)",
         }
     }
     fn home(self) -> Role {

@@ -152,7 +152,10 @@ fn gpu_picture(
         let l = layers[i];
         let (p, _) = place(f.width, f.height, raster, out, fit, l.reframe);
         let (ow, oh) = (out.0 as f64, out.1 as f64);
-        Some(crate::viewer::Layer { frame: f, idt: &idts.0[&l.media], xf: [(p.x / ow) as f32, (p.y / oh) as f32, (p.w / ow) as f32, (p.h / oh) as f32] })
+        // The rotation turns in the output's own shape (what the raster
+        // shows of it, letterboxed or not, is the same picture turned).
+        let fx = l.look().gpu(out);
+        Some(crate::viewer::Layer { frame: f, idt: &idts.0[&l.media], xf: [(p.x / ow) as f32, (p.y / oh) as f32, (p.w / ow) as f32, (p.h / oh) as f32], fx })
     };
     let (a, b) = (layer(0), layer(1));
     match (a, b) {
@@ -445,11 +448,11 @@ fn draw_text(c: &mut Canvas, seq: &Sequence, t: i64, raster: (u32, u32), fit: Fi
     let (_, rr) = place(raster.0, raster.1, raster, (c.w, c.h), fit, model::Reframe::default());
     let size = (rr.w.round().max(1.0) as u32, rr.h.round().max(1.0) as u32);
     for l in layers {
-        let k = crate::text::key(&l.text, &l.style, size);
+        let k = crate::text::layer_key(&l, size);
         if cache.len() > 256 {
             cache.clear();
         }
-        let b = cache.entry(k).or_insert_with(|| crate::text::rasterize(&l.text, &l.style, size));
+        let b = cache.entry(k).or_insert_with(|| crate::text::rasterize_layer(&l, size));
         if let Some(b) = b {
             let b = b.clone();
             c.overlay(&b, rr.x.round() as i32 + b.x, rr.y.round() as i32 + b.y, l.opacity);

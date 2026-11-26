@@ -12,7 +12,7 @@
 
 use media::server::{wanted_list, PlayState};
 use media::{Cache, FrameRef, FrameServer};
-use model::{Layer, Picture, Reframe, Sequence};
+use model::{Layer, Look, Picture, Sequence};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ pub enum Pick {
     /// A frame to show; `exact` when it is the playhead's. Through a
     /// dissolve, `mix` is the incoming frame and its weight.
     /// `media`: the clip's media item (its file's colourspace).
-    Frame { key: u64, at: i64, frame: FrameRef, exact: bool, reframe: Reframe, media: usize, mix: Option<(u64, FrameRef, f32, Reframe, usize)> },
+    Frame { key: u64, at: i64, frame: FrameRef, exact: bool, look: Look, media: usize, mix: Option<(u64, FrameRef, f32, Look, usize)> },
     /// Keep what is on screen (the frame is still decoding).
     Keep,
 }
@@ -36,8 +36,8 @@ pub enum Pick {
 /// A frame's pictures, when every one of them is decoded.
 enum Ready {
     Black,
-    One(u64, FrameRef, Reframe, usize),
-    Mix((u64, FrameRef, Reframe, usize), (u64, FrameRef, Reframe, usize), f32),
+    One(u64, FrameRef, Look, usize),
+    Mix((u64, FrameRef, Look, usize), (u64, FrameRef, Look, usize), f32),
 }
 
 pub struct Program {
@@ -101,11 +101,11 @@ impl Program {
             // EXPERIMENT (fold): a wob clip's picture is the comp's, live
             // (the record viewer shows it); its footage is not decoded.
             Picture::One(_) if seq.video_at(t).is_some_and(|(c, _)| c.wob.is_some()) => Some(Ready::Black),
-            Picture::One(l) => self.layer(seq, l).map(|(k, f)| Ready::One(k, f, l.reframe, l.media)),
+            Picture::One(l) => self.layer(seq, l).map(|(k, f)| Ready::One(k, f, l.look(), l.media)),
             Picture::Mix(a, b, m) => {
                 let (ka, fa) = self.layer(seq, a)?;
                 let (kb, fb) = self.layer(seq, b)?;
-                Some(Ready::Mix((ka, fa, a.reframe, a.media), (kb, fb, b.reframe, b.media), m))
+                Some(Ready::Mix((ka, fa, a.look(), a.media), (kb, fb, b.look(), b.media), m))
             }
         }
     }
@@ -154,8 +154,8 @@ impl Program {
     pub fn pick(&self, seq: &Sequence, t: i64, shown: Option<i64>) -> Pick {
         let as_pick = |r: Ready, at: i64, exact: bool| match r {
             Ready::Black => Pick::Black,
-            Ready::One(key, frame, reframe, media) => Pick::Frame { key, at, frame, exact, reframe, media, mix: None },
-            Ready::Mix((ka, fa, ra, ma), (kb, fb, rb, mb), m) => Pick::Frame { key: ka, at, frame: fa, exact, reframe: ra, media: ma, mix: Some((kb, fb, m, rb, mb)) },
+            Ready::One(key, frame, look, media) => Pick::Frame { key, at, frame, exact, look, media, mix: None },
+            Ready::Mix((ka, fa, ra, ma), (kb, fb, rb, mb), m) => Pick::Frame { key: ka, at, frame: fa, exact, look: ra, media: ma, mix: Some((kb, fb, m, rb, mb)) },
         };
         if let Some(r) = self.ready(seq, t) {
             return as_pick(r, t, true);

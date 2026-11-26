@@ -25,6 +25,7 @@ mod bin;
 mod binthumbs;
 #[cfg(feature = "clips")]
 mod clipbrowser;
+mod controls;
 mod editor;
 #[cfg(feature = "fold")]
 mod fold;
@@ -1282,7 +1283,7 @@ fn main() {
         }
         if reframe_test {
             // A 9:16 sequence with every clip filled and moved 20% right.
-            editor.reframe_all(Some((1080, 1920)), model::Reframe { fill: true, zoom: 1.0, x: 0.2, y: 0.0 });
+            editor.reframe_all(Some((1080, 1920)), model::Reframe { fill: true, zoom: 1.0, x: 0.2, y: 0.0, ..Default::default() });
         }
         if let Some(f) = frame {
             editor.seek_display(f);

@@ -12,7 +12,8 @@
 //! and right, an outline (the glyphs grown by `outline × size`), the fill.
 
 use ab_glyph::{point, Font, FontArc, PxScale, ScaleFont};
-use model::{Align, TextStyle, VAlign};
+use model::textanim::{self, GlyphDelta, Units};
+use model::{Align, TextAnim, TextLayer, TextStyle, VAlign};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -107,9 +108,53 @@ pub fn key(text: &str, style: &TextStyle, raster: (u32, u32)) -> u64 {
     h.finish()
 }
 
+/// A cache key for `rasterize_layer(l, raster)`: a text without animators
+/// keys as `key` does; an animated one adds its animators, and the frame
+/// only while they move (settled, it is one bitmap for the whole clip).
+pub fn layer_key(l: &TextLayer, raster: (u32, u32)) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let base = key(&l.text, &l.style, raster);
+    if l.anims.is_empty() {
+        return base;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut h);
+    format!("{:?}", l.anims).hash(&mut h);
+    if l.moving() {
+        (l.frame, l.len).hash(&mut h);
+    } else {
+        // Holds still apply; sweeps are settled.
+        l.anims.iter().any(|a| a.on && a.hold()).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Lay `text` out in `style` for a `raster`-sized frame and draw it.
-/// `None` for empty text or a frame too small to draw in.
+/// `None` for empty text or a frame too small to draw in. (Tests; the
+/// app draws `rasterize_layer`.)
+#[cfg(test)]
 pub fn rasterize(text: &str, style: &TextStyle, raster: (u32, u32)) -> Option<Bitmap> {
+    draw(text, style, &[], 0, 1, raster)
+}
+
+/// A text layer as `text_at` gives it: its words, style and animators at
+/// its clip frame. What the viewer and the renderer both draw.
+pub fn rasterize_layer(l: &TextLayer, raster: (u32, u32)) -> Option<Bitmap> {
+    // Not moving, every sweep is at rest at this frame: the settled picture.
+    draw(&l.text, &l.style, &l.anims, l.frame, l.len, raster)
+}
+
+/// One glyph to draw: its id, pen position in block coordinates, advance,
+/// and what the animators made of it.
+struct Gl {
+    id: ab_glyph::GlyphId,
+    x: f32,
+    base: f32,
+    adv: f32,
+    d: GlyphDelta,
+}
+
+fn draw(text: &str, style: &TextStyle, anims: &[TextAnim], frame: i64, len: i64, raster: (u32, u32)) -> Option<Bitmap> {
     if text.trim().is_empty() || raster.0 < 8 || raster.1 < 8 {
         return None;
     }
@@ -117,57 +162,169 @@ pub fn rasterize(text: &str, style: &TextStyle, raster: (u32, u32)) -> Option<Bi
     let px = (style.size.max(0.001) * raster.1 as f32).max(4.0);
     let sf = font.as_scaled(PxScale::from(px));
     let line_h = (sf.ascent() - sf.descent() + sf.line_gap()) * style.line_spacing.max(0.1);
-    // Lines: glyph ids with their pen x, and each line's width.
-    let lines: Vec<(Vec<(ab_glyph::GlyphId, f32)>, f32)> = text
+    let anims: Vec<TextAnim> = anims.iter().filter(|a| a.on).cloned().collect();
+    // Units: every char, letters (no spaces), words, lines.
+    let mut units: Vec<Vec<Units>> = Vec::new();
+    let (mut nc, mut nl, mut nw) = (0usize, 0usize, 0usize);
+    for (li, l) in text.split('\n').enumerate() {
+        let mut v = Vec::new();
+        let mut in_word = false;
+        for ch in l.chars() {
+            let space = ch.is_whitespace();
+            if !space && !in_word {
+                nw += 1;
+            }
+            in_word = !space;
+            v.push(Units { char: nc, letter: (!space).then_some(nl), word: (!space).then(|| nw - 1), line: li });
+            nc += 1;
+            if !space {
+                nl += 1;
+            }
+        }
+        units.push(v);
+    }
+    let counts = Units { char: nc, letter: Some(nl), word: Some(nw), line: units.len() };
+    // Lines: glyphs with their pen x (tracking included), and each line's width.
+    let lines: Vec<(Vec<Gl>, f32)> = text
         .split('\n')
-        .map(|l| {
+        .zip(&units)
+        .map(|(l, us)| {
             let mut x = 0.0;
             let mut prev = None;
             let mut gs = Vec::new();
-            for ch in l.chars() {
+            for (ch, &u) in l.chars().zip(us) {
                 let id = font.glyph_id(ch);
                 if let Some(p) = prev {
                     x += sf.kern(p, id);
                 }
-                gs.push((id, x));
-                x += sf.h_advance(id);
+                let d = if anims.is_empty() { GlyphDelta::default() } else { textanim::glyph_delta(&anims, u, counts, frame, len) };
+                let adv = sf.h_advance(id);
+                gs.push(Gl { id, x, base: 0.0, adv, d });
+                x += adv;
+                if d.track != 0.0 {
+                    x += d.track * px;
+                }
                 prev = Some(id);
+            }
+            if let Some(g) = gs.last() {
+                if g.d.track != 0.0 {
+                    x -= g.d.track * px;
+                }
             }
             (gs, x)
         })
         .collect();
     let block_w = lines.iter().map(|l| l.1).fold(0.0f32, f32::max);
     let block_h = sf.ascent() - sf.descent() + line_h * (lines.len() as f32 - 1.0);
+    // Glyphs placed in block coordinates.
+    let mut glyphs: Vec<Gl> = Vec::new();
+    for (k, (gs, lw)) in lines.into_iter().enumerate() {
+        let lx = match style.align {
+            Align::Left => 0.0,
+            Align::Center => (block_w - lw) / 2.0,
+            Align::Right => block_w - lw,
+        };
+        let base = sf.ascent() + line_h * k as f32;
+        glyphs.extend(gs.into_iter().map(|g| Gl { x: lx + g.x, base, ..g }));
+    }
+    // Where each moved glyph lands, so the bitmap holds it: (pen, scale,
+    // rotation about its middle `anchor`).
+    let place = |g: &Gl| -> ((f32, f32), f32, (f32, f32)) {
+        let d = &g.d;
+        let anchor = (g.x + g.adv / 2.0 + d.position[0] * px, g.base - px * 0.3 + d.position[1] * px);
+        let s = d.scale.clamp(0.0, 20.0);
+        let pen = if s == 1.0 {
+            (g.x + d.position[0] * px, g.base + d.position[1] * px)
+        } else {
+            (anchor.0 + (g.x + d.position[0] * px - anchor.0) * s, anchor.1 + (g.base + d.position[1] * px - anchor.1) * s)
+        };
+        (pen, s, anchor)
+    };
+    let (mut lo, mut hi) = ((0.0f32, 0.0f32), (block_w, block_h));
+    for g in glyphs.iter().filter(|g| !g.d.is_identity()) {
+        let (pen, s, anchor) = place(g);
+        if s * px < 0.5 {
+            continue;
+        }
+        let gl = g.id.with_scale_and_position(PxScale::from(px * s), point(pen.0, pen.1));
+        let Some(o) = font.outline_glyph(gl) else { continue };
+        let b = o.px_bounds();
+        for (cx, cy) in [(b.min.x, b.min.y), (b.max.x, b.min.y), (b.min.x, b.max.y), (b.max.x, b.max.y)] {
+            let (x, y) = rotate((cx, cy), anchor, g.d.rotation);
+            lo = (lo.0.min(x), lo.1.min(y));
+            hi = (hi.0.max(x), hi.1.max(y));
+        }
+    }
     let outline = style.outline.max(0.0) * px;
     let shadow_off = if style.shadow { px * 0.06 } else { 0.0 };
     let shadow_blur = if style.shadow { (px * 0.05).max(1.0) } else { 0.0 };
     let box_pad = if style.boxed { style.box_pad.max(0.0) * px } else { 0.0 };
     let pad = (outline + shadow_off + shadow_blur * 2.0 + box_pad + 2.0).ceil();
-    let (w, h) = ((block_w + 2.0 * pad).ceil() as usize, (block_h + 2.0 * pad).ceil() as usize);
+    // Block coordinates to bitmap pixels (pad, for a still text).
+    let (ox, oy) = ((pad - lo.0.floor()).max(pad), (pad - lo.1.floor()).max(pad));
+    let (w, h) = ((hi.0 + ox + pad).ceil() as usize, (hi.1 + oy + pad).ceil() as usize);
     if w == 0 || h == 0 || w * h > 64_000_000 {
         return None;
     }
-    // Fill coverage.
+    // Fill coverage (opacity in), and its colour where a tint changes it.
+    let tinted = glyphs.iter().any(|g| g.d.tint[3] > 0.0);
     let mut fill = vec![0f32; w * h];
-    for (k, (gs, lw)) in lines.iter().enumerate() {
-        let lx = pad
-            + match style.align {
-                Align::Left => 0.0,
-                Align::Center => (block_w - lw) / 2.0,
-                Align::Right => block_w - lw,
-            };
-        let base = pad + sf.ascent() + line_h * k as f32;
-        for &(id, gx) in gs {
-            let g = id.with_scale_and_position(PxScale::from(px), point(lx + gx, base));
-            if let Some(o) = font.outline_glyph(g) {
-                let b = o.px_bounds();
-                o.draw(|x, y, c| {
-                    let (xx, yy) = (b.min.x as i32 + x as i32, b.min.y as i32 + y as i32);
-                    if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
-                        let i = yy as usize * w + xx as usize;
-                        fill[i] = (fill[i] + c).min(1.0);
-                    }
-                });
+    let mut rgb = if tinted { vec![0f32; w * h * 4] } else { Vec::new() };
+    let base_rgb = [style.color[0] as f32 / 255.0, style.color[1] as f32 / 255.0, style.color[2] as f32 / 255.0];
+    let put = |fill: &mut [f32], rgb: &mut [f32], xx: i32, yy: i32, c: f32, col: [f32; 3]| {
+        if c > 0.0 && xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
+            let i = yy as usize * w + xx as usize;
+            fill[i] = (fill[i] + c).min(1.0);
+            if !rgb.is_empty() {
+                for k in 0..3 {
+                    rgb[i * 4 + k] += c * col[k];
+                }
+                rgb[i * 4 + 3] += c;
+            }
+        }
+    };
+    for g in &glyphs {
+        let op = g.d.opacity.clamp(0.0, 1.0);
+        if op <= 0.0 {
+            continue;
+        }
+        let t = g.d.tint;
+        let col = [0, 1, 2].map(|k| base_rgb[k] * (1.0 - t[3]) + t[k] * t[3]);
+        let (pen, s, anchor) = place(g);
+        if s * px < 0.5 {
+            continue;
+        }
+        let gl = g.id.with_scale_and_position(PxScale::from(px * s), point(ox + pen.0, oy + pen.1));
+        let Some(o) = font.outline_glyph(gl) else { continue };
+        let b = o.px_bounds();
+        if g.d.rotation == 0.0 {
+            o.draw(|x, y, c| put(&mut fill, &mut rgb, b.min.x as i32 + x as i32, b.min.y as i32 + y as i32, c * op, col));
+            continue;
+        }
+        // Rotated: draw upright, then resample about the anchor.
+        let (gw, gh) = (b.width().ceil() as usize + 1, b.height().ceil() as usize + 1);
+        let mut tmp = vec![0f32; gw * gh];
+        o.draw(|x, y, c| {
+            let (x, y) = (x as usize, y as usize);
+            if x < gw && y < gh {
+                tmp[y * gw + x] = c;
+            }
+        });
+        let a = (anchor.0 + ox, anchor.1 + oy);
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (cx, cy) in [(b.min.x, b.min.y), (b.max.x, b.min.y), (b.min.x, b.max.y), (b.max.x, b.max.y)] {
+            let (x, y) = rotate((cx, cy), a, g.d.rotation);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+        }
+        let at = |x: i32, y: i32| if x >= 0 && y >= 0 && (x as usize) < gw && (y as usize) < gh { tmp[y as usize * gw + x as usize] } else { 0.0 };
+        for yy in y0.floor() as i32..=y1.ceil() as i32 {
+            for xx in x0.floor() as i32..=x1.ceil() as i32 {
+                let (sx, sy) = rotate((xx as f32 + 0.5, yy as f32 + 0.5), a, -g.d.rotation);
+                let (fx, fy) = (sx - b.min.x - 0.5, sy - b.min.y - 0.5);
+                let (ix, iy) = (fx.floor() as i32, fy.floor() as i32);
+                let (tx, ty) = (fx - ix as f32, fy - iy as f32);
+                let c = (at(ix, iy) * (1.0 - tx) + at(ix + 1, iy) * tx) * (1.0 - ty) + (at(ix, iy + 1) * (1.0 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+                put(&mut fill, &mut rgb, xx, yy, c * op, col);
             }
         }
     }
@@ -184,8 +341,8 @@ pub fn rasterize(text: &str, style: &TextStyle, raster: (u32, u32)) -> Option<Bi
     };
     // The box.
     if style.boxed {
-        let (x0, y0) = ((pad - box_pad).max(0.0) as usize, (pad - box_pad).max(0.0) as usize);
-        let (x1, y1) = (((pad + block_w + box_pad).ceil() as usize).min(w), ((pad + block_h + box_pad).ceil() as usize).min(h));
+        let (x0, y0) = ((ox - box_pad).max(0.0) as usize, (oy - box_pad).max(0.0) as usize);
+        let (x1, y1) = (((ox + block_w + box_pad).ceil() as usize).min(w), ((oy + block_h + box_pad).ceil() as usize).min(h));
         for y in y0..y1 {
             for x in x0..x1 {
                 over(&mut out, y * w + x, style.box_color, 1.0);
@@ -214,7 +371,13 @@ pub fn rasterize(text: &str, style: &TextStyle, raster: (u32, u32)) -> Option<Bi
         }
     }
     for (i, a) in fill.iter().enumerate() {
-        over(&mut out, i, style.color, *a);
+        if tinted && rgb[i * 4 + 3] > 0.0 {
+            let n = rgb[i * 4 + 3];
+            let c = [0, 1, 2].map(|k| ((rgb[i * 4 + k] / n).clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            over(&mut out, i, [c[0], c[1], c[2], style.color[3]], *a);
+        } else {
+            over(&mut out, i, style.color, *a);
+        }
     }
     // Where the block goes in the raster.
     let (ax, ay) = (style.x * raster.0 as f32, style.y * raster.1 as f32);
@@ -231,10 +394,20 @@ pub fn rasterize(text: &str, style: &TextStyle, raster: (u32, u32)) -> Option<Bi
     Some(Bitmap {
         w: w as u32,
         h: h as u32,
-        x: (left - pad).round() as i32,
-        y: (top - pad).round() as i32,
+        x: (left - ox).round() as i32,
+        y: (top - oy).round() as i32,
         rgba: out.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect(),
     })
+}
+
+/// `p` turned `deg` degrees clockwise (y down) about `a`.
+fn rotate(p: (f32, f32), a: (f32, f32), deg: f32) -> (f32, f32) {
+    if deg == 0.0 {
+        return p;
+    }
+    let (s, c) = deg.to_radians().sin_cos();
+    let (dx, dy) = (p.0 - a.0, p.1 - a.1);
+    (a.0 + dx * c - dy * s, a.1 + dx * s + dy * c)
 }
 
 /// Coverage grown by radius `r`: the max over a sampled disc.
@@ -346,5 +519,39 @@ mod tests {
         // A missing file falls back to the built-in face rather than nothing.
         let s = TextStyle { font: Some("/nope.ttf".into()), ..Default::default() };
         assert!(rasterize("x", &s, (1920, 1080)).is_some());
+    }
+
+    fn layer(text: &str, anims: Vec<TextAnim>, frame: i64) -> TextLayer {
+        TextLayer { text: text.into(), style: TextStyle { shadow: false, ..Default::default() }, opacity: 1.0, anims, frame, len: 100 }
+    }
+
+    #[test]
+    fn animators_draw_and_settle_to_the_still_picture() {
+        let still = rasterize("Hello there", &layer("", vec![], 0).style, (1280, 720)).unwrap();
+        let fade = vec![TextAnim::preset("fade in by letter")];
+        // Frame 0 of a fade in: nothing shows yet.
+        let f0 = rasterize_layer(&layer("Hello there", fade.clone(), 0), (1280, 720)).unwrap();
+        assert_eq!(ink(&f0), 0);
+        // Half way: some letters are in, not all.
+        let mid = rasterize_layer(&layer("Hello there", fade.clone(), 9), (1280, 720)).unwrap();
+        assert!(ink(&mid) > 0 && ink(&mid) < ink(&still), "{} {}", ink(&mid), ink(&still));
+        // Settled: byte for byte the still text, and one key for every settled frame.
+        let set = rasterize_layer(&layer("Hello there", fade.clone(), 50), (1280, 720)).unwrap();
+        assert_eq!((set.x, set.y, set.w, set.h), (still.x, still.y, still.w, still.h));
+        assert!(set.rgba == still.rgba);
+        assert_eq!(layer_key(&layer("Hello there", fade.clone(), 30), (1280, 720)), layer_key(&layer("Hello there", fade.clone(), 60), (1280, 720)));
+        assert_ne!(layer_key(&layer("Hello there", fade.clone(), 2), (1280, 720)), layer_key(&layer("Hello there", fade, 3), (1280, 720)));
+        // No animators: the plain key.
+        let plain = layer("Hello there", vec![], 7);
+        assert_eq!(layer_key(&plain, (1280, 720)), key(&plain.text, &plain.style, (1280, 720)));
+        // Moved and turned glyphs still draw, inside a bitmap grown to hold them.
+        let spin = vec![TextAnim { rotation: 90.0, position: [0.0, -2.0], in_frames: 0, softness: 0.0, ..Default::default() }];
+        let s = rasterize_layer(&layer("Hello there", spin, 0), (1280, 720)).unwrap();
+        assert!(ink(&s) > ink(&still) / 2, "{} {}", ink(&s), ink(&still));
+        assert!(s.y < still.y - 50);
+        // A tint changes the fill's colour, not its coverage.
+        let tint = vec![TextAnim::preset("tint a word")];
+        let t = rasterize_layer(&layer("Hello there you", tint, 0), (1280, 720)).unwrap();
+        assert!(t.rgba.chunks(4).any(|p| p[3] > 200 && p[2] < 150), "some pixels are tinted gold");
     }
 }

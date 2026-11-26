@@ -125,6 +125,9 @@ pub struct ClipText {
     pub text: String,
     /// Index into `Sequence::styles`.
     pub style: usize,
+    /// Per-letter (word, line) animators, bottom to top.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anims: Vec<crate::TextAnim>,
 }
 
 /// One text to draw over the picture at a frame.
@@ -133,6 +136,18 @@ pub struct TextLayer {
     pub text: String,
     pub style: TextStyle,
     pub opacity: f32,
+    /// The clip's animators, and the clip frame (0..len) they are seen at.
+    pub anims: Vec<crate::TextAnim>,
+    pub frame: i64,
+    pub len: i64,
+}
+
+impl TextLayer {
+    /// Whether its animators are moving now (else it draws as its settled,
+    /// cacheable self).
+    pub fn moving(&self) -> bool {
+        crate::textanim::moving(&self.anims, self.frame, self.len)
+    }
 }
 
 impl Sequence {
@@ -168,7 +183,7 @@ impl Sequence {
         let media = self.text_media();
         let link = self.next_link;
         self.next_link += 1;
-        let clip = Clip { media, src_in: 0, start: at.max(0), len, link, speed: 1.0, conform: false, reframe: Reframe::default(), text: Some(ClipText { text: text.to_string(), style }), wobble: None, wob: None };
+        let clip = Clip { media, src_in: 0, start: at.max(0), len, link, speed: 1.0, conform: false, reframe: Reframe::default(), grade: None, text: Some(ClipText { text: text.to_string(), style, anims: Vec::new() }), wobble: None, wob: None };
         self.place(track, clip);
         self.tidy();
         self.tracks[track].clips.iter().position(|c| c.start == at.max(0))
@@ -190,7 +205,8 @@ impl Sequence {
             let mut push = |c: &Clip, opacity: f32| {
                 if let (Some(ct), true) = (&c.text, opacity > 0.0) {
                     if let Some(s) = self.styles.get(ct.style) {
-                        out.push(TextLayer { text: ct.text.clone(), style: s.clone(), opacity: opacity.min(1.0) });
+                        let frame = (t - c.start).clamp(0, (c.len - 1).max(0));
+                        out.push(TextLayer { text: ct.text.clone(), style: s.clone(), opacity: opacity.min(1.0), anims: ct.anims.clone(), frame, len: c.len });
                     }
                 }
             };
@@ -209,6 +225,14 @@ impl Sequence {
             }
         }
         out
+    }
+
+    /// Replace a text clip's animators (nothing on a clip that is not
+    /// text).
+    pub fn set_text_anims(&mut self, track: usize, idx: usize, anims: Vec<crate::TextAnim>) {
+        if let Some(t) = self.tracks.get_mut(track).and_then(|tr| tr.clips.get_mut(idx)).and_then(|c| c.text.as_mut()) {
+            t.anims = anims;
+        }
     }
 
     /// Text clips on `track` as (start, end, text): what an SRT export writes.

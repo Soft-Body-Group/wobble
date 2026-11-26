@@ -469,7 +469,7 @@ impl Editor {
         if let Some((t, i)) = self.slipping() {
             let seq = &self.rec.seq;
             let c = &seq.tracks[t].clips[i];
-            let at = |f: i64| Layer { media: c.media, frame: seq.source_frame(c, f), reframe: c.reframe };
+            let at = |f: i64| Layer { media: c.media, frame: seq.source_frame(c, f), reframe: c.reframe, grade: c.grade };
             return Some((Some(at(c.start)), Some(at(c.end() - 1))));
         }
         let Selection::Edit { track, at, .. } = self.rec.sel else { return None };
@@ -478,11 +478,11 @@ impl Editor {
         let (a, b) = t.cut(at);
         let la = a.map(|i| {
             let c = &t.clips[i];
-            Layer { media: c.media, frame: seq.source_frame(c, c.end() - 1), reframe: c.reframe }
+            Layer { media: c.media, frame: seq.source_frame(c, c.end() - 1), reframe: c.reframe, grade: c.grade }
         });
         let lb = b.map(|i| {
             let c = &t.clips[i];
-            Layer { media: c.media, frame: seq.source_frame(c, c.start), reframe: c.reframe }
+            Layer { media: c.media, frame: seq.source_frame(c, c.start), reframe: c.reframe, grade: c.grade }
         });
         Some((la, lb))
     }

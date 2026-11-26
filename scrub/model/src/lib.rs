@@ -27,10 +27,12 @@
 
 mod edit;
 mod text;
+pub mod textanim;
 mod three;
 pub use edit::{moved_track, Side, TrimError};
 pub use text::{format_srt, parse_srt, Align, ClipText, TextLayer, TextStyle, VAlign, PLACES};
 pub use three::{resolve, Marks, Resolved};
+pub use textanim::{Ease, RangeShape, TextAnim, TextUnit};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
@@ -119,6 +121,10 @@ pub struct Clip {
     /// How the picture sits in the sequence raster.
     #[serde(default)]
     pub reframe: Reframe,
+    /// Colour correction (added from the controls panel); `None` until one
+    /// is added. Applied in the working space, before the view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<Grade>,
     /// A text clip's words and style (`text`); `None` for footage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<ClipText>,
@@ -173,19 +179,99 @@ impl WobbleRef {
 /// cropped), then zoomed and moved. `x`, `y` move the picture's centre by
 /// that fraction of the raster's width / height. A 16:9 shot in a 9:16
 /// sequence is typically filled and moved sideways onto its subject.
+/// `rotate` turns it (degrees, clockwise) about its centre; `flip_x` /
+/// `flip_y` mirror it. Together: the clip's transform.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Reframe {
     pub fill: bool,
     pub zoom: f64,
     pub x: f64,
     pub y: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub rotate: f64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub flip_x: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub flip_y: bool,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Default for Reframe {
     fn default() -> Self {
-        Reframe { fill: false, zoom: 1.0, x: 0.0, y: 0.0 }
+        Reframe { fill: false, zoom: 1.0, x: 0.0, y: 0.0, rotate: 0.0, flip_x: false, flip_y: false }
     }
 }
+
+/// A clip's colour correction: exposure (stops), white balance
+/// (temperature: + warmer, tint: + magenta; -1..1), lift / gamma / gain,
+/// contrast (about 18% grey) and saturation. All neutral by default; `off`
+/// bypasses it without losing the settings.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Grade {
+    pub exposure: f64,
+    pub temperature: f64,
+    pub tint: f64,
+    pub lift: f64,
+    pub gamma: f64,
+    pub gain: f64,
+    pub contrast: f64,
+    pub saturation: f64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
+}
+
+impl Default for Grade {
+    fn default() -> Self {
+        Grade { exposure: 0.0, temperature: 0.0, tint: 0.0, lift: 0.0, gamma: 1.0, gain: 1.0, contrast: 1.0, saturation: 1.0, off: false }
+    }
+}
+
+impl Grade {
+    /// Neutral settings (whether on or off): nothing to do.
+    pub fn is_neutral(&self) -> bool {
+        Grade { off: false, ..*self } == Grade::default()
+    }
+
+    /// The shader's two rows: (rgb multiplier, lift), (contrast,
+    /// saturation, 1/gamma, 1 = on). Off or neutral: on is 0.
+    pub fn gpu(&self) -> [f32; 8] {
+        let t = self.temperature.clamp(-1.0, 1.0) * 0.3;
+        let n = self.tint.clamp(-1.0, 1.0) * 0.3;
+        let (r, g, b) = (1.0 + t, 1.0 - n, 1.0 - t);
+        // White balance keeps the brightness: normalised by its luma.
+        let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let m = 2f64.powf(self.exposure) * self.gain / l;
+        let on = !(self.off || self.is_neutral());
+        [(r * m) as f32, (g * m) as f32, (b * m) as f32, self.lift as f32, self.contrast as f32, self.saturation as f32, (1.0 / self.gamma.max(0.01)) as f32, on as u32 as f32]
+    }
+}
+
+/// How a picture is shown: its transform and its colour correction.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Look {
+    pub reframe: Reframe,
+    pub grade: Option<Grade>,
+}
+
+impl Look {
+    /// The rotation / flip row for the shader: (cos, sin, raster aspect,
+    /// flip bits: 1 x, 2 y), then the grade's two rows.
+    pub fn gpu(&self, raster: (u32, u32)) -> [f32; 12] {
+        let a = self.reframe.rotate.to_radians();
+        let flips = self.reframe.flip_x as u32 | (self.reframe.flip_y as u32) << 1;
+        let asp = raster.0.max(1) as f64 / raster.1.max(1) as f64;
+        let g = self.grade.map_or(Grade { off: true, ..Default::default() }.gpu(), |g| g.gpu());
+        [a.cos() as f32, a.sin() as f32, asp as f32, flips as f32, g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7]]
+    }
+}
+
+/// The shader rows for a picture shown plain (no transform, no grade).
+pub const PLAIN_GPU: [f32; 12] = [1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0];
 
 impl Reframe {
     pub fn is_default(&self) -> bool {
@@ -468,6 +554,13 @@ pub struct Layer {
     pub media: usize,
     pub frame: i64,
     pub reframe: Reframe,
+    pub grade: Option<Grade>,
+}
+
+impl Layer {
+    pub fn look(&self) -> Look {
+        Look { reframe: self.reframe, grade: self.grade }
+    }
 }
 
 /// What the record viewer shows at a frame.
@@ -625,18 +718,18 @@ impl Sequence {
                         // A text side fades in `text_at`; the picture is
                         // whichever footage clip covers t, if any.
                         if let Some(c) = track.at(t).filter(|c| c.text.is_none()) {
-                            return Picture::One(Layer { media: c.media, frame: self.source_frame(c, t), reframe: c.reframe });
+                            return Picture::One(Layer { media: c.media, frame: self.source_frame(c, t), reframe: c.reframe, grade: c.grade });
                         }
                         continue;
                     }
-                    let la = Layer { media: a.media, frame: self.source_frame(a, t), reframe: a.reframe };
-                    let lb = Layer { media: b.media, frame: self.source_frame(b, t), reframe: b.reframe };
+                    let la = Layer { media: a.media, frame: self.source_frame(a, t), reframe: a.reframe, grade: a.grade };
+                    let lb = Layer { media: b.media, frame: self.source_frame(b, t), reframe: b.reframe, grade: b.grade };
                     let mix = ((t - d.start()) as f32 + 0.5) / d.len() as f32;
                     return Picture::Mix(la, lb, mix);
                 }
             }
             if let Some(c) = track.at(t).filter(|c| c.text.is_none()) {
-                return Picture::One(Layer { media: c.media, frame: self.source_frame(c, t), reframe: c.reframe });
+                return Picture::One(Layer { media: c.media, frame: self.source_frame(c, t), reframe: c.reframe, grade: c.grade });
             }
         }
         Picture::Black
@@ -668,7 +761,7 @@ impl Sequence {
     fn clips_for(&mut self, src: Source, at: i64, targets: Targets) -> Vec<(usize, Clip)> {
         let link = self.next_link;
         self.next_link += 1;
-        let clip = Clip { media: src.media, src_in: src.src_in, start: at, len: src.len, link, speed: src.speed, conform: src.conform, reframe: Reframe::default(), text: None, wobble: None, wob: None };
+        let clip = Clip { media: src.media, src_in: src.src_in, start: at, len: src.len, link, speed: src.speed, conform: src.conform, reframe: Reframe::default(), grade: None, text: None, wobble: None, wob: None };
         let mut v = Vec::new();
         // A sound file has no picture: its audio clip alone.
         if let Some(vt) = targets.video.filter(|_| !self.media[src.media].audio_only) {

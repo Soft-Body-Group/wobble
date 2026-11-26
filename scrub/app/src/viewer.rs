@@ -208,7 +208,10 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
 const DISPLAY: &str = r#"
 // xf: where the picture sits in the drawn rect (offset xy, size zw, in
 // 0..1 of the rect); outside it is black (a reframed clip in the raster).
-struct D { nearest: f32, mixv: f32, pad0: f32, pad1: f32, xf: vec4<f32>, xb: vec4<f32> };
+// ra / rb: each picture's rotation (cos, sin, rect aspect, flip bits);
+// ga0 ga1 / gb0 gb1: its grade (rgb multiplier, lift; contrast,
+// saturation, 1/gamma, on).
+struct D { nearest: f32, mixv: f32, pad0: f32, pad1: f32, xf: vec4<f32>, xb: vec4<f32>, ra: vec4<f32>, rb: vec4<f32>, ga0: vec4<f32>, ga1: vec4<f32>, gb0: vec4<f32>, gb1: vec4<f32> };
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
 @group(0) @binding(2) var<uniform> d: D;
@@ -235,8 +238,20 @@ fn shade(rgb: vec3f) -> vec3f {
     return ENCODE;
 }
 
-fn pick(t: texture_2d<f32>, uv0: vec2<f32>, xf: vec4<f32>) -> vec3<f32> {
-    let uv = (uv0 - xf.xy) / xf.zw;
+fn pick(t: texture_2d<f32>, uv0: vec2<f32>, xf: vec4<f32>, r: vec4<f32>) -> vec3<f32> {
+    // Turned about the picture's centre (in square pixels), then mirrored.
+    let c = xf.xy + xf.zw * 0.5;
+    let asp = vec2<f32>(r.z, 1.0);
+    let p = (uv0 - c) * asp;
+    let q = vec2<f32>(p.x * r.x + p.y * r.y, p.y * r.x - p.x * r.y);
+    var uv = (c + q / asp - xf.xy) / xf.zw;
+    let fl = u32(r.w + 0.5);
+    if ((fl & 1u) != 0u) {
+        uv.x = 1.0 - uv.x;
+    }
+    if ((fl & 2u) != 0u) {
+        uv.y = 1.0 - uv.y;
+    }
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
         return vec3<f32>(-1.0);
     }
@@ -247,12 +262,26 @@ fn pick(t: texture_2d<f32>, uv0: vec2<f32>, xf: vec4<f32>) -> vec3<f32> {
     return textureSampleLevel(t, smp, uv, 0.0).rgb;
 }
 
-fn shown(t: texture_2d<f32>, uv0: vec2<f32>, xf: vec4<f32>) -> vec3<f32> {
-    let c = pick(t, uv0, xf);
+// The clip's colour correction, in the working space: a CDL-like
+// slope (exposure, gain, white balance) and offset (lift), then power
+// (gamma), contrast about 18% grey, saturation by Rec.709 luma.
+fn grade(c: vec3<f32>, g0: vec4<f32>, g1: vec4<f32>) -> vec3<f32> {
+    if (g1.w == 0.0) {
+        return c;
+    }
+    var x = max(c * g0.rgb + vec3<f32>(g0.w), vec3<f32>(0.0));
+    x = pow(x, vec3<f32>(g1.z));
+    x = 0.18 * pow(x / 0.18, vec3<f32>(g1.x));
+    let l = dot(x, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return max(mix(vec3<f32>(l), x, g1.y), vec3<f32>(0.0));
+}
+
+fn shown(t: texture_2d<f32>, uv0: vec2<f32>, xf: vec4<f32>, r: vec4<f32>, g0: vec4<f32>, g1: vec4<f32>) -> vec3<f32> {
+    let c = pick(t, uv0, xf, r);
     if (c.x < -0.5) {
         return vec3<f32>(0.0);
     }
-    return shade(c);
+    return shade(grade(c, g0, g1));
 }
 
 @fragment
@@ -260,11 +289,11 @@ fn fs(v: V) -> @location(0) vec4<f32> {
     _ = textureDimensions(lut3d);
     _ = textureDimensions(texb);
     if (d.mixv < 0.0) {
-        return vec4<f32>(shown(tex, v.uv, d.xf), 1.0);
+        return vec4<f32>(shown(tex, v.uv, d.xf, d.ra, d.ga0, d.ga1), 1.0);
     }
     // A dissolve: both pictures through the view, mixed as displayed (as
     // NLEs' default dissolve does).
-    return vec4<f32>(mix(shown(tex, v.uv, d.xf), shown(texb, v.uv, d.xb), d.mixv), 1.0);
+    return vec4<f32>(mix(shown(tex, v.uv, d.xf, d.ra, d.ga0, d.ga1), shown(texb, v.uv, d.xb, d.rb, d.gb0, d.gb1), d.mixv), 1.0);
 }
 "#;
 
@@ -446,7 +475,7 @@ impl ViewerGpu {
         });
         let display_u = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("display uniforms"),
-            contents: bytemuck::cast_slice(&[0f32; 12]),
+            contents: bytemuck::cast_slice(&[0f32; DISPLAY_U]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -784,6 +813,24 @@ impl Viewers {
     }
 }
 
+/// Floats in the display pass's uniform `D`.
+const DISPLAY_U: usize = 36;
+
+/// The display uniform: header, both placements, then both pictures'
+/// rotation and grade rows (`model::Look::gpu`).
+fn display_uniform(nearest: bool, m: f32, xa: [f32; 4], xb: [f32; 4], fa: &[f32; 12], fb: &[f32; 12]) -> [f32; DISPLAY_U] {
+    let mut d = [0f32; DISPLAY_U];
+    d[0] = nearest as u32 as f32;
+    d[1] = m;
+    d[4..8].copy_from_slice(&xa);
+    d[8..12].copy_from_slice(&xb);
+    d[12..16].copy_from_slice(&fa[0..4]);
+    d[16..20].copy_from_slice(&fb[0..4]);
+    d[20..28].copy_from_slice(&fa[4..12]);
+    d[28..36].copy_from_slice(&fb[4..12]);
+    d
+}
+
 /// The paint callback: carries the frame to show this redraw.
 pub struct ViewerPaint {
     pub slot: usize,
@@ -796,9 +843,12 @@ pub struct ViewerPaint {
     pub black: bool,
     /// Where the picture sits in the drawn rect (offset, size; 0..1).
     pub xf: [f32; 4],
+    /// Its rotation and grade (`model::Look::gpu`).
+    pub fx: [f32; 12],
     /// A dissolve: the incoming picture, converted in slot `.0`, its input
-    /// transform, how much of it to show, and where it sits.
-    pub mix: Option<(usize, u64, FrameRef, Arc<Idt>, f32, [f32; 4])>,
+    /// transform, how much of it to show, where it sits, its rotation and
+    /// grade.
+    pub mix: Option<(usize, u64, FrameRef, Arc<Idt>, f32, [f32; 4], [f32; 12])>,
     /// Magnified past 1:1: show pixels, not a bilinear ramp between them.
     pub nearest: bool,
     /// EXPERIMENT (fold): show this texture (a wobble comp's output, its
@@ -838,17 +888,17 @@ impl egui_wgpu::CallbackTrait for ViewerPaint {
                 show(v, *key, frame, &self.idt);
             }
         }
-        if let Some((bslot, key, frame, idt, _, _)) = &self.mix {
+        if let Some((bslot, key, frame, idt, _, _, _)) = &self.mix {
             if let Some(b) = all.slots.get_mut(*bslot) {
                 show(b, *key, frame, idt);
             }
         }
         let x = self.xf;
-        let (m, xb, bslot) = match &self.mix {
-            Some((bs, _, _, _, m, xb)) => (*m, *xb, *bs),
-            None => (-1.0, [0.0, 0.0, 1.0, 1.0], self.slot),
+        let (m, xb, fb, bslot) = match &self.mix {
+            Some((bs, _, _, _, m, xb, fb)) => (*m, *xb, *fb, *bs),
+            None => (-1.0, [0.0, 0.0, 1.0, 1.0], model::PLAIN_GPU, self.slot),
         };
-        let d = [self.nearest as u32 as f32, m, 0.0, 0.0, x[0], x[1], x[2], x[3], xb[0], xb[1], xb[2], xb[3]];
+        let d = display_uniform(self.nearest, m, x, xb, &self.fx, &fb);
         let _ = vkey;
         let (Some(a_view), b_view) = (all.slots.get(self.slot).and_then(|s| s.out.as_ref().map(|o| o.1.clone())), all.slots.get(bslot).and_then(|s| s.out.as_ref().map(|o| o.1.clone()))) else {
             return vec![];
@@ -997,6 +1047,8 @@ pub struct Layer<'a> {
     pub frame: &'a media::Frame,
     pub idt: &'a Idt,
     pub xf: [f32; 4],
+    /// Its rotation and grade (`model::Look::gpu`).
+    pub fx: [f32; 12],
 }
 
 impl Offscreen {
@@ -1056,7 +1108,8 @@ impl Offscreen {
                 let bv = out[1].clone().unwrap_or_else(|| av.clone());
                 let (xa, xb) = (a.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |l| l.xf), b.as_ref().map_or([0.0, 0.0, 1.0, 1.0], |l| l.xf));
                 let mv = if out[1].is_some() { m } else { -1.0 };
-                let d = [0.0f32, mv, 0.0, 0.0, xa[0], xa[1], xa[2], xa[3], xb[0], xb[1], xb[2], xb[3]];
+                let (fa, fb) = (a.as_ref().map_or(model::PLAIN_GPU, |l| l.fx), b.as_ref().map_or(model::PLAIN_GPU, |l| l.fx));
+                let d = display_uniform(false, mv, xa, xb, &fa, &fb);
                 let v = &self.viewers.slots[0];
                 queue.write_buffer(&v.display_u, 0, bytemuck::cast_slice(&d));
                 let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1124,7 +1177,7 @@ mod tests {
         let frame = media::Frame::owned(n, 1, media::Layout::RgbaF16, vec![bytes]);
         let idt = Idt::new(input, Colorspace::ACESCG);
         let view = ViewSettings { transform: ViewTransform::Aces12, working: Gamut::AcesCg, display: Gamut::Rec709, eotf, ..Default::default() };
-        let px = off.frame(Some(Layer { frame: &frame, idt: &idt, xf: [0.0, 0.0, 1.0, 1.0] }), None, 0.0, &view);
+        let px = off.frame(Some(Layer { frame: &frame, idt: &idt, xf: [0.0, 0.0, 1.0, 1.0], fx: model::PLAIN_GPU }), None, 0.0, &view);
         let mut w = 0;
         for i in 0..t.len() {
             for k in 0..3 {
