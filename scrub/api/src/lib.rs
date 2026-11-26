@@ -72,6 +72,10 @@ pub const ACTS: &[&str] = &[
     "render_start",
     "render_cancel",
     "srt_export",
+    "mode_set",
+    "clip_rate",
+    "subclip_add",
+    "subclip_remove",
 ];
 
 /// Methods that can throw work away: a client should confirm these.
@@ -390,6 +394,47 @@ pub fn methods() -> Vec<Method> {
         ),
         m("render_status", "The render running (file, frames done of total, fps) or the last one's result.", obj(json!({}), &[]), false),
         m("render_cancel", "Stop the running render (its partial file is removed).", obj(json!({}), &[]), false),
+        // Selects mode: verdicts on whole clips, subclips in the selects bin.
+        m("mode_set", "Switch the window between 'edit' (bin, two-up, timeline) and 'selects' (one viewer, the clips with their verdicts, the selects bin of subclips).", obj(json!({ "mode": { "type": "string", "enum": ["edit", "selects"] } }), &["mode"]), false),
+        m(
+            "selects_list",
+            "The bin's whole clips with their selects-mode verdict ('select', 'reject' or null), remembered source marks and subclip count, filtered by 'filter' (default all); with the counts per filter.",
+            obj(json!({ "filter": { "type": "string", "enum": ["all", "selects", "unmarked", "rejects"] } }), &[]),
+            false,
+        ),
+        m(
+            "clip_rate",
+            "Set a whole clip's verdict: 'select', 'reject' or 'none'. 'path' names the clip (a bin item; default: the source clip).",
+            obj(json!({ "path": { "type": "string" }, "rating": { "type": "string", "enum": ["select", "reject", "none"] } }), &["rating"]),
+            false,
+        ),
+        m(
+            "subclip_add",
+            "Put a subclip into the selects bin: source frames 'in'..'out' (both included, 0-based source frame indices as marks_set side 'source' counts them) of 'path' (default: the source clip; a path is loaded into the source). Missing in / out: the source marks, else the clip's first / last frame. A clip with no verdict becomes a select. Repeatable per clip; the very same range twice is refused.",
+            obj(json!({ "path": { "type": "string" }, "in": { "type": "integer" }, "out": { "type": "integer" } }), &[]),
+            false,
+        ),
+        m("subclip_list", "The selects bin, in order: each subclip's path, name, in, out (source frames, both included) and length.", obj(json!({}), &[]), false),
+        m(
+            "subclip_remove",
+            "Take a subclip out of the selects bin, named by its path, in and out (subclip_list).",
+            obj(json!({ "path": { "type": "string" }, "in": { "type": "integer" }, "out": { "type": "integer" } }), &["path", "in", "out"]),
+            false,
+        ),
+        m(
+            "subclips_place",
+            "Lay subclips onto the timeline one after another, each with its source in..out and its linked sound: 'subclips' as [{path, in, out}] (default: the whole selects bin, in order), on 'track' (a video track takes picture + sound, default V1) from record frame 'at' (default: the end of the sequence, an append); 'insert' pushes what follows along instead of overwriting. One undo step.",
+            obj(
+                json!({
+                    "subclips": { "type": "array", "items": { "type": "object", "properties": { "path": { "type": "string" }, "in": { "type": "integer" }, "out": { "type": "integer" } }, "required": ["path", "in", "out"] } },
+                    "track": track,
+                    "at": { "type": "integer" },
+                    "insert": { "type": "boolean" }
+                }),
+                &[],
+            ),
+            true,
+        ),
         m("undo", "Undo the last sequence change (one call, one batch, one drag or one key edit).", obj(json!({}), &[]), true),
         m("redo", "Redo what undo undid.", obj(json!({}), &[]), true),
         m(
@@ -535,7 +580,7 @@ mod tests {
         for n in ["project_save", "render_start", "playhead_set", "edit", "batch", "media_open", "undo"] {
             assert!(!method(n).unwrap().read_only(), "{n} must not be read-only");
         }
-        for n in ["app_info", "timeline_get", "bin_list", "viewer_capture", "render_status", "render_presets", "api_schema"] {
+        for n in ["app_info", "timeline_get", "bin_list", "viewer_capture", "render_status", "render_presets", "api_schema", "selects_list", "subclip_list"] {
             assert!(method(n).unwrap().read_only(), "{n} only reads");
         }
         assert!(method("project_open").unwrap().destructive());

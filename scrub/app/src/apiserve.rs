@@ -160,7 +160,115 @@ impl Editor {
             "api_schema" => Ok(api::schema()),
             "app_info" => Ok(self.api_info()),
             "timeline_get" => Ok(self.api_timeline()),
-            "bin_list" => Ok(json!({ "items": self.bin.items.iter().map(|i| json!({ "path": i.path, "name": i.name, "detail": i.detail, "group": i.group })).collect::<Vec<_>>() })),
+            "bin_list" => Ok(json!({ "items": self.bin.items.iter().map(|i| json!({ "path": i.path, "name": i.name, "detail": i.detail, "group": i.group, "range": i.range.map(|(a, b)| json!({ "in": a, "out": b })), "rating": rating_name(i.rating) })).collect::<Vec<_>>() })),
+            "mode_set" => {
+                let want = match string(p, "mode") {
+                    Some("edit") => crate::editor::Mode::Edit,
+                    Some("selects") => crate::editor::Mode::Selects,
+                    _ => return Err(bad("mode: edit or selects")),
+                };
+                if self.mode != want {
+                    self.toggle_mode();
+                }
+                Ok(json!({ "mode": mode_name(self.mode) }))
+            }
+            "selects_list" => {
+                let f = filter_of(p)?;
+                let clips: Vec<Value> = self
+                    .bin
+                    .listed(f)
+                    .into_iter()
+                    .map(|i| {
+                        let it = &self.bin.items[i];
+                        let m = self.remembered_marks(it);
+                        let subs = self.bin.items.iter().filter(|x| x.path == it.path && x.range.is_some()).count();
+                        json!({ "path": it.path, "name": it.name, "group": it.group, "rating": rating_name(it.rating), "marks": { "in": m.inp, "out": m.out }, "subclips": subs })
+                    })
+                    .collect();
+                let counts: serde_json::Map<String, Value> = crate::bin::Filter::ALL.iter().map(|f| (f.name().to_string(), json!(self.bin.listed(*f).len()))).collect();
+                Ok(json!({ "filter": f.name(), "clips": clips, "counts": counts }))
+            }
+            "clip_rate" => {
+                let r = match string(p, "rating") {
+                    Some("select") => Some(crate::bin::Rating::Select),
+                    Some("reject") => Some(crate::bin::Rating::Reject),
+                    Some("none") => None,
+                    _ => return Err(bad("rating: select, reject or none")),
+                };
+                let path = match string(p, "path") {
+                    Some(_) => path_of(p, "path"),
+                    None => self.source.as_ref().map(|c| c.original.clone()).ok_or_else(|| no("no source clip: name one with 'path'"))?,
+                };
+                let it = self.bin.clip_mut(&path).ok_or_else(|| no(format!("{} is not in the bin (bin_add it first)", path.display())))?;
+                it.rating = r;
+                Ok(json!({ "path": path, "rating": rating_name(r) }))
+            }
+            "subclip_add" => {
+                if string(p, "path").is_some() {
+                    let path = path_of(p, "path");
+                    if self.source.as_ref().map(|c| &c.original) != Some(&path) {
+                        self.error = None;
+                        self.load_item(&path, None);
+                    }
+                    if self.source.as_ref().map(|c| &c.original) != Some(&path) {
+                        return Err(no(self.error.clone().unwrap_or_else(|| format!("could not open {}", path.display()))));
+                    }
+                }
+                let Some(c) = self.source.as_mut() else { return Err(no("no source clip: name one with 'path'")) };
+                let last = c.info.frames as i64 - 1;
+                let (a, b) = (int(p, "in").or(c.marks.inp).unwrap_or(0), int(p, "out").or(c.marks.out).unwrap_or(last));
+                if a < 0 || b > last || a > b {
+                    return Err(bad(format!("in {a} .. out {b}: the clip's frames are 0..{last}, in before out")));
+                }
+                // Through the same path as M: marks set, then added.
+                let keep = c.marks;
+                c.marks = model::Marks { inp: Some(a), out: Some(b) };
+                let n = self.bin.items.len();
+                self.add_subclip();
+                if let Some(c) = self.source.as_mut() {
+                    c.marks = keep;
+                }
+                if self.bin.items.len() == n {
+                    return Err(no("that in..out is in the selects bin already"));
+                }
+                let it = &self.bin.items[self.bin.sel];
+                Ok(json!({ "path": it.path, "name": it.name, "in": a, "out": b }))
+            }
+            "subclip_list" => {
+                let r = self.bin.selects_range();
+                Ok(json!({ "subclips": self.bin.items[r].iter().map(|it| { let (a, b) = it.range.unwrap_or((0, 0)); json!({ "path": it.path, "name": it.name, "in": a, "out": b, "frames": b - a + 1 }) }).collect::<Vec<_>>() }))
+            }
+            "subclip_remove" => {
+                let key = (path_of(p, "path"), Some((need_int(p, "in")?, need_int(p, "out")?)));
+                let i = self.bin.items.iter().position(|it| it.key() == key).ok_or_else(|| no("no such subclip (subclip_list names them)"))?;
+                self.bin.items.remove(i);
+                self.bin.chosen.remove(&key);
+                self.bin.sel = self.bin.sel.min(self.bin.items.len().saturating_sub(1));
+                Ok(json!({ "removed": true, "subclips": self.bin.selects_range().len() }))
+            }
+            "subclips_place" => {
+                let picks: Vec<(PathBuf, Option<(i64, i64)>)> = match p.get("subclips").and_then(Value::as_array) {
+                    Some(v) => v
+                        .iter()
+                        .map(|s| Ok((path_of(s, "path"), Some((need_int(s, "in")?, need_int(s, "out")?)))))
+                        .collect::<Result<_, ApiError>>()?,
+                    None => self.bin.items[self.bin.selects_range()].iter().map(|it| it.key()).collect(),
+                };
+                if picks.is_empty() {
+                    return Err(no("the selects bin is empty (subclip_add first)"));
+                }
+                let track = match string(p, "track") {
+                    Some(t) => track_named(t)?,
+                    None => model::V1,
+                };
+                let at = int(p, "at").unwrap_or(self.rec.seq.duration().max(0));
+                let insert = boolean(p, "insert").unwrap_or(false);
+                let keep = (self.focus, self.monitor, self.bin.sel, self.bin.chosen.clone());
+                let n = picks.len();
+                self.drop_on_timeline(crate::timelineui::Payload::Clips(picks), at, Some(track), insert);
+                (self.focus, self.monitor, self.bin.sel, self.bin.chosen) = keep;
+                Ok(json!({ "placed": n, "from": at, "track": self.rec.seq.tracks[track].name, "duration": self.rec.seq.duration() }))
+            }
             "bin_add" => {
                 let path = path_of(p, "path");
                 let group = string(p, "group").unwrap_or("");
@@ -766,6 +874,7 @@ impl Editor {
                 "marks": marks(c.marks),
             })),
             "focus": format!("{:?}", self.focus).to_lowercase(),
+            "mode": mode_name(self.mode),
             "rendering": self.export.busy(),
             "message": self.last_notice(),
         })
@@ -834,6 +943,25 @@ impl Editor {
 }
 
 /// A path param, with a leading `~` expanded.
+fn rating_name(r: Option<crate::bin::Rating>) -> Option<&'static str> {
+    r.map(|r| match r {
+        crate::bin::Rating::Select => "select",
+        crate::bin::Rating::Reject => "reject",
+    })
+}
+
+fn mode_name(m: crate::editor::Mode) -> &'static str {
+    match m {
+        crate::editor::Mode::Edit => "edit",
+        crate::editor::Mode::Selects => "selects",
+    }
+}
+
+fn filter_of(p: &Value) -> Result<crate::bin::Filter, ApiError> {
+    let s = string(p, "filter").unwrap_or("all");
+    crate::bin::Filter::ALL.into_iter().find(|f| f.name() == s).ok_or_else(|| bad(format!("filter {s}: all, selects, unmarked or rejects")))
+}
+
 fn path_of(p: &Value, k: &str) -> PathBuf {
     imfram::filebrowser::expand_home(string(p, k).unwrap_or_default())
 }
@@ -855,6 +983,44 @@ mod tests {
                 assert_ne!(e.code, -32601, "{}: {}", m.name, e.message);
             }
         }
+    }
+
+    /// Selects through the API: verdicts, the filtered list, subclips
+    /// added, listed, laid down in one undo step, and removed.
+    #[test]
+    fn selects_tools() {
+        let dir = std::env::temp_dir().join(format!("scrub-api-selects-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..10 {
+            let f = std::fs::File::create(dir.join(format!("take.{:04}.png", 1001 + i))).unwrap();
+            let mut e = png::Encoder::new(std::io::BufWriter::new(f), 8, 8);
+            e.set_color(png::ColorType::Rgba);
+            e.write_header().unwrap().write_image_data(&[128u8; 8 * 8 * 4]).unwrap();
+        }
+        let clip = dir.join("take.1001.png");
+        let mut ed = Editor::new(true);
+        let call = |ed: &mut Editor, m: &str, p: Value| ed.api_recorded(m, &p);
+        assert_eq!(call(&mut ed, "mode_set", json!({ "mode": "selects" })).unwrap()["mode"], "selects");
+        call(&mut ed, "bin_add", json!({ "path": clip })).unwrap();
+        call(&mut ed, "clip_rate", json!({ "path": clip, "rating": "reject" })).unwrap();
+        let l = call(&mut ed, "selects_list", json!({ "filter": "rejects" })).unwrap();
+        assert_eq!(l["clips"].as_array().unwrap().len(), 1, "{l}");
+        assert_eq!(l["counts"]["selects"], 0);
+        call(&mut ed, "subclip_add", json!({ "path": clip, "in": 2, "out": 4 })).unwrap();
+        call(&mut ed, "subclip_add", json!({ "in": 6, "out": 9 })).unwrap();
+        assert!(call(&mut ed, "subclip_add", json!({ "in": 6, "out": 9 })).is_err(), "a repeat is refused");
+        assert!(call(&mut ed, "subclip_add", json!({ "in": 6, "out": 99 })).is_err(), "past the end is refused");
+        let s = call(&mut ed, "subclip_list", json!({})).unwrap();
+        assert_eq!(s["subclips"].as_array().unwrap().len(), 2, "{s}");
+        assert_eq!(s["subclips"][1]["frames"], 4);
+        let before = ed.rec.history.depth().0;
+        let r = call(&mut ed, "subclips_place", json!({})).unwrap();
+        assert_eq!(r["placed"], 2, "{r}");
+        assert_eq!(ed.rec.seq.tracks[model::V1].clips.len(), 2);
+        assert_eq!(ed.rec.history.depth().0, before + 1, "one undo step");
+        call(&mut ed, "subclip_remove", json!({ "path": clip, "in": 2, "out": 4 })).unwrap();
+        assert_eq!(call(&mut ed, "subclip_list", json!({})).unwrap()["subclips"].as_array().unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A failed call puts the sequence back and makes no undo step; a good

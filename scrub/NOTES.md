@@ -554,7 +554,7 @@ hung up on (a web page cannot drive it).
   sequence back and names the call). A failed call leaves no step.
 - **Names**: tracks "V1" … "M"; a clip is {track, start} (its record start
   frame, from `timeline_get`); a cut is `at`.
-- **Tools** (40): `app_info`, `timeline_get`, `bin_list`, `bin_add`,
+- **Tools** (47): `app_info`, `timeline_get`, `bin_list`, `bin_add`,
   `media_open`, `project_open/new/save`, `post_open`, `sequence_set`,
   `marks_set`, `playhead_set`, `transport`, `targets_set`, `track_set`
   (mute / solo / gain), `edit` (insert / overwrite; four marks fit),
@@ -564,20 +564,25 @@ hung up on (a web page cannot drive it).
   `dissolve_add/set/remove`, `reframe_set`, `viewer_capture` (PNG of the
   record or source picture, composed by the renderer's own code on a
   worker), `render_presets`, `render_start`, `render_status`,
-  `render_cancel`, `undo`, `redo`, `batch`, `api_schema`.
+  `render_cancel`, `undo`, `redo`, `batch`, `api_schema`; selects mode:
+  `mode_set`, `selects_list` (filter, verdicts, remembered marks, subclip
+  counts), `clip_rate`, `subclip_add` / `subclip_list` / `subclip_remove`,
+  `subclips_place` (the selects bin, or a list, laid down in order with
+  their ranges: one undo step).
 - **Hints for agents**: each tool carries readOnly / destructive
   annotations (`ACTS`, `DESTRUCTIVE` in the table): reads are safe to
   auto-approve; opening, saving, rendering and playhead moves are not.
 
 ### Registering it
 
-Build once (`cargo build --release` makes `target/release/scrub-mcp`),
+Build once (`cargo build --release -p scrub_api` in the wobble workspace
+makes `target/release/scrub-mcp`),
 then:
 
 **Claude Code** (any project):
 
 ```bash
-claude mcp add scrub -- ~/src/devl/scrub/target/release/scrub-mcp
+claude mcp add scrub -- ~/src/devl/wobble/target/release/scrub-mcp
 ```
 
 **Claude desktop app**: add to
@@ -586,13 +591,13 @@ wobble's entry, and restart the app:
 
 ```json
 "mcpServers": {
-  "scrub": { "command": "<absolute path to>/scrub/target/release/scrub-mcp", "args": [] }
+  "scrub": { "command": "<absolute path to>/wobble/target/release/scrub-mcp", "args": [] }
 }
 ```
 
 Start Scrub first (it listens by default); the bridge dials lazily and
 redials, so Scrub can also be started (or restarted) after the agent. A
-different port: `edify-mcp --port N`, or `SCRUB_API_PORT` (or `EDIFY_API_PORT`) on both sides.
+different port: `scrub-mcp --port N`, or `SCRUB_API_PORT` (or `EDIFY_API_PORT`) on both sides.
 
 ### Tests
 
